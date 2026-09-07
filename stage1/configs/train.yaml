@@ -40,7 +40,8 @@ log:
   print_freq: 100         # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step）
   image_freq: 1000        # TensorBoard の途中画像の間隔（step）
   n_images: 4             # TensorBoard の途中画像の枚数（current / fixed それぞれ、128 patch。ディスクには書かない）
-  n_full_images: 2        # checkpoint 保存時（save_epoch_freq ごと = 毎 epoch）にフル 512 で書き出すスライス数 → <run>/output_images/epoch_NNN/
+  full_slice: PCD-002/PCD-002-215.png   # 毎 epoch フル 512 で書き出す固定スライス（pcd_dir からの相対パス）→ output_images/epoch_NNN/ と preview_fixed_<slice>/
+  n_full_random: 1        # 加えて epoch ごとに別のランダムスライスを何枚書くか → output_images/epoch_NNN/ と preview_random/
   display_hu_min: -1400   # 表示の線形範囲（stored 0 = HU −1400）。TB と preview_<slice>/ に共通
   display_hu_max: 2100    # （stored 3500 = HU 2100）。この範囲を線形に 0..白へ（窓は掛けない）
   preview_bits: 16        # output_images/preview_<slice>/epoch_NNN.png（[PCD | EID-like | R] 横並び）のビット深度。16 = 表示範囲を 0..65535 に伸ばす | 8

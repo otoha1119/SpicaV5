@@ -55,7 +55,7 @@ if __name__ == "__main__":
     model = create_model(opt)  # create a model given opt.model and other options
     model.setup(opt)  # regular setup: load and print networks; create schedulers（[SpicaV5] --resume_state があれば optimizer / RNG も復元）
     fixed = dataset.dataset.fixed_batch(opt.n_images) if hasattr(dataset.dataset, "fixed_batch") else None  # [SpicaV5] 監視用の固定サンプル（128 patch）
-    full = dataset.dataset.fixed_full(opt.n_full_images) if hasattr(dataset.dataset, "fixed_full") else None  # [SpicaV5] checkpoint 時に書き出すフル 512 スライス
+    full_slices = dataset.dataset.full_slices if hasattr(dataset.dataset, "full_slices") else (lambda epoch: None)  # [SpicaV5] checkpoint 時に書き出すフル 512（固定 1 + epoch ごとのランダム）
     monitor = TrainMonitor(opt, dataset_size, fixed)  # [SpicaV5]
     total_iters = getattr(model, "resume_total_iters", 0)  # [SpicaV5] 再開時は保存された画像枚数から続ける
     total_epochs = opt.n_epochs + opt.n_epochs_decay
@@ -101,7 +101,7 @@ if __name__ == "__main__":
             monitor.write(f"saving the model at the end of epoch {epoch}, iters {total_iters}")
             model.save_networks("latest")
             model.save_networks(epoch)
-            monitor.save_full_images(model, full, epoch, total_iters)  # [SpicaV5] PCD / EID-like / R をフル 512 で保存
+            monitor.save_full_images(model, full_slices(epoch), epoch, total_iters)  # [SpicaV5] PCD / EID-like / R をフル 512 で保存
             last_saved_epoch = epoch
         last_epoch = epoch
 
@@ -111,7 +111,7 @@ if __name__ == "__main__":
         monitor.write(f"saving the final model (epoch {last_epoch}, iters {total_iters})")
         model.save_networks("latest")
         model.save_networks(last_epoch)
-        monitor.save_full_images(model, full, last_epoch, total_iters)
+        monitor.save_full_images(model, full_slices(last_epoch), last_epoch, total_iters)
 
     monitor.close()
     cleanup_ddp()

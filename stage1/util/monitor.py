@@ -14,8 +14,10 @@ junyanz の util/visualizer.py（wandb / HTML）は使わない。train.py は�
      train/lr（epoch ごと）
      images/current（いま学習中のバッチ先頭 n_images 枚）, images/fixed（学習開始時に固定した同じ patch）
         各行 = [ PCD z | EID-like G(z) | 差分 G(z)−z | 実 EID x ]。128 patch のまま（元サイズに戻さない）
-  ディスク   : <run>/output_images/preview_<slice>/epoch_NNN.png — 固定スライスごとに [PCD | EID-like | R] を横に並べた表示用パネル（epoch 順に並べて見比べる。preview_bits 16 = 表示範囲を 0..65535 に伸ばした 16bit / 8）
-               <run>/output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png — checkpoint 保存時（毎 epoch）にフル 512 のスライス n_full_images 枚を
+  ディスク   : <run>/output_images/preview_fixed_<slice>/epoch_NNN.png — 固定スライス（train.yaml log.full_slice）の [PCD | EID-like | R] 横並びパネルを epoch ごとに
+               <run>/output_images/preview_random/epoch_NNN_<slice>.png — epoch ごとに別のランダムスライス（n_full_random 枚）の同じパネル
+               （preview_bits 16 = 表示範囲を 0..65535 に伸ばした 16bit / 8。TB は images/full/fixed, images/full/random）
+               <run>/output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png — 上の各スライスの生 uint16（HU が読める）を
                PCD / EID-like / 残差 R = G(z) − z で保存（uint16。pcd/eidlike は HU + hu_offset、R は 32768 + ΔHU）。TB にも images/full/<slice>
                （画像パネルは stored = HU + hu_offset、差分パネルは 32768 + ΔHU。TB は 8bit しか描けないため厳密値はこちら）
   loss_log.txt: print_freq ごとの損失（テキスト。grep 用の保険）
@@ -147,7 +149,7 @@ class TrainMonitor:
 
     # ------------------------------------------------------------------ フル画像（checkpoint と一緒に）
     def save_full_images(self, model, full, epoch, total_iters):
-        """checkpoint 保存時に、固定スライス（CTDataset.fixed_full）をフル 512 で G に通し、
+        """checkpoint 保存時に、固定スライス 1 枚 + epoch ごとのランダムスライス（CTDataset.full_slices(epoch)）をフル 512 で G に通し、
         <run>/output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png を uint16 で保存する（TB にも images/full/<slice> を 8bit で）。
         推論は full-image モード（G は全畳み込み + 3 段 Haar なので H, W が 8 の倍数なら一発で通る）。
         uint16 化は inference_dir.py と同じ関数（denormalize / residual_stored）で、eidlike = pcd + (R − 32768) が厳密に成り立つ。"""
@@ -167,7 +169,7 @@ class TrainMonitor:
         A, G = to_hu(a), to_hu(g)
         R = G - A
         hu = (o.hu_offset, o.hu_min, o.hu_max)
-        for i, path in enumerate(full["paths"]):
+        for i, (path, kind) in enumerate(zip(full["paths"], full["kinds"])):
             stem = Path(path).stem
             pcd16 = denormalize(a[i, 0].detach().cpu().numpy(), *hu)
             eid16 = denormalize(g[i, 0].detach().cpu().numpy(), *hu)
@@ -177,13 +179,18 @@ class TrainMonitor:
             lin = lambda hu: ((hu - o.display_hu_min) / float(o.display_hu_max - o.display_hu_min)).clamp(0.0, 1.0)
             dif = lambda d: ((d + o.diff_range_hu) / float(2 * o.diff_range_hu)).clamp(0.0, 1.0)
             grid = make_grid(torch.stack([lin(A[i]), lin(G[i]), dif(R[i])]), nrow=3, padding=4, pad_value=1.0)[0]  # [PCD | EID-like | R]、[0,1]
-            self.tb.add_image(f"images/full/{stem}", (grid * 255.0).round().clamp(0, 255).to(torch.uint8).numpy(), total_iters, dataformats="HW")
-            # 表示用パネル: 同じ絵を preview_<slice>/epoch_NNN.png に。16bit は表示範囲を 0..65535 に伸ばす（プレビューで正しい明るさ、階調 65536 段）。HU は読めない（生は epoch_NNN/）
+            tag = "fixed" if kind == "fixed" else ("random" if full["kinds"].count("random") == 1 else f"random{i}")  # TB のタグは固定（スライダーで epoch を追える）
+            self.tb.add_image(f"images/full/{tag}", (grid * 255.0).round().clamp(0, 255).to(torch.uint8).numpy(), total_iters, dataformats="HW")
+            # 表示用パネル: 同じ絵を preview に。16bit は表示範囲を 0..65535 に伸ばす（プレビューで正しい明るさ、階調 65536 段）。HU は読めない（生は epoch_NNN/）
             if o.preview_bits == 16:
                 panel = (grid * 65535.0).round().clamp(0, 65535).to(torch.int32).numpy().astype(np.uint16)
             else:
                 panel = (grid * 255.0).round().clamp(0, 255).to(torch.uint8).numpy()
-            write_png(preview_dir(self.run_dir, stem) / f"{epoch_images_dir(self.run_dir, epoch).name}.png", panel)
+            ep = epoch_images_dir(self.run_dir, epoch).name  # epoch_NNN
+            if kind == "fixed":
+                write_png(preview_dir(self.run_dir, f"fixed_{stem}") / f"{ep}.png", panel)  # preview_fixed_<slice>/epoch_NNN.png
+            else:
+                write_png(preview_dir(self.run_dir, "random") / f"{ep}_{stem}.png", panel)  # preview_random/epoch_NNN_<slice>.png
         self.write(f"saved full-size images ({len(full['paths'])} slices) -> {out_dir}")
 
     def close(self):

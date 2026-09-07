@@ -108,13 +108,14 @@ git reset --hard
   best/…, best.txt                           bash start.sh best で作る（判定は目視。指標ができたら自動化）
   weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq（既定 1 = 毎 epoch）ごと
   output_images/epoch_NNN/    checkpoint（毎 epoch）ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit = HU が読める）
-  output_images/preview_<slice>/epoch_NNN.png   固定スライスごとの表示用パネル [PCD | EID-like | R]（表示範囲 stored 0〜3500 を 16bit いっぱいに伸ばす。epoch 順に並べて見比べる）
+  output_images/preview_fixed_<slice>/epoch_NNN.png   固定スライス（train.yaml log.full_slice）の表示用パネル [PCD | EID-like | R]。epoch 順に並べて見比べる
+  output_images/preview_random/epoch_NNN_<slice>.png  epoch ごとに別のランダムスライス（log.n_full_random 枚）の同じパネル（表示範囲 stored 0〜3500 を 16bit いっぱいに伸ばす）
   （学習中の 128 patch グリッドは TensorBoard だけ）
   infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   推論の出力（§8。実行ごとに別ディレクトリ）
   tb/                         TensorBoard
 ```
 
-`state.pth` には optimizer の状態・学習率・RNG（python / torch / numpy）・epoch・iteration 数が入る。scheduler は再開時に作り直す（`lr_policy` は `linear` のみ対応）。学習終了時は `save_epoch_freq` の倍数でなくても最終 epoch を保存する。保存は `<dir>.tmp` に書いてから rename するので、途中で止まっても重みディレクトリに新旧が混ざらない（`.tmp` / `.old` が残っていれば中断の痕跡）。乱数 seed は `train.yaml` の `optim.seed`（cudnn.benchmark は本家のままなので完全な決定性ではない）。単一 GPU のみ対応（DDP は起動時にエラー）。途中保存の `latest/`（epoch 未完）から再開すると、その epoch を頭からやり直すので更新が余分に入り「中断なし」と同じ学習にはならない。再現性を重視するなら epoch 末の checkpoint（`weights/epoch_NNN/`、または epoch 末に保存された `latest/`）から再開する。
+毎 epoch のフル 512 は「固定 1 枚（`train.yaml log.full_slice`、pcd_dir からの相対パス）+ ランダム `log.n_full_random` 枚（epoch ごとに別。`patch_seed` と epoch から決定的）」。`state.pth` には optimizer の状態・学習率・RNG（python / torch / numpy）・epoch・iteration 数が入る。scheduler は再開時に作り直す（`lr_policy` は `linear` のみ対応）。学習終了時は `save_epoch_freq` の倍数でなくても最終 epoch を保存する。保存は `<dir>.tmp` に書いてから rename するので、途中で止まっても重みディレクトリに新旧が混ざらない（`.tmp` / `.old` が残っていれば中断の痕跡）。乱数 seed は `train.yaml` の `optim.seed`（cudnn.benchmark は本家のままなので完全な決定性ではない）。単一 GPU のみ対応（DDP は起動時にエラー）。途中保存の `latest/`（epoch 未完）から再開すると、その epoch を頭からやり直すので更新が余分に入り「中断なし」と同じ学習にはならない。再現性を重視するなら epoch 末の checkpoint（`weights/epoch_NNN/`、または epoch 末に保存された `latest/`）から再開する。
 
 ## 7. 学習中の表示
 

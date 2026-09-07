@@ -82,7 +82,8 @@ class FidelityGANModel(BaseModel):
             # 学習表示（util/monitor.py）。値は configs/train.yaml の log: から
             parser.add_argument("--image_freq", type=int, default=None, help="TensorBoard に途中画像を出す間隔（step）")
             parser.add_argument("--n_images", type=int, default=None, help="途中画像の枚数")
-            parser.add_argument("--n_full_images", type=int, default=None, help="checkpoint 保存時にフル 512 で書き出すスライス数")
+            parser.add_argument("--full_slice", type=str, default=None, help="checkpoint 保存時にフル 512 で書き出す固定スライス（dir_A からの相対パス）")
+            parser.add_argument("--n_full_random", type=int, default=None, help="checkpoint 保存時にフル 512 で書き出すランダムスライスの枚数（epoch ごとに別）")
             parser.add_argument("--display_hu_min", type=int, default=None, help="表示用の線形範囲の下限 HU")
             parser.add_argument("--display_hu_max", type=int, default=None, help="表示用の線形範囲の上限 HU")
             parser.add_argument("--diff_range_hu", type=int, default=None, help="差分パネルの ±範囲 HU")

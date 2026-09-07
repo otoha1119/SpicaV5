@@ -52,7 +52,8 @@ TRAIN = {
     "log.print_freq":       Key(int,   "--print_freq",     "バー末尾の損失・TensorBoard scalar・loss_log.txt を更新する間隔（step）"),
     "log.image_freq":       Key(int,   "--image_freq",     "TensorBoard に途中画像を出す間隔（step）"),
     "log.n_images":         Key(int,   "--n_images",       "途中画像の枚数（current / fixed それぞれ、128 patch）"),
-    "log.n_full_images":    Key(int,   "--n_full_images",  "checkpoint 保存時にフル 512 で書き出すスライス数（PCD / EID-like / R を output_images/epoch_NNN/ に uint16 PNG）"),
+    "log.full_slice":       Key(str,   "--full_slice",     "checkpoint 保存時にフル 512 で書き出す固定スライス（pcd_dir からの相対パス。例 PCD-002/PCD-002-215.png）。毎 epoch 同じ 1 枚"),
+    "log.n_full_random":    Key(int,   "--n_full_random",  "checkpoint 保存時にフル 512 で書き出すランダムスライスの枚数（epoch ごとに別のスライス。0 で無し）"),
     "log.display_hu_min":   Key(int,   "--display_hu_min", "表示用の線形範囲の下限 HU（この値以下を黒）"),
     "log.display_hu_max":   Key(int,   "--display_hu_max", "表示用の線形範囲の上限 HU（この値以上を白）。stored 3500 = HU 2100"),
     "log.preview_bits":     Key(int,   "--preview_bits",   "output_images/preview_<slice>/epoch_NNN.png（[PCD | EID-like | R] の横並び、表示用）のビット深度。16 = 表示範囲を 0..65535 に伸ばす（プレビューで正しく見え階調も細かい）| 8"),
@@ -307,7 +308,8 @@ def check_values(train, mode, machine):
     if train["data.hu_min"] >= train["data.hu_max"]: P.append("data.hu_min < data.hu_max")
     if train["log.print_freq"] < 1 or train["log.image_freq"] < 1: P.append("log.print_freq / image_freq ≥ 1（step）")
     if train["log.n_images"] < 1: P.append("log.n_images ≥ 1")
-    if train["log.n_full_images"] < 1: P.append("log.n_full_images ≥ 1")
+    if train["log.n_full_random"] < 0: P.append("log.n_full_random ≥ 0")
+    if not train["log.full_slice"]: P.append("log.full_slice（固定スライスの相対パス）を指定")
     if train["log.display_hu_min"] >= train["log.display_hu_max"]: P.append("log.display_hu_min < display_hu_max")
     if train["log.preview_bits"] not in (8, 16): P.append("log.preview_bits は 8 | 16")
     if train["log.diff_range_hu"] <= 0: P.append("log.diff_range_hu は正")

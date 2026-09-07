@@ -174,3 +174,9 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - `util/monitor.py save_full_images`: 固定スライスごとに `output_images/preview_<slice>/epoch_NNN.png`（[PCD | EID-like | R] 横並び。TB の images/full と同じ絵）を書く。`log.preview_bits`（schema / train.yaml / `--preview_bits`）で 16（表示範囲を 0..65535 に伸ばす。プレビューで正しく見え階調 65536 段）か 8。`util/run_paths.preview_dir`
 - `train.yaml log.display_hu_max`: 1600 → 2100（stored 3500）。TB と preview に共通
 - `run_train.py prepare_resume`: run 作成後に schema へ追加されたキー（seed, preview_bits 等）が run の launch に無いときは今の yaml の値で補い警告（旧 run の resume が止まらないように）
+
+### フル 512 を「固定 1 枚 + epoch ごとのランダム」に（2026-09-08、ユーザー指示）
+- `configs/schema.py` / `train.yaml`: `log.n_full_images` を廃止し、`log.full_slice`（固定スライス。pcd_dir からの相対パス、例 `PCD-002/PCD-002-215.png`。起動時に存在を検査）と `log.n_full_random`（epoch ごとに別のランダム枚数）に
+- `data/ct_dataset.py`: `fixed_full(n)` → `full_slices(epoch)`（固定 + `patch_seed` と epoch から決定的なランダム。resume しても同じ epoch は同じスライス）
+- `util/monitor.py`: 出力先を `preview_fixed_<slice>/epoch_NNN.png` と `preview_random/epoch_NNN_<slice>.png` に分け、TB のタグは `images/full/fixed` / `images/full/random`（固定タグでスライダーが効く）
+- `run_train.py prepare_resume`: 旧 run の launch にある廃止キー（`n_full_images` 等）は警告して無視

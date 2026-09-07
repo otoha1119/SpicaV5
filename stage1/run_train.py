@@ -118,6 +118,11 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
                 print(f"[run_train] 注意: run の {section} に無いキー（run 作成後に追加）は今の yaml の値を使う: " + ", ".join(f"{k}={cur[k]!r}" for k in missing))
                 for k in missing:
                     saved[section][k] = cur[k]
+            obsolete = [k for k in saved[section] if k not in schema]
+            if obsolete:
+                print(f"[run_train] 注意: run の {section} にある廃止キーは無視する: " + ", ".join(f"{k}={saved[section][k]!r}" for k in obsolete))
+                for k in obsolete:
+                    del saved[section][k]
         train = validate("train(run)", saved["train"], TRAIN)
         mode = validate("mode(run)", saved["mode"], MODE)
         machine = validate("machine(run)", saved["machine"], MACHINE)

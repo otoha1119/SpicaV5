@@ -312,6 +312,9 @@ class CTDataset(BaseDataset):
             warnings.warn(f"[CTDataset] {dir_b} が無いため B は A と同じ画像をダミーで返します")
             self.idx_b = self.idx_a
 
+        # 固定スライス（毎 epoch のフル画像）は起動時に存在を検査する（無ければ学習前に止める）
+        if not self.full_image and not (Path(dir_a) / opt.full_slice).is_file():
+            raise RuntimeError(f"train.yaml log.full_slice が dir_A の下にありません: {Path(dir_a) / opt.full_slice}")
         # 先頭 1 枚で形式 (uint16 / 1ch) と画像サイズを確定する
         first = read_stored(self.idx_a.all_paths[0])
         self.img_hw = first.shape
@@ -373,13 +376,19 @@ class CTDataset(BaseDataset):
             "B": torch.stack([self._patch(b_path, b_pos) for _, _, b_path, b_pos in items]),
         }
 
-    def fixed_full(self, n):
-        """checkpoint 保存時の書き出し用: A（PCD）からフル画像を n 枚、patch_seed で決定的に選ぶ（epoch / resume をまたいで同じスライス）。
-        戻り値: {"paths": [str], "A": (n,1,H,W)}。n == 0 なら None（F-17）"""
-        if n <= 0:
-            return None
-        paths = random.Random(self.opt.patch_seed).sample(self.idx_a.all_paths, min(n, self.idx_a.n_slices))
-        return {"paths": paths, "A": torch.stack([torch.from_numpy(_load_normalized(p, *self.hu)).unsqueeze(0) for p in paths])}
+    def full_slices(self, epoch):
+        """checkpoint 保存時の書き出し用: 固定スライス（--full_slice、dir_A からの相対パス）1 枚 + epoch ごとに別のランダムスライス n_full_random 枚。
+        ランダムは patch_seed と epoch から決定的（resume しても同じ epoch は同じスライス）。
+        戻り値: {"paths": [str], "kinds": ["fixed", "random", ...], "A": (n,1,H,W)}"""
+        fixed = Path(self.opt.dir_A) / self.opt.full_slice
+        if not fixed.is_file():
+            raise RuntimeError(f"固定スライスがありません（train.yaml log.full_slice は dir_A からの相対パス）: {fixed}")
+        rng = random.Random(self.opt.patch_seed * 1_000_003 + int(epoch))
+        pool = [p for p in self.idx_a.all_paths if Path(p) != fixed]
+        randoms = rng.sample(pool, min(self.opt.n_full_random, len(pool)))
+        paths = [str(fixed)] + randoms
+        kinds = ["fixed"] + ["random"] * len(randoms)
+        return {"paths": paths, "kinds": kinds, "A": torch.stack([torch.from_numpy(_load_normalized(p, *self.hu)).unsqueeze(0) for p in paths])}
 
     def __len__(self):
         if self.full_image:

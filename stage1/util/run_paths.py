@@ -11,7 +11,8 @@ checkpoint は「重みディレクトリ」単位で扱う（G と D と optimi
   best.txt                    best がどの epoch か（判定基準がまだ無いので当面は目視で手動指定）
   weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごとの checkpoint（保存は <dir>.tmp → rename で原子的。.tmp / .old が残っていたら中断の痕跡）
   output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png        checkpoint（毎 epoch）ごとのフル 512（uint16、入力と同じ規約 = HU が読める）
-  output_images/preview_<slice>/epoch_NNN.png                固定スライスごとの表示用パネル [PCD | EID-like | R]（表示範囲を伸ばした 16bit か 8bit。epoch 順に並べて見比べる）
+  output_images/preview_fixed_<slice>/epoch_NNN.png          固定スライス（train.yaml log.full_slice）の表示用パネル [PCD | EID-like | R]（epoch 順に並べて見比べる）
+  output_images/preview_random/epoch_NNN_<slice>.png         epoch ごとに別のランダムスライス（log.n_full_random 枚）の同じパネル（表示範囲を伸ばした 16bit か 8bit）
   （学習中の 128 patch グリッドは TensorBoard だけ）
   infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   bash start.sh infer の出力（inference_dir.py。uint16 PNG / DICOM）。実行ごとに別ディレクトリ
   tb/                         TensorBoard
@@ -92,9 +93,9 @@ def epoch_images_dir(run_dir, epoch):
     return Path(run_dir) / OUTPUT_IMAGES_DIR / epoch_dirname(epoch)
 
 
-def preview_dir(run_dir, stem):
-    """固定スライスごとの表示用パネル [PCD | EID-like | R] を epoch 順に並べるディレクトリ: <run>/output_images/preview_<slice>/epoch_NNN.png"""
-    return Path(run_dir) / OUTPUT_IMAGES_DIR / f"preview_{stem}"
+def preview_dir(run_dir, name):
+    """表示用パネル [PCD | EID-like | R] のディレクトリ: <run>/output_images/preview_<name>/（name = "fixed_<slice>" か "random"）"""
+    return Path(run_dir) / OUTPUT_IMAGES_DIR / f"preview_{name}"
 
 
 INFER_STAMP_FORMAT = "%Y_%m%d_%H%M%S"
