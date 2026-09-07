@@ -113,3 +113,15 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 
 ### `bash start.sh build` をビルド専用に（2026-09-07）
 - 以前は「強制再ビルド → 学習」だったが、本番機でコンテナだけ作りたいという要望で **ビルド → コンテナ起動 → torch/cuda 確認 → 終了** に変更（学習しない）。`--flag` を付けるとエラー。学習は続けて `bash start.sh`
+
+### レビュー修正バッチ 1（2026-09-07、docs/plans/20260907_review-fix-list.md F-01〜F-11）
+- F-01 `models/fidelity_gan_model.py setup`: state.pth を `map_location="cpu"` で読む（GPU では RNG 用 Tensor が CUDA に載り `.numpy()` で落ちていた）。`keys.cpu().numpy()`
+- F-02 / F-03 `run_train.py` 全面書き換え + `configs/schema.py apply_overrides`: sh の上書きを **平坦 dict に反映してから** argv・保存先・launch.yaml を作る（実効値を保存。推論と再開はそれを読む）。bool は `--flag true|false` も可。`--checkpoints_dir` の上書きも保存先に効く
+- F-04 / F-05 `../start.sh`: Windows（MINGW / MSYS / CYGWIN）で `MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' MSYS2_ENV_CONV_EXCL='*'` を export（docker.exe へ渡す `/workspace/...` の自動変換を止める）、対話 exec は `winpty`（無ければ `-T`）を通す `exec_it` に統一。`shell` は `bash`
+- F-06 `train.py`: ループ終了後、最終 epoch が `save_epoch_freq` の倍数でなければ `latest` と `weights/epoch_NNN` とフル画像を保存
+- F-07 `configs/schema.py check_values / check_infer_values`: 値域・相互条件（`save_latest_freq` / `samples_per_epoch` が `batch_size` の倍数、`n_images ≥ 1`、`patch_size % 8`、`1 ≤ stride ≤ size`、`lr_policy == linear`、選択肢の集合、`gpu_gen`、`hu_min < hu_max` など）。`run_train.py` / `run_infer.py` が上書き反映後に呼ぶ
+- F-08 `inference_dir.py infer_patch`: 合成後に被覆（`wsum > 0`）と有限性を検査
+- F-09 `../docker/compose.gen30.yaml`: `runtime: nvidia` / `NVIDIA_VISIBLE_DEVICES` を外し、SpicaV3 の PC1 実績構成（`deploy` 予約のみ）に戻す
+- F-10 `run_train.py` / `fidelity_gan_model.py`: 再開の基準を**最新の** `launch_resume_*.yaml`（`util/run_paths.py latest_launch`、秒まで付けた名前）にし、optimizer 復元後に opt の lr / betas / initial_lr を param_groups に再適用（`--lr` 等の上書きが最優先になる）。`--continue_train` / `--epoch_count` は上書き不可（run_train が決める）。再開時に `checkpoints_dir` を変えるのは拒否。`run_infer.py` も最新 launch を読む
+- F-11 `run_train.py`: run ディレクトリが既に存在すれば `ConfigError`（同一分の衝突。以前の「上書き」を撤回）
+- 検証（合成データ、CPU venv）: 上書き（`--ngf 48 --hu_max 3000 --checkpoints_dir …`）が launch.yaml の実効値に入り推論が同じ G / HU で動く、`--n_epochs 1 --save_epoch_freq 10` で最終保存、`resume --n_epochs 3 --lr 1e-4` → 上書きなし resume で n_epochs 3 / lr 1e-4 が引き継がれる、9 種の値域違反と bool / `=` / 負数の解析、同一分衝突、stride 256 の拒否と内部検査、`start.sh` の MINGW 分岐（winpty / -T / 環境変数）を fake で確認。**GPU の resume（F-01）は実機で要確認**

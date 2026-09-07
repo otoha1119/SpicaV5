@@ -3,7 +3,8 @@
 設計: docs/plans/20260907_inference-plan.md
   1. configs/infer.yaml（方式）と ../configs/machines.yaml（checkpoints_dir・gpu_gen）を configs/schema.py で検証する（既定値なし）
   2. 重みディレクトリ（--weight_dir、infer_stage1.sh の変数）に net_G.pth があることを確認し、そこから run（launch.yaml がある所）を探して
-     G の構成（netG / ngf / input_nc / output_nc / norm / final_norm_act / hu_*）を取る（学習時と同じ G を組むため。今の train.yaml / mode.yaml は見ない）
+     **最新の launch（launch_resume_*.yaml があればそれ）の実効設定**から G の構成（netG / ngf / input_nc / output_nc / norm / final_norm_act / hu_*）を取る
+     （学習時と同じ G を組むため。今の train.yaml / mode.yaml は見ない。実効値 = yaml + 学習時の上書き。F-02 / F-10）
   3. デバイスは machines.yaml の gpu_gen から決める（0 → cpu、それ以外 → cuda）
   4. 出力形式（--output_format png | dicom | both）と元 DICOM ルート（--dicom_dir、dicom / both のとき必須）も infer_stage1.sh の変数から受ける
   5. sh からの上書き（infer.yaml のキーのフラグ、および --weight_dir / --input_dir / --output_format / --dicom_dir）を反映し、解決済み設定を
@@ -25,8 +26,8 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import INFER, MACHINE, ConfigError, to_argv, validate  # noqa: E402
-from util.run_paths import LAUNCH_FILE, find_run_dir, infer_dir  # noqa: E402
+from configs.schema import INFER, MACHINE, ConfigError, apply_overrides, check_infer_values, to_argv, validate  # noqa: E402
+from util.run_paths import LAUNCH_FILE, find_run_dir, infer_dir, latest_launch  # noqa: E402
 
 # launch.yaml の train / mode セクション（平坦キー）→ inference_dir.py のフラグ
 G_TRAIN_KEYS = {"network.ngf": "--ngf", "network.input_nc": "--input_nc", "network.output_nc": "--output_nc", "network.norm": "--norm",
@@ -46,7 +47,8 @@ def load_yaml(path):
 
 
 def split_overrides(tokens):
-    """上書き列から sh 変数系のフラグ（--weight_dir / --input_dir / --output_format / --dicom_dir）を取り出し、残りは INFER schema にあるフラグだけ許す。"""
+    """上書き列から sh 変数系のフラグ（--weight_dir / --input_dir / --output_format / --dicom_dir）を取り出し、残り（INFER のフラグ）を返す。
+    残りは apply_overrides で infer dict に反映する（schema に無いフラグはそこでエラー）。"""
     paths, rest, i = {}, [], 0
     while i < len(tokens):
         t = tokens[i]
@@ -58,10 +60,6 @@ def split_overrides(tokens):
             continue
         rest.append(t)
         i += 1
-    allowed = {k.flag for k in INFER.values() if k.flag}
-    bad = [t for t in rest if t.startswith("--") and t.split("=")[0] not in allowed]
-    if bad:
-        raise ConfigError("上書きできないフラグです（schema.py の INFER と " + " / ".join(PATH_FLAGS) + " 以外）: " + ", ".join(bad))
     return paths, rest
 
 
@@ -110,6 +108,8 @@ def main():
             raise ConfigError(f"machines.yaml にエントリ '{a.machine}' がありません。候補: {list(machines) if isinstance(machines, dict) else '(不正な形式)'}")
         machine = validate(f"machines.{a.machine}", machines[a.machine], MACHINE)
         path_over, overrides = split_overrides(overrides)
+        applied = apply_overrides(overrides, {"infer": (infer, INFER)})  # 上書きを実効値に反映（F-02 と同じ方式）
+        check_infer_values(infer)  # F-07: stride ≤ size など
         weight_dir = Path(path_over.get("--weight_dir", a.weight_dir))
         input_dir = Path(path_over.get("--input_dir", a.input_dir))
         output_format = path_over.get("--output_format", a.output_format)
@@ -128,7 +128,8 @@ def main():
         if not input_dir.is_dir():
             raise ConfigError(f"入力フォルダがありません: {input_dir}")
         device = "cpu" if machine["gpu_gen"] == 0 else "cuda"
-        g_argv, g_cfg = generator_argv(load_yaml(run_dir / LAUNCH_FILE))
+        launch_path = latest_launch(run_dir)  # 最新の実効設定（F-10）
+        g_argv, g_cfg = generator_argv(load_yaml(launch_path))
     except ConfigError as e:
         print(f"[run_infer] 設定エラー: {e}", file=sys.stderr)
         sys.exit(2)
@@ -137,15 +138,15 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     argv = (["--weight_dir", str(weight_dir), "--input_dir", str(input_dir), "--out_dir", str(out_dir), "--device", device,
              "--output_format", output_format, "--dicom_dir", dicom_dir]
-            + g_argv + to_argv(infer, INFER) + list(overrides))
+            + g_argv + to_argv(infer, INFER))  # 上書きは infer dict に反映済み
 
     jst = datetime.timezone(datetime.timedelta(hours=9), name="JST")
     now = datetime.datetime.now(jst)
     with open(out_dir / "infer.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(
-            {"timestamp": now.isoformat(timespec="minutes"), "machine_name": a.machine, "device": device, "run_dir": str(run_dir),
-             "weight_dir": str(weight_dir), "input_dir": str(input_dir), "output_format": output_format, "dicom_dir": dicom_dir,
-             "infer": infer, "generator": g_cfg, "overrides": list(overrides), "argv": argv},
+            {"timestamp": now.isoformat(timespec="seconds"), "machine_name": a.machine, "device": device, "run_dir": str(run_dir),
+             "launch": str(launch_path), "weight_dir": str(weight_dir), "input_dir": str(input_dir), "output_format": output_format, "dicom_dir": dicom_dir,
+             "infer": infer, "generator": g_cfg, "overrides": list(overrides), "applied": applied, "argv": argv},
             f, allow_unicode=True, sort_keys=False,
         )
 

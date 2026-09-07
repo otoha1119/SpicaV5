@@ -147,7 +147,13 @@ def infer_patch(net, x, patch, stride, window, batch_size):
         for k, (y, xx) in enumerate(chunk):
             out[..., y : y + patch, xx : xx + patch] += o[k] * window
             wsum[..., y : y + patch, xx : xx + patch] += window
-    return out / wsum
+    # F-08: 被覆されない画素（wsum = 0 → 0/0 = NaN）や非有限値を黙って出さない（stride ≤ size は schema でも検査。二重防御）
+    if bool((wsum <= 0).any()):
+        raise RuntimeError(f"patch 合成で被覆されない画素があります（patch {patch}, stride {stride}）。patch_stride ≤ patch_size にしてください")
+    y_out = out / wsum
+    if not bool(torch.isfinite(y_out).all()):
+        raise RuntimeError("patch 合成の結果に NaN / inf が含まれます")
+    return y_out
 
 
 # ---------------------------------------------------------------------------

@@ -45,6 +45,7 @@ if __name__ == "__main__":
     monitor = TrainMonitor(opt, dataset_size, fixed)  # [SpicaV5]
     total_iters = getattr(model, "resume_total_iters", 0)  # [SpicaV5] 再開時は保存された画像枚数から続ける
     total_epochs = opt.n_epochs + opt.n_epochs_decay
+    last_epoch, last_saved_epoch = None, None  # [SpicaV5] F-06: ループ終了時に最終 epoch が未保存なら保存する
     for epoch in range(opt.epoch_count, total_epochs + 1):
         epoch_start_time = time.time()  # timer for entire epoch
         iter_data_time = time.time()  # timer for data loading per iteration
@@ -85,8 +86,16 @@ if __name__ == "__main__":
             model.save_networks("latest")
             model.save_networks(epoch)
             monitor.save_full_images(model, full, epoch, total_iters)  # [SpicaV5] PCD / EID-like / R をフル 512 で保存
+            last_saved_epoch = epoch
+        last_epoch = epoch
 
         monitor.end_epoch(epoch, total_epochs, total_iters, model.optimizers[0].param_groups[0]["lr"], time.time() - epoch_start_time)
+
+    if last_epoch is not None and last_saved_epoch != last_epoch:  # [SpicaV5] F-06: 最終 epoch が save_epoch_freq の倍数でなくても最終状態を残す
+        monitor.write(f"saving the final model (epoch {last_epoch}, iters {total_iters})")
+        model.save_networks("latest")
+        model.save_networks(last_epoch)
+        monitor.save_full_images(model, full, last_epoch, total_iters)
 
     monitor.close()
     cleanup_ddp()

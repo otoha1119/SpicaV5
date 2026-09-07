@@ -16,10 +16,10 @@ services:
       - "${TB_PORT:?configs/machines.yaml の tb_port が未設定}:${TB_PORT:?}"   # TensorBoard（ホスト:コンテナ 同番号）
     environment:
       - SPICA_MACHINE=${SPICA_MACHINE:?start.sh から起動すること}
-      - NVIDIA_VISIBLE_DEVICES=all
     stdin_open: true
     tty: true
-    runtime: nvidia
+    # GPU は deploy の予約だけで渡す（SpicaV3 docker-compose.win.yaml と同じ。PC1 の 3090 で稼働実績あり）。
+    # runtime: nvidia は Docker Desktop に nvidia runtime が登録されていない環境で up が失敗するので付けない（F-09）
     deploy:
       resources:
         reservations:

@@ -22,6 +22,8 @@
 #   ・マシン名を 2 つ渡すとエラー。configs/machines.yaml に無い名前もエラー（候補を表示）。
 #   ・--flag 以降は上書き引数としてそのまま train_stage1.sh / infer_stage1.sh へ渡す（sh の引数が最優先）。
 #     受け付けるのは stage1/configs/schema.py にあるフラグだけ（学習は TRAIN / MODE / MACHINE、推論は INFER）。無いフラグはエラー。
+#     bool は --flag（= true）か --flag true|false。上書きは実効値として launch.yaml に保存され、再開・推論に引き継がれる（F-02）。
+#   ・同じ分に 2 回起動すると 2 回目はエラー（run 名の衝突。F-11）。
 #
 # ■ 例
 #   bash start.sh                            # sh 内の MACHINE で起動 → 学習
@@ -69,6 +71,12 @@
 # ■ ホスト要件
 #   docker compose v2、python3 + pyyaml（machines.yaml を読むため）。無ければエラーで止まる（フォールバックなし）。
 #
+# ■ Windows（Git Bash）
+#   ・MSYS2 のパス自動変換（/workspace/... → C:/Program Files/Git/...）を MSYS_NO_PATHCONV=1 等で止める（F-04）。
+#   ・対話 exec は winpty を通す。winpty が無ければ -T（擬似 TTY なし。tqdm は動く）（F-05）。mintty 以外（Windows Terminal / cmd）なら不要だが害はない。
+#   ・WSL から動かす場合は machines.yaml の host_data_root を /mnt/c/DataSet の形にする。
+#   ・改行コードは .gitattributes で LF 固定。古い clone が CRLF なら README の手順で取り直す。
+#
 # ■ TensorBoard（学習開始時に自動）
 #   ・学習（train / resume）のときは、コンテナ内で TensorBoard をバックグラウンド起動し（logdir = machines.yaml の checkpoints_dir、
 #     port = tb_port、ログ /workspace/tb_server.log）、応答を待ってからホストのブラウザで http://localhost:<tb_port> を開く。
@@ -100,6 +108,20 @@
 #   ・GPU に乗っているか: 起動時の "[start] torch ... | cuda available: True/False" を見る
 # =============================================================================
 set -euo pipefail
+
+# --- Windows（Git Bash / MSYS2）対策（F-04 / F-05） ---
+#   ・MSYS2 ランタイムは native の docker.exe に渡す引数・環境変数の中の /workspace/... を C:/Program Files/Git/... に書き換える。
+#     compose の volume 先（CONTAINER_DATA_ROOT）や推論の --weight_dir が壊れるので変換を止める（ホスト側の C:/DataSet は POSIX 形式でないので影響なし）
+#   ・mintty から docker exec に擬似 TTY を割り当てると "the input device is not a TTY" で止まるので、対話 exec は winpty を通す（無ければ -T）
+WINPTY=""; EXEC_TTY=()
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' MSYS2_ENV_CONV_EXCL='*'
+    if command -v winpty >/dev/null 2>&1; then WINPTY="winpty"; else EXEC_TTY=(-T); fi ;;
+esac
+exec_it() {  # 対話 exec（学習 / 推論 / shell / best）。Windows では winpty か -T を付ける。引数は docker compose exec に渡すもの（-e ... サービス コマンド）
+  $WINPTY "${COMPOSE[@]}" exec ${EXEC_TTY[@]+"${EXEC_TTY[@]}"} "$@"
+}
 
 # ===== ここだけマシンごとに書き換える =====
 MACHINE="PC1"          # configs/machines.yaml のエントリ名（PC1 / mac / ...）
@@ -230,14 +252,14 @@ start_tensorboard() {
 
 case "$ACTION" in
   tb)    start_tensorboard ;;
-  shell) "${COMPOSE[@]}" exec spicav5 /bin/bash ;;
-  infer) "${COMPOSE[@]}" exec spicav5 bash infer_stage1.sh "$@" ;;
-  best)  "${COMPOSE[@]}" exec spicav5 python stage1/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
+  shell) exec_it spicav5 bash ;;
+  infer) exec_it spicav5 bash infer_stage1.sh "$@" ;;
+  best)  exec_it spicav5 python stage1/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
   train)
     start_tensorboard
     if [ -n "$RESUME" ]; then
-      "${COMPOSE[@]}" exec -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash train_stage1.sh "$@"
+      exec_it -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash train_stage1.sh "$@"
     else
-      "${COMPOSE[@]}" exec spicav5 bash train_stage1.sh "$@"
+      exec_it spicav5 bash train_stage1.sh "$@"
     fi ;;
 esac

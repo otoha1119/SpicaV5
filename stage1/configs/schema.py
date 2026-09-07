@@ -185,6 +185,156 @@ def opt_attr_names(schemas=(TRAIN, MODE, MACHINE)):
     return names
 
 
+# ---------------------------------------------------------------------------
+# 上書き（sh の --flag）を平坦 dict に反映する（F-02）。argv に生で足さず、実効値を dict に持ってから argv を作る
+# ---------------------------------------------------------------------------
+def _parse_bool(val, flag):
+    v = str(val).strip().lower()
+    if v in ("true", "1", "yes"):
+        return True
+    if v in ("false", "0", "no"):
+        return False
+    raise ConfigError(f"{flag} は true / false で指定してください: {val!r}")
+
+
+def _convert(val, typ, flag):
+    try:
+        if typ is int:
+            if isinstance(val, str) and ("." in val or "e" in val.lower()):
+                raise ValueError
+            return int(val)
+        if typ is float:
+            return float(val)
+        if typ is str:
+            return str(val)
+        if typ is bool:
+            return _parse_bool(val, flag)
+    except ValueError:
+        raise ConfigError(f"{flag} の値を {typ.__name__} に変換できません: {val!r}")
+    raise TypeError(typ)
+
+
+def apply_overrides(tokens, sections):
+    """sh からの上書き列を平坦 dict に反映する（後勝ち）。
+    sections: {"train": (flat_dict, TRAIN), "mode": (flat_dict, MODE), ...}。flat_dict はその場で書き換わる。
+    受ける形: --flag value / --flag=value。bool は --flag（= true）または --flag true|false / --flag=false。
+    schema に無いフラグ・値の無いフラグ・余った語・型違いは ConfigError。戻り値は適用した {flag: 値}（記録用）。"""
+    index = {}
+    for sec, (flat, schema) in sections.items():
+        for key_name, key in schema.items():
+            if key.flag:
+                index[key.flag] = (sec, key_name, key)
+    applied = {}
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if not t.startswith("--"):
+            raise ConfigError(f"上書き引数の形式が不正です（--flag value の並びにしてください）: {t!r}")
+        if "=" in t:
+            flag, val = t.split("=", 1)
+            has_val = True
+        else:
+            flag, val, has_val = t, None, False
+        if flag not in index:
+            raise ConfigError("上書きできないフラグです（schema.py に無い）: " + flag)
+        sec, key_name, key = index[flag]
+        flat = sections[sec][0]
+        if key.type is bool:
+            if not has_val and i + 1 < len(tokens) and tokens[i + 1].lower() in ("true", "false", "1", "0", "yes", "no"):
+                val = tokens[i + 1]
+                i += 1
+            v = True if val is None else _parse_bool(val, flag)
+        else:
+            if not has_val:
+                if i + 1 >= len(tokens) or tokens[i + 1].startswith("--"):
+                    raise ConfigError(f"{flag} には値が必要です")
+                val = tokens[i + 1]
+                i += 1
+            v = _convert(val, key.type, flag)
+        flat[key_name] = v
+        applied[flag] = v
+        i += 1
+    return applied
+
+
+# ---------------------------------------------------------------------------
+# 値域・相互条件の検証（F-07）。型検査（validate）の後、実効値（上書き反映後）に対して行う
+# ---------------------------------------------------------------------------
+LR_POLICIES = ("linear",)  # 再開（scheduler の作り直し）が linear 前提。他方式は scheduler 状態の保存・復元を実装するまで受け付けない（F-12）
+SAMPLINGS = ("random", "paper", "aligned")
+GAN_MODES = ("fgan_kl", "lsgan", "vanilla")
+NETGS = ("wavelet", "unet_128", "unet_256", "resnet_6blocks", "resnet_9blocks")
+NETDS = ("paper", "basic", "n_layers", "pixel")
+NORMS = ("batch", "instance", "none")
+INIT_TYPES = ("normal", "xavier", "kaiming", "orthogonal")
+GPU_GENS = (0, 30, 40, 50)
+INFER_MODES = ("full", "patch", "both")
+BLENDS = ("uniform", "hann")
+HAAR_LEVELS = 3  # wavelet G は 2**3 の倍数の入力が必要
+
+
+def _problems_to_error(where, problems):
+    if problems:
+        raise ConfigError(f"[{where}] " + " / ".join(problems))
+
+
+def check_values(train, mode, machine):
+    """train / mode / machine の実効値の値域と相互条件。"""
+    P = []
+    bs = train["optim.batch_size"]
+    if train["optim.lr"] <= 0: P.append("optim.lr は正")
+    if not (0.0 <= train["optim.beta1"] < 1.0 and 0.0 <= train["optim.beta2"] < 1.0): P.append("optim.beta1 / beta2 は [0, 1)")
+    if bs < 1: P.append("optim.batch_size ≥ 1")
+    if train["optim.n_epochs"] < 1: P.append("optim.n_epochs ≥ 1")
+    if train["optim.n_epochs_decay"] < 0: P.append("optim.n_epochs_decay ≥ 0")
+    if train["optim.lr_policy"] not in LR_POLICIES: P.append(f"optim.lr_policy は {LR_POLICIES} のみ（他方式は再開時の scheduler 復元が未実装）")
+    if train["loss.lambda_fid"] < 0: P.append("loss.lambda_fid ≥ 0")
+    if train["network.ngf"] < 1 or train["network.ndf"] < 1: P.append("network.ngf / ndf ≥ 1")
+    if train["network.norm"] not in NORMS: P.append(f"network.norm は {NORMS}")
+    if train["network.init_type"] not in INIT_TYPES: P.append(f"network.init_type は {INIT_TYPES}")
+    if train["network.init_gain"] <= 0: P.append("network.init_gain は正")
+    if train["network.input_nc"] < 1 or train["network.output_nc"] < 1: P.append("network.input_nc / output_nc ≥ 1")
+    ps = train["data.patch_size"]
+    m = 2**HAAR_LEVELS
+    if ps < m or ps % m: P.append(f"data.patch_size は {m} の倍数（学習は patch 必須）")
+    if train["data.patch_stride"] < 1: P.append("data.patch_stride ≥ 1")
+    if train["data.patches_per_image"] < 1: P.append("data.patches_per_image ≥ 1")
+    spe = train["data.samples_per_epoch"]
+    if spe < bs or spe % bs: P.append(f"data.samples_per_epoch ({spe}) は optim.batch_size ({bs}) の倍数で batch_size 以上")
+    if train["data.hu_min"] >= train["data.hu_max"]: P.append("data.hu_min < data.hu_max")
+    if train["log.print_freq"] < 1 or train["log.image_freq"] < 1: P.append("log.print_freq / image_freq ≥ 1（step）")
+    if train["log.n_images"] < 1: P.append("log.n_images ≥ 1")
+    if train["log.n_full_images"] < 1: P.append("log.n_full_images ≥ 1")
+    if train["log.display_hu_min"] >= train["log.display_hu_max"]: P.append("log.display_hu_min < display_hu_max")
+    if train["log.diff_range_hu"] <= 0: P.append("log.diff_range_hu は正")
+    if train["log.save_epoch_freq"] < 1: P.append("log.save_epoch_freq ≥ 1")
+    slf = train["log.save_latest_freq"]
+    if slf < bs or slf % bs: P.append(f"log.save_latest_freq ({slf}) は optim.batch_size ({bs}) の倍数（画像枚数単位。倍数でないと latest が保存されない）")
+    if train["log.epoch_count"] < 1: P.append("log.epoch_count ≥ 1")
+    if mode["sampling"] not in SAMPLINGS: P.append(f"sampling は {SAMPLINGS}")
+    if mode["gan_mode"] not in GAN_MODES: P.append(f"gan_mode は {GAN_MODES}")
+    if mode["netG"] not in NETGS: P.append(f"netG は {NETGS}")
+    if mode["netD"] not in NETDS: P.append(f"netD は {NETDS}")
+    if machine["gpu_gen"] not in GPU_GENS: P.append(f"gpu_gen は {GPU_GENS}")
+    if machine["num_threads"] < 0: P.append("num_threads ≥ 0")
+    if not (1 <= machine["tb_port"] <= 65535): P.append("tb_port は 1..65535")
+    _problems_to_error("values", P)
+
+
+def check_infer_values(infer):
+    P = []
+    if infer["mode"] not in INFER_MODES: P.append(f"mode は {INFER_MODES}")
+    ps, st = infer["patch.size"], infer["patch.stride"]
+    m = 2**HAAR_LEVELS
+    if ps < m or ps % m: P.append(f"patch.size は {m} の倍数")
+    if not (1 <= st <= ps): P.append(f"patch.stride は 1..patch.size ({ps})。大きいと被覆されない画素ができる")
+    if infer["patch.blend"] not in BLENDS: P.append(f"patch.blend は {BLENDS}")
+    if infer["patch.batch_size"] < 1: P.append("patch.batch_size ≥ 1")
+    if infer["max_slices"] < 0: P.append("max_slices ≥ 0（0 で全部）")
+    if infer["dicom.rescale_slope"] == 0: P.append("dicom.rescale_slope ≠ 0")
+    _problems_to_error("infer values", P)
+
+
 def check_opt(opt, where):
     """junyanz の opt に None（番兵）が残っていればエラー。run_train.py を経由せず train.py を直接叩いた事故を止める。"""
     missing = [n for n in opt_attr_names() if getattr(opt, n, None) is None]

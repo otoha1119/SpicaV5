@@ -4,7 +4,7 @@ run 名は起動時刻（JST）を yyyy_mmdd_HHMM にしたもの（例 2026_090
 checkpoint は「重みディレクトリ」単位で扱う（G と D と optimizer state の 3 ファイルが 1 組なので）。
 
 <checkpoints_dir>/<run>/
-  launch.yaml                 解決済み設定（resume 時は launch_resume_<日時>.yaml が追加）
+  launch.yaml                 解決済み設定（実効値 = yaml + sh の上書き）。resume 時は launch_resume_<日時秒>.yaml が追加され、最新のものが次の再開・推論の基準
   train_opt.txt, loss_log.txt
   latest/net_G.pth, net_D.pth, state.pth        直下に置く重みディレクトリは latest と best だけ
   best/net_G.pth,   net_D.pth, state.pth        bash start.sh best <run> <epoch> で weights/epoch_NNN/ をコピー
@@ -66,6 +66,13 @@ def saved_tags(run_dir):
             m = re.fullmatch(r"epoch_(\d+)", d.name)
             epochs.append(str(int(m.group(1))) if m else d.name)
     return tags + sorted(epochs, key=lambda t: (not t.isdigit(), int(t) if t.isdigit() else t))
+
+
+def latest_launch(run_dir):
+    """run の実効設定ファイル。再開のたびに launch_resume_<日時>.yaml が増えるので、あれば最新（名前順の末尾）、無ければ launch.yaml（F-10）。"""
+    run_dir = Path(run_dir)
+    resumes = sorted(run_dir.glob("launch_resume_*.yaml"))
+    return resumes[-1] if resumes else run_dir / LAUNCH_FILE
 
 
 def find_run_dir(weight_dir):

@@ -81,7 +81,7 @@ Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT�
 | `bash start.sh tb` | TensorBoard だけ起動してブラウザを開く |
 | `bash start.sh shell` / `down` | コンテナに入る / 停止・削除 |
 
-実験名（run）は起動時刻 `yyyy_mmdd_HHMM`（JST）。同一分の再起動は上書き。
+実験名（run）は起動時刻 `yyyy_mmdd_HHMM`（JST）。同じ分に 2 回起動すると 2 回目はエラー（run 名の衝突）。コマンドの上書きは実効値として `launch.yaml` に保存され、再開・推論に引き継がれる。再開は最新の `launch_resume_*.yaml` を基準にし、再開時の `--lr` 等の上書きも効く。
 
 処理の経路: `start.sh`（ホスト）→ `docker compose`（`docker/compose.{gen30,gen50,cpu}.yaml`、gen40 は gen30 と共用）→ コンテナ内 `train_stage1.sh` / `infer_stage1.sh` → `stage1/run_train.py` / `run_infer.py`（yaml を検証し全引数明示で exec）→ `stage1/train.py` / `inference_dir.py`。
 
@@ -113,7 +113,7 @@ git reset --hard
   tb/                         TensorBoard
 ```
 
-`state.pth` には optimizer の状態・学習率・RNG（python / torch / numpy）・epoch・iteration 数が入る。scheduler は再開時に作り直す。
+`state.pth` には optimizer の状態・学習率・RNG（python / torch / numpy）・epoch・iteration 数が入る。scheduler は再開時に作り直す（`lr_policy` は `linear` のみ対応）。学習終了時は `save_epoch_freq` の倍数でなくても最終 epoch を保存する。
 
 ## 7. 学習中の表示
 

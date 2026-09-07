@@ -201,20 +201,30 @@ class FidelityGANModel(BaseModel):
         torch.save(state, self.ckpt_path(epoch, "state.pth"))  # 重みと同じディレクトリ（latest/ best/ weights/epoch_NNN/）
 
     def setup(self, opt):
-        """本家の setup（重み読込・scheduler 生成）のあと、--resume_state があれば optimizer / scheduler / RNG / 進捗を復元する。"""
+        """本家の setup（重み読込・scheduler 生成）のあと、--resume_state があれば optimizer / RNG / 進捗を復元し、scheduler を作り直す。
+        lr / betas は opt の値（yaml + sh の上書き）で上書きする（F-10）。"""
         super().setup(opt)
         if not (self.isTrain and opt.continue_train and opt.resume_state):
             return
-        state = torch.load(opt.resume_state, map_location=str(self.device), weights_only=True)
-        self.optimizer_G.load_state_dict(state["optimizer_G"])  # Adam のモーメント・step を復元（param_groups の lr / initial_lr も保存時の値になる）
+        # F-01: state は CPU に読む。map_location=device だと RNG 用の Tensor（numpy の keys）まで CUDA に載り、.numpy() で落ちる。
+        #       optimizer の state は load_state_dict が param のデバイスへ自動でキャストする
+        state = torch.load(opt.resume_state, map_location="cpu", weights_only=True)
+        self.optimizer_G.load_state_dict(state["optimizer_G"])  # Adam のモーメント・step を復元
         self.optimizer_D.load_state_dict(state["optimizer_D"])
-        # scheduler は作り直す: LambdaLR が param_groups の initial_lr を base に、新しい --epoch_count を起点として lr を再設定する
+        # F-10(b): load_state_dict は保存時の lr / betas / initial_lr を param_groups に戻すので、opt（= yaml + sh の上書き）の値を再適用する。
+        #          これで resume 時の --lr / --beta1 / --beta2 が最優先になる。同じ値なら何も変わらない
+        for optimizer in self.optimizers:
+            for g in optimizer.param_groups:
+                g["lr"] = opt.lr
+                g["initial_lr"] = opt.lr
+                g["betas"] = (opt.beta1, opt.beta2)
+        # scheduler は作り直す: LambdaLR が param_groups の initial_lr を base に、新しい --epoch_count を起点として lr を再設定する（linear のみ対応。F-12）
         self.schedulers = [networks.get_scheduler(optimizer, opt) for optimizer in self.optimizers]
         rng = state["rng"]
         random.setstate(_to_tuple(rng["python"]))
         torch.set_rng_state(rng["torch"].cpu())
         kind, keys, pos, has_gauss, cached = rng["numpy"]
-        np.random.set_state((kind, keys.numpy().astype(np.uint32), pos, has_gauss, cached))
+        np.random.set_state((kind, keys.cpu().numpy().astype(np.uint32), pos, has_gauss, cached))
         self.resume_total_iters = state["total_iters"]
         print(f"[resume] {opt.resume_state}: epoch {state['epoch']} (done={state['epoch_done']}), total_iters {state['total_iters']}, lr {self.optimizers[0].param_groups[0]['lr']:.7f}")
 
