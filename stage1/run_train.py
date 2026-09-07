@@ -36,6 +36,36 @@ FIXED_ARGV = ["--model", "fidelity_gan", "--dataset_mode", "ct"]
 RESUME_ONLY_FLAGS = ("--continue_train", "--epoch_count")  # 再開の内部状態。sh からは上書きできない（run_train が決める）
 
 
+def start_tensorboard(run_dir, port):
+    """この run の tb/ だけを logdir にして TensorBoard を起動する（start.sh が SPICA_TB_PORT を渡したときだけ）。
+    前の run の TensorBoard や `bash start.sh tb`（全 run 表示）が動いていれば止める。ログは <run>/tensorboard.log。"""
+    import shutil
+    import signal
+    import subprocess
+
+    exe = shutil.which("tensorboard") or (str(Path(sys.executable).parent / "tensorboard") if (Path(sys.executable).parent / "tensorboard").exists() else None)  # venv の bin が PATH に無くても同じ環境のものを使う
+    if exe is None:
+        raise ConfigError("tensorboard が見つかりません（docker/requirements-*.txt に tensorboard があるか確認）")
+    proc_dir = Path("/proc")
+    if proc_dir.is_dir():
+        for d in proc_dir.glob("[0-9]*"):
+            try:
+                cmd = (d / "cmdline").read_bytes()
+            except OSError:
+                continue
+            if b"tensorboard" in cmd and b"--logdir" in cmd and int(d.name) != os.getpid():
+                try:
+                    os.kill(int(d.name), signal.SIGTERM)
+                except OSError:
+                    pass
+    tb_dir = run_dir / "tb"
+    tb_dir.mkdir(parents=True, exist_ok=True)
+    log = open(run_dir / "tensorboard.log", "ab")
+    subprocess.Popen([exe, "--logdir", str(tb_dir), "--port", str(port), "--bind_all", "--reload_interval", "5"],
+                     stdout=log, stderr=log, start_new_session=True)
+    print(f"[run_train] TensorBoard: http://localhost:{port} → {tb_dir}（この run だけ。全 run は bash start.sh tb）", flush=True)
+
+
 def load_yaml(path):
     path = Path(path)
     if not path.is_file():
@@ -157,6 +187,12 @@ def main():
 
     cmd = [sys.executable, str(HERE / "train.py")] + argv
     print(f"[run_train] run {name} → {out_dir / launch_name}（全引数はこのファイルの argv）", flush=True)
+    if os.environ.get("SPICA_TB_PORT"):  # start.sh 経由のとき。手動起動や scratch では起動しない
+        try:
+            start_tensorboard(out_dir, int(os.environ["SPICA_TB_PORT"]))
+        except ConfigError as e:
+            print(f"[run_train] 設定エラー: {e}", file=sys.stderr)
+            sys.exit(2)
     os.chdir(HERE)
     os.execv(sys.executable, cmd)
 

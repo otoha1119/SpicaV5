@@ -73,12 +73,12 @@ Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT�
 
 | コマンド | 動き |
 |---|---|
-| `bash start.sh` | コンテナ起動（イメージが無ければビルド）→ TensorBoard 起動 → ブラウザを開く → 学習 |
+| `bash start.sh` | コンテナ起動（イメージが無ければビルド）→ 学習（その run だけの TensorBoard を起動し、ブラウザを開く） |
 | `bash start.sh build` | イメージを（再）ビルド → コンテナ起動 → torch / cuda の確認表示で終了（学習しない。本番機の初期セットアップ用） |
 | `bash start.sh resume <run> [latest\|best\|<epoch>]` | その run の checkpoint から続きを学習（optimizer / RNG / 進捗を復元。run 起動時の設定を使う） |
 | `bash start.sh best <run> <epoch>` | `weights/epoch_NNN/` を `best/` にコピーして `best.txt` に記録 |
 | `bash start.sh infer [--flag ...]` | 症例丸ごと推論（§8） |
-| `bash start.sh tb` | TensorBoard だけ起動してブラウザを開く |
+| `bash start.sh tb` | 全 run を並べた TensorBoard を起動してブラウザを開く（比較用） |
 | `bash start.sh shell` / `down` | コンテナに入る / 停止・削除 |
 
 実験名（run）は起動時刻 `yyyy_mmdd_HHMM`（JST）。同じ分に 2 回起動すると 2 回目はエラー（run 名の衝突）。コマンドの上書きは実効値として `launch.yaml` に保存され、再開・推論に引き継がれる。再開は最新の `launch_resume_*.yaml` を基準にし、再開時の `--lr` 等の上書きも効く。
@@ -117,7 +117,7 @@ git reset --hard
 ## 7. 学習中の表示
 
 - ターミナル: tqdm バー（画像枚数単位。1 step = batch_size 枚）。末尾に D / G_GAN / G_fid と `d_in`（G(z) − z の平均絶対値 [HU]）。
-- TensorBoard（コンテナ内で自動起動、`machines.yaml` の `tb_port` で公開）: `loss/*`、`diag/*`（D_real、D_fake、d_in_HU）、`time/*`、`train/lr`、`images/current`、`images/fixed`（固定サンプル。128 patch グリッドは TB にだけ出す）、`images/full/<slice>`（checkpoint 時のフル 512）。横軸は総画像枚数。
+- TensorBoard（学習の起動器が **その run の `tb/` だけ**を logdir にして自動起動。前の run のものは止める。全 run を並べるときは `bash start.sh tb`。`machines.yaml` の `tb_port` で公開）: `loss/*`、`diag/*`（D_real、D_fake、d_in_HU）、`time/*`、`train/lr`、`images/current`、`images/fixed`（固定サンプル。128 patch グリッドは TB にだけ出す）、`images/full/<slice>`（checkpoint 時のフル 512）。横軸は総画像枚数。
 - 表示は窓を掛けず HU −1400〜1600（stored 0〜3000）を線形に 0〜255 へ、差分パネルは ±200 HU（`train.yaml` の `log:` で変更可）。
 
 ## 8. 推論（`bash start.sh infer`）

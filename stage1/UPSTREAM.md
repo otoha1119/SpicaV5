@@ -165,3 +165,7 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 ### 毎 epoch 保存と samples の廃止（2026-09-07、ユーザー指示）
 - `configs/train.yaml log.save_epoch_freq`: 10 → 1（毎 epoch `weights/epoch_NNN/` とフル 512 を保存し、後から最良 epoch を選ぶ）
 - `util/monitor.py`: 128 patch グリッドは TensorBoard にだけ出し、`output_images/samples/` への書き出しを廃止。`util/run_paths.py` の `samples_dir` / `SAMPLES_DIR` を削除
+
+### TensorBoard を run 単位に（2026-09-07、ユーザー指示）
+- `run_train.py start_tensorboard`: `SPICA_TB_PORT`（start.sh が渡す）があるとき、run ディレクトリ確定後に `<run>/tb` だけを logdir にして TensorBoard を起動（`--reload_interval 5`、ログ `<run>/tensorboard.log`）。`/proc` を走査して前の TensorBoard を止める（コンテナ = Linux 前提。mac の scratch では kill は効かない）
+- `../start.sh`: train / resume は `tb_kill` → バックグラウンドで応答待ち → ブラウザ、`exec_it -e SPICA_TB_PORT`。`bash start.sh tb` は従来どおり checkpoints_dir 全体（比較用）

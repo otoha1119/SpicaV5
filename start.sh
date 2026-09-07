@@ -78,11 +78,12 @@
 #   ・改行コードは .gitattributes で LF 固定。古い clone が CRLF なら README の手順で取り直す。
 #
 # ■ TensorBoard（学習開始時に自動）
-#   ・学習（train / resume）のときは、コンテナ内で TensorBoard をバックグラウンド起動し（logdir = machines.yaml の checkpoints_dir、
-#     port = tb_port、ログ /workspace/tb_server.log）、応答を待ってからホストのブラウザで http://localhost:<tb_port> を開く。
-#   ・既に起動していれば起動せずブラウザだけ開く。コンテナを down すると止まる。ポートが塞がっていたら machines.yaml の tb_port を変える。
+#   ・学習（train / resume）のときは、起動器（stage1/run_train.py）が **その run の <run>/tb だけ**を logdir にして TensorBoard を起動する
+#     （port = machines.yaml の tb_port、ログ <run>/tensorboard.log）。前の run の TensorBoard は止める。start.sh は応答を待ってホストのブラウザで
+#     http://localhost:<tb_port> を開く。学習が終わっても TensorBoard は残る（次の学習か down で止まる）。
+#   ・全 run を並べて比較したいときは  bash start.sh tb （logdir = checkpoints_dir 全体）。ポートが塞がっていたら machines.yaml の tb_port を変える。
 #   ・ブラウザは mac = open、Windows Git Bash = cmd //c start、Linux = xdg-open、WSL = cmd.exe。開けなくても学習は続く。
-#   ・曲線は checkpoints_dir 以下の全 run（yyyy_mmdd_HHMM）が並ぶ。画像は images/current / images/fixed（8bit 表示。TB だけ）と images/full。
+#   ・画像は images/current / images/fixed（8bit 表示。TB だけ）と images/full。
 #
 # ■ 再開（resume）の仕組み
 #   ・学習中は重み（net_G.pth / net_D.pth）に加えて state.pth（optimizer / RNG / epoch / iteration 数）を同じ重みディレクトリに保存する。
@@ -256,16 +257,33 @@ start_tensorboard() {
   open_browser "$url" || echo "[start] ブラウザを自動で開けませんでした。$url を手で開いてください"
 }
 
+tb_kill() {  # コンテナ内の TensorBoard を止める（学習側が run 単位のものを起動し直す）
+  "${COMPOSE[@]}" exec -T spicav5 bash -c 'for p in /proc/[0-9]*; do [ "$p" = "/proc/$$" ] && continue; tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "tensorboard --logdir" && kill "${p#/proc/}" 2>/dev/null; done; exit 0'
+}
+open_when_ready() {  # バックグラウンド: 学習側（run_train.py）が起動する run 単位の TensorBoard の応答を待ってブラウザを開く（最大 120 秒）
+  local url="http://localhost:$TB_PORT"
+  for _ in $(seq 1 120); do
+    if curl -s -o /dev/null "$url"; then
+      echo "[start] TensorBoard: $url（この run だけ。全 run は bash start.sh tb）"
+      open_browser "$url" || echo "[start] ブラウザを自動で開けませんでした。$url を手で開いてください"
+      return
+    fi
+    sleep 1
+  done
+  echo "[start] TensorBoard の応答がありません: $url（<run>/tensorboard.log を確認）"
+}
+
 case "$ACTION" in
   tb)    start_tensorboard ;;
   shell) exec_it spicav5 bash ;;
   infer) exec_it spicav5 bash infer_stage1.sh "$@" ;;
   best)  exec_it spicav5 python stage1/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
   train)
-    start_tensorboard
+    tb_kill
+    if command -v curl >/dev/null 2>&1; then open_when_ready & fi
     if [ -n "$RESUME" ]; then
-      exec_it -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash train_stage1.sh "$@"
+      exec_it -e SPICA_TB_PORT="$TB_PORT" -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash train_stage1.sh "$@"
     else
-      exec_it spicav5 bash train_stage1.sh "$@"
+      exec_it -e SPICA_TB_PORT="$TB_PORT" spicav5 bash train_stage1.sh "$@"
     fi ;;
 esac
