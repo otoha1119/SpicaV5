@@ -1,0 +1,9 @@
+# stage1/configs/mode.yaml — アルゴリズムのモード切替（数値ではなく「どの方式か」）
+# 唯一の正は configs/schema.py。既定値は無い。
+
+sampling: random        # random（ケース 1 完全ランダム）| paper（論文の固定 40 patch/画像）| aligned（ケース 2、未実装）
+gan_mode: fgan_kl       # fgan_kl（論文 Eq.6）| lsgan | vanilla（ablation）
+netG: wavelet           # wavelet（論文 Fig.3）| unet_128 | resnet_9blocks ...（ablation）
+netD: paper             # paper（論文 Fig.3、受容野 22）| basic（70×70 PatchGAN）
+final_norm_act: false   # G 最終 conv に bnorm+LReLU（確定: false。ablation 用）
+serial_batches: false   # true で sampler を index 決定的に（再現用）

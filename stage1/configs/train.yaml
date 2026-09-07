@@ -1,0 +1,49 @@
+# stage1/configs/train.yaml — 学習パラメータ（FE-GAN = Park et al. 2019 が使うものを全部）
+# 唯一の正は configs/schema.py（キーの欠落・未知・型違いはエラー）。既定値は無い。
+# 書き方: 小数は必ず点を付ける（0.0002, 1.0e-4）。真偽値は true / false。
+# 実験名 (--name) はここに書かない。run_train.py が起動時刻 yyyy_mmdd_HHMM から生成する（レイアウトは util/run_paths.py）。
+
+optim:
+  lr: 0.0002            # 論文 "learning rate of 0.0002"
+  beta1: 0.5            # Adam β1。論文未記載 (Q-T1)。junyanz 慣行
+  beta2: 0.999          # Adam β2。論文未記載
+  batch_size: 40        # 論文 "mini-batch size of 40"
+  n_epochs: 300         # 論文 "300 epochs"
+  n_epochs_decay: 0     # 論文未記載 (Q-T2)。減衰なし
+  lr_policy: linear     # decay 0 なら定常
+
+loss:
+  lambda_fid: 10.0      # 論文 "We empirically choose λ = 10"。範囲 [−1,1] では再調整対象
+
+network:
+  ngf: 32               # Fig. 3 G 最初の段
+  ndf: 32               # Fig. 3 D 1 層目
+  norm: batch           # 論文 "batch normalization"。wavelet / paper は BN 固定
+  init_type: normal     # 論文 "Gaussian distribution with a mean of 0"
+  init_gain: 0.01       # 論文 "standard deviation of 0.01"
+  input_nc: 1           # grayscale
+  output_nc: 1
+
+data:
+  patch_size: 128       # 論文 "patches of size 128 × 128"
+  patch_stride: 1       # ケース 1: 任意位置。論文グリッドなら 8
+  patches_per_image: 40 # sampling=paper 用。論文 "40 patches"
+  patch_seed: 0
+  samples_per_epoch: 24000   # sampling=random の epoch 長。論文の patch 集合と同数（batch 40 → 600 iter/epoch）
+  hu_offset: 1400       # stored = HU + 1400
+  hu_min: -1400         # 正規化窓 [−1400, 4096] → [−1, 1]
+  hu_max: 4096
+
+log:
+  # 単位: print_freq / image_freq は step（iteration。batch_size 枚で 1 step）、save_latest_freq は画像枚数（junyanz 由来）
+  print_freq: 100         # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step）
+  image_freq: 1000        # TensorBoard の途中画像の間隔（step）
+  n_images: 4             # 途中画像の枚数（current / fixed それぞれ、128 patch）
+  n_full_images: 2        # checkpoint 保存時（save_epoch_freq ごと）にフル 512 で書き出すスライス数 → <run>/output_images/epoch_NNN/
+  display_hu_min: -1400   # 表示の線形範囲（stored 0 ≈ HU −1400）
+  display_hu_max: 1600    # （stored 3000 ≈ HU 1600）。TB と output_images/samples/ は 8bit の表示用（16bit は epoch_NNN/ と推論）
+  diff_range_hu: 200      # 差分パネルの ±範囲 HU
+  save_epoch_freq: 10
+  save_latest_freq: 5000  # 画像枚数（batch 40 なら 125 step ごと）
+  continue_train: false
+  epoch_count: 1

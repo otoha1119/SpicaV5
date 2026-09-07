@@ -1,0 +1,29 @@
+# SpicaV5 compose (gen30)。start.sh から起動する (環境変数は start.sh が configs/machines.yaml から export する)。
+# ${VAR:?msg} により、環境変数が無ければ compose 自体がエラーで止まる (既定値なし)。
+services:
+  spicav5:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gen30
+    image: spicav5-gen30            # 世代ごとに別名 (同名だと up -d が古い世代のイメージを再利用する事故が起きる)
+    container_name: spicav5
+    shm_size: "8gb"
+    volumes:
+      - ..:/workspace
+      - ${HOST_DATA_ROOT:?configs/machines.yaml の host_data_root が未設定 (start.sh から起動すること)}:${CONTAINER_DATA_ROOT:?configs/machines.yaml の container_data_root が未設定}
+    working_dir: /workspace
+    ports:
+      - "${TB_PORT:?configs/machines.yaml の tb_port が未設定}:${TB_PORT:?}"   # TensorBoard（ホスト:コンテナ 同番号）
+    environment:
+      - SPICA_MACHINE=${SPICA_MACHINE:?start.sh から起動すること}
+      - NVIDIA_VISIBLE_DEVICES=all
+    stdin_open: true
+    tty: true
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

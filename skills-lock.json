@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "skills": {
+    "ai-research-reproduction": {
+      "source": "lllllllama/rigorpilot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ai-research-reproduction/SKILL.md",
+      "computedHash": "0f0a5057914e7441348ffec942661e060adea1ee588a23df4196b4c4436e255b"
+    },
+    "citation-management": {
+      "source": "K-Dense-AI/scientific-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/citation-management/SKILL.md",
+      "computedHash": "0e0a6b5b3f6861be50750a7dae49beff9d2ee6a82d996f77d26d7e45cadddded"
+    },
+    "env-and-assets-bootstrap": {
+      "source": "lllllllama/rigorpilot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/env-and-assets-bootstrap/SKILL.md",
+      "computedHash": "9017e7b66f62cce56ccaad32633db2fc21271336c92fa415f35c10ffea6ef0e5"
+    },
+    "grill-me": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/productivity/grill-me/SKILL.md",
+      "computedHash": "9cdbb4b8f7a3aeaef82e6230c9e823500d4a8a1214c726cf342cf9829d34fc7d"
+    },
+    "grilling": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/productivity/grilling/SKILL.md",
+      "computedHash": "a16b2f661db6caf310d7e02dd0d069e597cb888873e210e66f641eae715c5f23"
+    },
+    "literature-review": {
+      "source": "K-Dense-AI/scientific-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/literature-review/SKILL.md",
+      "computedHash": "364a51949fc9ba4d394103212ab0859de54f66f92641a56e15df8568892e2c04"
+    },
+    "paper-lookup": {
+      "source": "K-Dense-AI/scientific-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/paper-lookup/SKILL.md",
+      "computedHash": "8f577d2c3ec8bf892f525d69aea4c8e0c8143d8b0d9d27ce0bc4e5b2f4520bae"
+    },
+    "peer-review": {
+      "source": "K-Dense-AI/scientific-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/peer-review/SKILL.md",
+      "computedHash": "0022e9a5ace76f9a46f6ba719a843f3b4f588b75a2d694b280a89b49ad657fb9"
+    },
+    "research": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/research/SKILL.md",
+      "computedHash": "bd3e2c6826671d82c86ed0da3dac3370ebcf63b0fe847f91bb444e1fb7dac21b"
+    },
+    "safe-debug": {
+      "source": "lllllllama/rigorpilot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/safe-debug/SKILL.md",
+      "computedHash": "7b78aa32026eaf0a5372b6bb0bf944fc10f2e665158a8c8e8d1c8622a1345130"
+    },
+    "scientific-writing": {
+      "source": "K-Dense-AI/scientific-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/scientific-writing/SKILL.md",
+      "computedHash": "603eb066998c5de1b6de3d49992da51802da801eafd2fa84b4db7fada674a86c"
+    }
+  }
+}

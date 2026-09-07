@@ -1,0 +1,21 @@
+# stage1/configs/infer.yaml — 推論（bash start.sh infer）の方式。唯一の正は configs/schema.py の INFER。既定値は無い。
+# 重みディレクトリ・入力フォルダ・出力形式（png | dicom | both）・元 DICOM ルートは infer_stage1.sh の変数で指定する。デバイスは machines.yaml の gpu_gen（0 → cpu）。
+# G の構成は run の launch.yaml から取る（学習時と同じ G を組む）。出力は <run>/infer/<重みディレクトリ名>/<入力フォルダ名>/（レイアウトは util/run_paths.py）。
+# 設計: docs/plans/20260907_inference-plan.md
+
+mode: both              # full（512 を一発）| patch（下の patch.* で切って重なり平均）| both（両方保存 + |full − patch| を diff_stats.txt に）
+
+patch:
+  size: 128             # 論文の学習 patch と同じ。8 の倍数
+  stride: 8             # 論文の学習 grid と同じ（512 で 2,401 patch/枚）。端まで均等配置で被覆する
+  blend: uniform        # uniform（重なりの単純平均）| hann（2D Hann 重みで境界を滑らかに）
+  batch_size: 64        # patch を G に通す枚数（VRAM に合わせる）
+
+max_slices: 0           # 0 で全スライス。動作確認は 4 など
+save_residual: true     # 残差 R（0 HU = 32768）も <mode>_R/ に保存
+
+dicom:                  # OUTPUT_FORMAT = dicom | both のとき。stored = (HU − rescale_intercept) / rescale_slope
+  rescale_slope: 1.0          # 元 DICOM の RescaleSlope
+  rescale_intercept: -8192.0  # 元 DICOM の RescaleIntercept（格納値は符号なし 16bit: HU −1662..9075 → stored 6530..17267）
+  # 出典: Siemens NAEOTOM Alpha の PCD DICOM（DICOMSAVE-20240527074809-000、1024 マトリクス系列、1266 枚すべて同値。2026-09-07 確認）。
+  # 512 系列も同じ規約のはず。書き出し時に参照 DICOM のタグと照合し、違えばエラーで止まる（推測で書かない）

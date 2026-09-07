@@ -1,0 +1,20 @@
+# SpicaV5 gen50 — RTX 50 系 (Blackwell)。ベース image と torch は Layer_checker_v2 judgment_pc/docker/Dockerfile.gpu50 (稼働実績あり) に合わせる
+# ffmpeg / NVENC / PyNvVideoCodec 等の動画系は本研究に不要なので入れない
+FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /workspace
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-venv python3-pip python3-dev git libglib2.0-0 && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN python3.10 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY docker/requirements-gen50.txt /tmp/requirements.txt
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r /tmp/requirements.txt && \
+    rm /tmp/requirements.txt
+
+CMD ["/bin/bash"]

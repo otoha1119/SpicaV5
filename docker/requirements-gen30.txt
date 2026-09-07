@@ -1,0 +1,13 @@
+# gen30 (RTX 30 / 40 系): CUDA 11.8 ビルドの torch。SpicaV3 で稼働実績のある組み合わせ
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.5.1+cu118
+torchvision==0.20.1+cu118
+numpy
+opencv-python-headless
+pyyaml
+wandb
+dominate
+Pillow
+tensorboard
+tqdm
+pydicom

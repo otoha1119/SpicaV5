@@ -1,0 +1,13 @@
+# gen50 (RTX 50 系 / Blackwell sm_120): CUDA 12.8 ビルドの torch。Layer_checker_v2 で稼働実績のある組み合わせ (要 driver >= 570)
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.10.0+cu128
+torchvision==0.25.0+cu128
+numpy
+opencv-python-headless
+pyyaml
+wandb
+dominate
+Pillow
+tensorboard
+tqdm
+pydicom

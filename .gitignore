@@ -1,0 +1,41 @@
+# ===== 患者由来データ（絶対に commit しない） =====
+*.dcm
+*.DCM
+*.ima
+*.IMA
+*.nii
+*.nii.gz
+/DataSet/
+/DataSet_sample/
+/stage1/datasets/*
+!/stage1/datasets/*.sh
+!/stage1/datasets/*.md
+
+# ===== 学習・推論生成物 =====
+/stage1/checkpoints/
+/stage1/results/
+/runs/
+/output/
+*.pth
+*.pt
+*.ckpt
+
+# ===== Python / OS / エディタ =====
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# ===== Claude Code =====
+.claude/settings.local.json
+.claude/
+docs
+
+# TensorBoard のサーバログ（start.sh がコンテナ内 /workspace に書く）
+/tb_server.log
