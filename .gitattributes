@@ -1,0 +1,16 @@
+# 改行コードの固定。Windows の core.autocrlf=true による CRLF 化を防ぐ。
+# .sh はホスト（Git Bash）とコンテナ（Linux）の両方で bash が読むため必ず LF。
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+Dockerfile* text eol=lf
+
+# バイナリ
+*.png binary
+*.dcm binary
+*.pth binary
+*.npy binary

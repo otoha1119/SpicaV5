@@ -87,6 +87,14 @@ Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT�
 
 ホスト要件: docker compose v2、python3 + pyyaml（machines.yaml を読むため）。Windows は Git Bash か WSL。
 
+改行コード: `.gitattributes` で `.sh` / `.py` / `.yaml` などを LF に固定している（`.sh` はホストの Git Bash とコンテナの Linux bash の両方が読むため）。Windows で `.gitattributes` 追加前に clone した作業ツリーは CRLF になっていて `start.sh: set: pipefail\r: invalid option name`（表示は `: invalid option namet: pipefail` に崩れる）で止まるので、一度 LF で取り直す:
+
+```
+git pull
+git config core.autocrlf false
+git rm --cached -r . && git reset --hard
+```
+
 ## 6. run ディレクトリ（正は `stage1/util/run_paths.py`）
 
 ```
