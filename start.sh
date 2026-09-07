@@ -57,7 +57,8 @@
 #       latest/net_G.pth, net_D.pth, state.pth        直下の重みディレクトリは latest と best だけ
 #       best/net_G.pth,   net_D.pth, state.pth        bash start.sh best <run> <epoch> で作る（best.txt に epoch を記録）
 #       weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq（既定 1 = 毎 epoch）ごと（+ 学習終了時の最終 epoch。保存は .tmp → rename で原子的）
-#       output_images/epoch_NNN/ checkpoint（毎 epoch）ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit、入力と同じ規約）。128 patch グリッドは TensorBoard だけ
+#       output_images/epoch_NNN/ checkpoint（毎 epoch）ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit、入力と同じ規約）
+#       output_images/preview_<slice>/epoch_NNN.png   固定スライスごとの表示用パネル [PCD | EID-like | R]（epoch 順に見比べる）。128 patch グリッドは TensorBoard だけ
 #       infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   bash start.sh infer の出力（実行ごとに別ディレクトリ。full/ patch/ = 16bit PNG、*_dicom/ = DICOM、*_R/ = 残差 PNG、diff_stats.txt、infer.yaml）
 #       tb/                      TensorBoard
 #

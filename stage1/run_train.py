@@ -111,6 +111,13 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
         raise ConfigError(f"再開する run が見つかりません: {run_dir / LAUNCH_FILE}")
     saved = load_yaml(base)
     try:
+        # run 作成後に schema に追加されたキー（例: optim.seed, log.preview_bits）は run の launch に無い。今の yaml の値で補い、警告する
+        for section, cur, schema in (("train", train_yaml, TRAIN), ("mode", mode_yaml, MODE), ("machine", machine_yaml, MACHINE)):
+            missing = [k for k in schema if k not in saved[section]]
+            if missing:
+                print(f"[run_train] 注意: run の {section} に無いキー（run 作成後に追加）は今の yaml の値を使う: " + ", ".join(f"{k}={cur[k]!r}" for k in missing))
+                for k in missing:
+                    saved[section][k] = cur[k]
         train = validate("train(run)", saved["train"], TRAIN)
         mode = validate("mode(run)", saved["mode"], MODE)
         machine = validate("machine(run)", saved["machine"], MACHINE)

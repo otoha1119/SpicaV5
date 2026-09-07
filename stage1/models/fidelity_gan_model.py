@@ -86,6 +86,7 @@ class FidelityGANModel(BaseModel):
             parser.add_argument("--display_hu_min", type=int, default=None, help="表示用の線形範囲の下限 HU")
             parser.add_argument("--display_hu_max", type=int, default=None, help="表示用の線形範囲の上限 HU")
             parser.add_argument("--diff_range_hu", type=int, default=None, help="差分パネルの ±範囲 HU")
+            parser.add_argument("--preview_bits", type=int, default=None, help="output_images/preview_<slice>/ のビット深度（8 | 16）")
             parser.add_argument("--lambda_fid", type=float, default=None, help="weight λ of the fidelity term ‖G(z) − z‖² (paper: λ = 10)")
             parser.add_argument("--seed", type=int, default=None, help="乱数 seed（F-15。train.py が起動直後に python / numpy / torch に適用）")
             parser.add_argument("--require_cuda", action="store_true", help="CUDA が使えなければ止める（F-16。run_train が machines.yaml の gpu_gen ≠ 0 のとき付ける）")

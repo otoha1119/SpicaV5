@@ -169,3 +169,8 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 ### TensorBoard を run 単位に（2026-09-07、ユーザー指示）
 - `run_train.py start_tensorboard`: `SPICA_TB_PORT`（start.sh が渡す）があるとき、run ディレクトリ確定後に `<run>/tb` だけを logdir にして TensorBoard を起動（`--reload_interval 5`、ログ `<run>/tensorboard.log`）。`/proc` を走査して前の TensorBoard を止める（コンテナ = Linux 前提。mac の scratch では kill は効かない）
 - `../start.sh`: train / resume は `tb_kill` → バックグラウンドで応答待ち → ブラウザ、`exec_it -e SPICA_TB_PORT`。`bash start.sh tb` は従来どおり checkpoints_dir 全体（比較用）
+
+### 表示用パネル preview_<slice>/ と表示範囲 0〜3500（2026-09-08、ユーザー指示）
+- `util/monitor.py save_full_images`: 固定スライスごとに `output_images/preview_<slice>/epoch_NNN.png`（[PCD | EID-like | R] 横並び。TB の images/full と同じ絵）を書く。`log.preview_bits`（schema / train.yaml / `--preview_bits`）で 16（表示範囲を 0..65535 に伸ばす。プレビューで正しく見え階調 65536 段）か 8。`util/run_paths.preview_dir`
+- `train.yaml log.display_hu_max`: 1600 → 2100（stored 3500）。TB と preview に共通
+- `run_train.py prepare_resume`: run 作成後に schema へ追加されたキー（seed, preview_bits 等）が run の launch に無いときは今の yaml の値で補い警告（旧 run の resume が止まらないように）

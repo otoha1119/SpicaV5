@@ -107,7 +107,9 @@ git reset --hard
   latest/net_G.pth, net_D.pth, state.pth     直下の重みディレクトリは latest と best だけ
   best/…, best.txt                           bash start.sh best で作る（判定は目視。指標ができたら自動化）
   weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq（既定 1 = 毎 epoch）ごと
-  output_images/epoch_NNN/    checkpoint（毎 epoch）ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit）。学習中の 128 patch グリッドは TensorBoard だけ
+  output_images/epoch_NNN/    checkpoint（毎 epoch）ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit = HU が読める）
+  output_images/preview_<slice>/epoch_NNN.png   固定スライスごとの表示用パネル [PCD | EID-like | R]（表示範囲 stored 0〜3500 を 16bit いっぱいに伸ばす。epoch 順に並べて見比べる）
+  （学習中の 128 patch グリッドは TensorBoard だけ）
   infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   推論の出力（§8。実行ごとに別ディレクトリ）
   tb/                         TensorBoard
 ```
@@ -118,7 +120,7 @@ git reset --hard
 
 - ターミナル: tqdm バー（画像枚数単位。1 step = batch_size 枚）。末尾に D / G_GAN / G_fid と `d_in`（G(z) − z の平均絶対値 [HU]）。
 - TensorBoard（学習の起動器が **その run の `tb/` だけ**を logdir にして自動起動。前の run のものは止める。全 run を並べるときは `bash start.sh tb`。`machines.yaml` の `tb_port` で公開）: `loss/*`、`diag/*`（D_real、D_fake、d_in_HU）、`time/*`、`train/lr`、`images/current`、`images/fixed`（固定サンプル。128 patch グリッドは TB にだけ出す）、`images/full/<slice>`（checkpoint 時のフル 512）。横軸は総画像枚数。
-- 表示は窓を掛けず HU −1400〜1600（stored 0〜3000）を線形に 0〜255 へ、差分パネルは ±200 HU（`train.yaml` の `log:` で変更可）。
+- 表示は窓を掛けず HU −1400〜2100（stored 0〜3500）を線形に黒〜白へ、差分パネルは ±200 HU（`train.yaml` の `log:` で変更可）。TensorBoard は 8bit、`preview_<slice>/` は `log.preview_bits`（16 = 表示範囲を 0〜65535 に伸ばす / 8）。
 
 ## 8. 推論（`bash start.sh infer`）
 

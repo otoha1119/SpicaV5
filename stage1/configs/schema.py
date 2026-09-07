@@ -54,7 +54,8 @@ TRAIN = {
     "log.n_images":         Key(int,   "--n_images",       "途中画像の枚数（current / fixed それぞれ、128 patch）"),
     "log.n_full_images":    Key(int,   "--n_full_images",  "checkpoint 保存時にフル 512 で書き出すスライス数（PCD / EID-like / R を output_images/epoch_NNN/ に uint16 PNG）"),
     "log.display_hu_min":   Key(int,   "--display_hu_min", "表示用の線形範囲の下限 HU（この値以下を黒）"),
-    "log.display_hu_max":   Key(int,   "--display_hu_max", "表示用の線形範囲の上限 HU（この値以上を白）"),
+    "log.display_hu_max":   Key(int,   "--display_hu_max", "表示用の線形範囲の上限 HU（この値以上を白）。stored 3500 = HU 2100"),
+    "log.preview_bits":     Key(int,   "--preview_bits",   "output_images/preview_<slice>/epoch_NNN.png（[PCD | EID-like | R] の横並び、表示用）のビット深度。16 = 表示範囲を 0..65535 に伸ばす（プレビューで正しく見え階調も細かい）| 8"),
     "log.diff_range_hu":    Key(int,   "--diff_range_hu",  "差分パネル (G(z) − z) の ±範囲 HU（0 HU を中間グレー）"),
     "log.save_epoch_freq":  Key(int,   "--save_epoch_freq", "checkpoint を保存する epoch 間隔"),
     "log.save_latest_freq": Key(int,   "--save_latest_freq", "latest を保存する間隔（画像枚数。junyanz の total_iters 単位）"),
@@ -308,6 +309,7 @@ def check_values(train, mode, machine):
     if train["log.n_images"] < 1: P.append("log.n_images ≥ 1")
     if train["log.n_full_images"] < 1: P.append("log.n_full_images ≥ 1")
     if train["log.display_hu_min"] >= train["log.display_hu_max"]: P.append("log.display_hu_min < display_hu_max")
+    if train["log.preview_bits"] not in (8, 16): P.append("log.preview_bits は 8 | 16")
     if train["log.diff_range_hu"] <= 0: P.append("log.diff_range_hu は正")
     if train["log.save_epoch_freq"] < 1: P.append("log.save_epoch_freq ≥ 1")
     slf = train["log.save_latest_freq"]

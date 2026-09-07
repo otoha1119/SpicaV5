@@ -41,8 +41,9 @@ log:
   image_freq: 1000        # TensorBoard の途中画像の間隔（step）
   n_images: 4             # TensorBoard の途中画像の枚数（current / fixed それぞれ、128 patch。ディスクには書かない）
   n_full_images: 2        # checkpoint 保存時（save_epoch_freq ごと = 毎 epoch）にフル 512 で書き出すスライス数 → <run>/output_images/epoch_NNN/
-  display_hu_min: -1400   # 表示の線形範囲（stored 0 ≈ HU −1400）
-  display_hu_max: 1600    # （stored 3000 ≈ HU 1600）。TB の 128 patch は 8bit の表示用（16bit は epoch_NNN/ と推論）
+  display_hu_min: -1400   # 表示の線形範囲（stored 0 = HU −1400）。TB と preview_<slice>/ に共通
+  display_hu_max: 2100    # （stored 3500 = HU 2100）。この範囲を線形に 0..白へ（窓は掛けない）
+  preview_bits: 16        # output_images/preview_<slice>/epoch_NNN.png（[PCD | EID-like | R] 横並び）のビット深度。16 = 表示範囲を 0..65535 に伸ばす | 8
   diff_range_hu: 200      # 差分パネルの ±範囲 HU
   save_epoch_freq: 1      # 毎 epoch 重み（weights/epoch_NNN/）とフル 512 画像を保存し、後から最良 epoch を選べるようにする（300 epoch で重み ≈ 5 GB + 画像 ≈ 1 GB）
   save_latest_freq: 5000  # 画像枚数（batch 40 なら 125 step ごと）
