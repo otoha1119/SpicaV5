@@ -11,6 +11,8 @@
 
 前提: 元 DICOM ルートは変換時と同じ構成（症例フォルダの数値部分と、フォルダ内 .dcm の名前順が変わっていない）であること。
       確認できない構成（名前が PCD-nnn-sss でない、スライス番号が範囲外、症例フォルダが無い）は**エラーで止める**（推測で埋めない）。
+      さらに書く直前に「参照 DICOM から再現した stored 値 == 入力 PNG」を全画素で照合する（check_pixels。順序ズレの検出）。
+      対応範囲は単一 Series・単一フレーム CT（check_series_unique）。出力は ImageType DERIVED\\SECONDARY、SeriesNumber = 元 + 1000。
 """
 
 import os
@@ -74,6 +76,38 @@ class DicomIndex:
         return files[idx - 1]
 
 
+def expected_stored(ds, hu_offset):
+    """参照 DICOM から、convert_pcd.py と同じ演算で PNG の stored 値を再現する（HU = pixel × slope + intercept → HU + offset → clip → uint16 に切り捨て）。"""
+    hu = ds.pixel_array.astype(np.float64) * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
+    return np.clip(hu + hu_offset, 0, 65535).astype(np.uint16)
+
+
+def check_pixels(ref_path, stored_png, hu_offset, where=""):
+    """入力 PNG が本当にこの参照 DICOM から作られたものか、画素で照合する（F-18a）。名前順の対応だけでは順序ズレを検出できないため。"""
+    ds = pydicom.dcmread(ref_path)
+    exp = expected_stored(ds, hu_offset)
+    if exp.shape != stored_png.shape:
+        raise ValueError(f"参照 DICOM {exp.shape} と入力 PNG {stored_png.shape} の形状が違います: {where or ref_path}")
+    if not np.array_equal(exp, stored_png):
+        n = int((exp != stored_png).sum())
+        raise ValueError(f"入力 PNG と参照 DICOM の画素が一致しません（{n} 画素）。症例フォルダの数値・.dcm の名前順が変換時と違う可能性: {where or ref_path}")
+    return ds
+
+
+def check_series_unique(index, rels_by_case):
+    """症例ごとに参照 DICOM の SeriesInstanceUID が 1 種であることを確認する（F-18c。単一 Series・単一フレーム CT に限定）。"""
+    for case, stems in rels_by_case.items():
+        uids = set()
+        for stem in stems:
+            ref = index.reference_for(stem)
+            ds = pydicom.dcmread(ref, stop_before_pixels=True, specific_tags=["SeriesInstanceUID", "NumberOfFrames"])
+            if int(getattr(ds, "NumberOfFrames", 1) or 1) != 1:
+                raise ValueError(f"多フレーム DICOM は未対応: {ref}")
+            uids.add(str(getattr(ds, "SeriesInstanceUID", "")))
+        if len(uids) != 1:
+            raise ValueError(f"症例 {case} の参照 DICOM に複数の Series が混ざっています（{len(uids)} 種）。単一 Series の症例フォルダにしてください")
+
+
 def check_rescale(ds, slope, intercept, where=""):
     """参照 DICOM の RescaleSlope / Intercept が infer.yaml の宣言値と一致するか。無い・違う → エラー（黙って別の値で書かない）。"""
     if "RescaleSlope" not in ds or "RescaleIntercept" not in ds:
@@ -97,11 +131,12 @@ def hu_to_stored_like_ref(hu, ds, slope, intercept):
     return np.clip(np.rint(stored), lo, hi).astype(dtype)
 
 
-def write_like_reference(ref_path, hu, out_path, series_uid, description, slope, intercept):
+def write_like_reference(ref_path, hu, out_path, series_uid, description, slope, intercept, ds=None):
     """参照 DICOM のヘッダを継承し、画素だけ EID-like（HU）に置き換えて out_path に保存する。
     hu の形状は参照と同じでなければならない（512 のまま処理しているので通常同じ。違えばエラー）。
-    slope / intercept は infer.yaml の宣言値。参照のタグと一致しなければエラー。"""
-    ds = pydicom.dcmread(ref_path)
+    slope / intercept は infer.yaml の宣言値。参照のタグと一致しなければエラー。ds を渡せば再読込しない（check_pixels の戻り値）。"""
+    if ds is None:
+        ds = pydicom.dcmread(ref_path)
     rows, cols = int(ds.Rows), int(ds.Columns)
     if tuple(hu.shape) != (rows, cols):
         raise ValueError(f"出力 {hu.shape} と参照 DICOM {(rows, cols)} の形状が違います: {ref_path}")
@@ -121,6 +156,9 @@ def write_like_reference(ref_path, hu, out_path, series_uid, description, slope,
             del ds[tag]
     ds.SOPInstanceUID = generate_uid()
     ds.SeriesInstanceUID = series_uid
+    ds.SeriesNumber = int(getattr(ds, "SeriesNumber", 0) or 0) + 1000  # 元シリーズと区別（F-18b）
+    orig_type = [str(v) for v in (getattr(ds, "ImageType", None) or [])]
+    ds.ImageType = ["DERIVED", "SECONDARY"] + orig_type[2:]  # 画素から生成した画像は DERIVED（DICOM PS3.3 C.7.6.1.1.2）。3 値目以降は継承
     ds.SeriesDescription = description[:64]  # LO は 64 文字まで
     ds.DerivationDescription = description[:1024]
     ds.file_meta.MediaStorageSOPInstanceUID = ds.SOPInstanceUID

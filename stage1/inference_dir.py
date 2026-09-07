@@ -39,9 +39,9 @@ from tqdm import tqdm
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from data.ct_dataset import CaseIndex, denormalize, normalize, read_stored, residual_stored  # noqa: E402
+from data.ct_dataset import CaseIndex, denormalize, normalize, read_stored, residual_stored, write_png  # noqa: E402
 from models import networks  # noqa: E402
-from util.dicom_io import DicomIndex, write_like_reference  # noqa: E402
+from util.dicom_io import DicomIndex, check_pixels, check_rescale, check_series_unique, write_like_reference  # noqa: E402
 
 MODES = ("full", "patch", "both")
 BLENDS = ("uniform", "hann")
@@ -169,7 +169,7 @@ def resolve_device(name):
 def main():
     a = parse_args()
     device = resolve_device(a.device)
-    write_png = a.output_format in ("png", "both")
+    write_png_out = a.output_format in ("png", "both")
     write_dcm = a.output_format in ("dicom", "both")
     dicom_index = DicomIndex(a.dicom_dir) if write_dcm else None  # 無ければここで止まる
     input_dir = Path(a.input_dir)
@@ -189,10 +189,12 @@ def main():
     print(f"[infer] device={device} G={weight_path}")
     print(f"[infer] input={input_dir} ({idx.n_cases} cases, {idx.n_slices} slices, 推論 {len(paths)} 枚) mode={a.mode} output={a.output_format} -> {out_dir}")
     if write_dcm:
-        from util.dicom_io import check_rescale
-        for p in paths:  # 先に全部の対応と Rescale の一致を確認してから回す（途中で止まらないように）
+        rels_by_case = {}
+        for p in paths:  # 先に全部の対応と Rescale の一致・症例内の Series 一意性を確認してから回す（途中で止まらないように）
             ref = dicom_index.reference_for(Path(p).stem)
             check_rescale(pydicom.dcmread(ref, stop_before_pixels=True), a.rescale_slope, a.rescale_intercept, ref)
+            rels_by_case.setdefault(str(Path(p).relative_to(input_dir).parent), []).append(Path(p).stem)
+        check_series_unique(dicom_index, rels_by_case)  # F-18c
         series_uid = {}  # (mode, case) → SeriesInstanceUID（症例ごと・モードごとに 1 本）
         run_name = Path(a.weight_dir).parent.name if Path(a.weight_dir).parent.name != "weights" else Path(a.weight_dir).parent.parent.name
         print(f"[infer] dicom: 参照ルート {dicom_index.root}（{len(dicom_index.cases)} 症例）")
@@ -201,7 +203,8 @@ def main():
     t0 = time.time()
     for p in tqdm(paths, unit="slice", dynamic_ncols=True):
         rel = Path(p).relative_to(input_dir)
-        x_np = normalize(read_stored(p), *hu)
+        stored = read_stored(p)
+        x_np = normalize(stored, *hu)
         x = torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0).to(device)
         outs = {}
         with torch.no_grad():
@@ -213,23 +216,22 @@ def main():
                     tqdm.write(f"[infer] patch: {a.patch_size}px stride {a.patch_stride} → {n_patches} patch/枚, blend={a.patch_blend}, batch={a.patch_batch_size}")
                 outs["patch"] = infer_patch(net, x, a.patch_size, a.patch_stride, window, a.patch_batch_size)
         pcd16 = denormalize(x_np, *hu)  # 正規化窓でクリップした入力（R の基準）
+        ref_ds = None
+        if write_dcm:  # F-18a: このスライスの参照 DICOM が本当に入力 PNG の元か、画素で照合（違えばここで止まる）
+            ref_ds = check_pixels(dicom_index.reference_for(rel.stem), stored, a.hu_offset, str(rel))
         for m, y in outs.items():
             eid16 = denormalize(y[0, 0].cpu().numpy(), *hu)
-            if write_png:
-                dst = out_dir / m / rel
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(str(dst), eid16)
+            if write_png_out:
+                write_png(out_dir / m / rel, eid16)
             if write_dcm:
                 key = (m, rel.parent)
                 if key not in series_uid:
                     series_uid[key] = generate_uid()
                 write_like_reference(dicom_index.reference_for(rel.stem), eid16.astype(np.float64) - a.hu_offset,
                                      out_dir / f"{m}_dicom" / rel.with_suffix(".dcm"), series_uid[key],
-                                     f"SpicaV5 EID-like {run_name}/{Path(a.weight_dir).name} {m}", a.rescale_slope, a.rescale_intercept)
+                                     f"SpicaV5 EID-like {run_name}/{Path(a.weight_dir).name} {m}", a.rescale_slope, a.rescale_intercept, ds=ref_ds)
             if a.save_residual:
-                dst_r = out_dir / f"{m}_R" / rel
-                dst_r.parent.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(str(dst_r), residual_stored(pcd16, eid16))
+                write_png(out_dir / f"{m}_R" / rel, residual_stored(pcd16, eid16))
         if a.mode == "both":
             d = (outs["full"] - outs["patch"]).abs() * hu_per_unit
             diff_lines.append((str(rel), float(d.mean()), float(d.max())))

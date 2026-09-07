@@ -109,11 +109,11 @@ git reset --hard
   weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごと
   output_images/samples/      学習中の 128 patch グリッド [z | G(z) | G(z)−z | x]（8bit、TensorBoard と同じ表示用）
   output_images/epoch_NNN/    checkpoint ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit）
-  infer/<重みディレクトリ名>/<入力フォルダ名>/   推論の出力（§8）
+  infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   推論の出力（§8。実行ごとに別ディレクトリ）
   tb/                         TensorBoard
 ```
 
-`state.pth` には optimizer の状態・学習率・RNG（python / torch / numpy）・epoch・iteration 数が入る。scheduler は再開時に作り直す（`lr_policy` は `linear` のみ対応）。学習終了時は `save_epoch_freq` の倍数でなくても最終 epoch を保存する。
+`state.pth` には optimizer の状態・学習率・RNG（python / torch / numpy）・epoch・iteration 数が入る。scheduler は再開時に作り直す（`lr_policy` は `linear` のみ対応）。学習終了時は `save_epoch_freq` の倍数でなくても最終 epoch を保存する。保存は `<dir>.tmp` に書いてから rename するので、途中で止まっても重みディレクトリに新旧が混ざらない（`.tmp` / `.old` が残っていれば中断の痕跡）。乱数 seed は `train.yaml` の `optim.seed`（cudnn.benchmark は本家のままなので完全な決定性ではない）。単一 GPU のみ対応（DDP は起動時にエラー）。
 
 ## 7. 学習中の表示
 
@@ -140,8 +140,8 @@ DICOM_DIR="/workspace/DataSet/PhotonCT512_original"               # 元 DICOM �
 | mode `patch` | `patch.size` の patch を `patch.stride` 刻みの均等格子（端まで過不足なく被覆）で切り、`patch.batch_size` 枚ずつ G に通し、窓 `uniform` / `hann` で重み付き平均 |
 | mode `both` | 両方を保存し、スライスごとの \|full − patch\| の mean / max [HU] を `diff_stats.txt` に記録 |
 | 出力 PNG | `{full,patch}/<症例>/<slice>.png`（16bit、入力と同じ規約。そのまま次段の学習データになる）、`{full,patch}_R/`（残差、0 HU = 32768） |
-| 出力 DICOM | `{full,patch}_dicom/<症例>/<slice>.dcm`。元 DICOM のヘッダを継承し画素だけ置換。HU → 格納値は `infer.yaml` の `dicom.rescale_slope / rescale_intercept`（参照 DICOM のタグと全枚照合、違えばエラー）。SOP / Series UID は新規、SeriesDescription に由来を記す |
-| 解決済み設定 | 出力先に `infer.yaml` を保存 |
+| 出力 DICOM | `{full,patch}_dicom/<症例>/<slice>.dcm`。元 DICOM のヘッダを継承し画素だけ置換。HU → 格納値は `infer.yaml` の `dicom.rescale_slope / rescale_intercept`（参照 DICOM のタグと全枚照合、違えばエラー）。書く直前に「参照 DICOM から再現した stored 値 == 入力 PNG」を全画素で照合し、症例内の Series が 1 種であることも検査する（単一 Series・単一フレーム CT のみ）。`ImageType` は `DERIVED\SECONDARY`、`SeriesNumber` は元 + 1000、SOP / Series UID は新規、SeriesDescription に由来を記す |
+| 出力先 | `<run>/infer/<重みディレクトリ名>/<入力フォルダ名>/<yyyy_mmdd_HHMMSS>/`。実行ごとに別ディレクトリなので、重みや `--max_slices` を変えた再実行が混ざらない。解決済み設定は `infer.yaml` |
 
 BatchNorm は eval（running 統計）。checkpoint 時のフル画像と同じ経路なので、同じ重み・同じスライスなら結果は一致する。
 

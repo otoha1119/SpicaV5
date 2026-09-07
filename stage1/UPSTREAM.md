@@ -125,3 +125,20 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - F-10 `run_train.py` / `fidelity_gan_model.py`: 再開の基準を**最新の** `launch_resume_*.yaml`（`util/run_paths.py latest_launch`、秒まで付けた名前）にし、optimizer 復元後に opt の lr / betas / initial_lr を param_groups に再適用（`--lr` 等の上書きが最優先になる）。`--continue_train` / `--epoch_count` は上書き不可（run_train が決める）。再開時に `checkpoints_dir` を変えるのは拒否。`run_infer.py` も最新 launch を読む
 - F-11 `run_train.py`: run ディレクトリが既に存在すれば `ConfigError`（同一分の衝突。以前の「上書き」を撤回）
 - 検証（合成データ、CPU venv）: 上書き（`--ngf 48 --hu_max 3000 --checkpoints_dir …`）が launch.yaml の実効値に入り推論が同じ G / HU で動く、`--n_epochs 1 --save_epoch_freq 10` で最終保存、`resume --n_epochs 3 --lr 1e-4` → 上書きなし resume で n_epochs 3 / lr 1e-4 が引き継がれる、9 種の値域違反と bool / `=` / 負数の解析、同一分衝突、stride 256 の拒否と内部検査、`start.sh` の MINGW 分岐（winpty / -T / 環境変数）を fake で確認。**GPU の resume（F-01）は実機で要確認**
+
+### レビュー修正バッチ 2（2026-09-07、docs/plans/20260907_review-fix-list.md F-12〜F-25）
+- F-12 `fidelity_gan_model.py setup`: `lr_policy != linear` での再開は `NotImplementedError`（schema でも linear のみ）
+- F-13 `util/run_paths.py infer_dir` / `run_infer.py`: 出力先を `<run>/infer/<重み>/<入力>/<yyyy_mmdd_HHMMSS>/` に（実行ごとに別ディレクトリ）
+- F-14 `fidelity_gan_model.py save_networks`（本家の save_networks を使わず全面 override）: `<dir>.tmp/` に net_G / net_D / state を書いてから rename で差し替え（原子的）。`mark_best.py` も `best.tmp/` → rename。`run_paths.saved_tags` は `.tmp` / `.old` を無視。`--run` は run 名かパス
+- F-15 `configs/schema.py` / `train.yaml` `optim.seed`、`fidelity_gan_model.py --seed`、`train.py`: 起動直後に python / numpy / torch を seed（resume はその後の setup で保存済み RNG に上書き）
+- F-16 `run_train.py` / `fidelity_gan_model.py --require_cuda` / `train.py`: machines.yaml の `gpu_gen ≠ 0` なら CUDA が無いと停止（推論側と同じ）
+- F-17 `data/ct_dataset.py fixed_batch / fixed_full`: n ≤ 0 は None
+- F-18 `util/dicom_io.py` / `inference_dir.py`: 書く直前に `check_pixels`（参照 DICOM → convert_pcd と同じ演算で stored を再現し入力 PNG と全画素照合）、`check_series_unique`（症例内 Series 1 種・単一フレーム）、`ImageType = DERIVED\SECONDARY + 元の 3 値目以降`、`SeriesNumber = 元 + 1000`
+- F-19 `data/ct_dataset.py`: `sampling=paper` の `patch_stride 1 → 8` の暗黙置換を廃止。schema が `paper → patch_stride 8` を要求
+- F-20 `train.py` / `util/monitor.py`: `total_iters` とバーは実バッチ枚数で加算
+- F-21 `data/ct_dataset.py write_png`: `cv2.imwrite` の戻り値と `cv2.error` を `IOError` に。`inference_dir.py` / `monitor.py` はこれを使う
+- F-22 `train.py` / `monitor.py accumulate`: epoch 要約は全 step のサンプル重み付き平均
+- F-23 `fidelity_gan_model.py`: `diag/D_fake` は `v.clamp(max=80)` で計算（−inf 表示の回避）
+- F-24 `../start.sh`: machines.yaml の値をタブ区切りで受ける（パスの空白対応）
+- F-25 `train.py`: `WORLD_SIZE > 1` なら `NotImplementedError`（単一 GPU のみ）
+- 検証（合成データ、CPU venv）: 同じ seed で 2 run の損失が一致、`.tmp` / `.old` が残らない、best の 2 回差し替えと best からの resume、gpu_gen 30 + CUDA 無しで停止、paper + stride 1 は拒否 / stride 8 で格子が 8 刻み、DDP 環境変数で停止、DICOM の DERIVED / SeriesNumber / 画素照合 OK と、PNG すり替え・Series 混在でエラー、推論 2 回で別ディレクトリ、`write_png` の失敗検出、空白入りパスの起動

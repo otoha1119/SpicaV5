@@ -19,7 +19,12 @@ See training and test tips at: https://github.com/junyanz/pytorch-CycleGAN-and-p
 See frequently asked questions at: https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/docs/qa.md
 """
 
+import os
+import random
 import time
+
+import numpy as np
+import torch
 from options.train_options import TrainOptions
 from data import create_dataset
 from models import create_model
@@ -32,8 +37,17 @@ from util.util import init_ddp, cleanup_ddp
 #   - print はバーを崩さないよう monitor.write（tqdm.write）にする
 
 if __name__ == "__main__":
+    if int(os.environ.get("WORLD_SIZE", "1")) > 1:  # [SpicaV5] F-25: DDP 経路は未対応（ログ・画像・集計が単一プロセス前提）
+        raise NotImplementedError("複数 GPU（DDP）は未対応です。単一プロセスで起動してください")
     opt = TrainOptions().parse()  # get training options
+    # [SpicaV5] F-15: 乱数 seed（DataLoader worker の seed も torch の RNG から派生する）。resume 時はこの後の setup で保存済み RNG に上書きされる
+    random.seed(opt.seed)
+    np.random.seed(opt.seed)
+    torch.manual_seed(opt.seed)
+    torch.cuda.manual_seed_all(opt.seed)
     opt.device = init_ddp()
+    if opt.require_cuda and opt.device.type != "cuda":  # [SpicaV5] F-16: gpu_gen ≠ 0 のマシンで CUDA が無ければ止める（推論側と同じ挙動）
+        raise RuntimeError("machines.yaml の gpu_gen ≠ 0 なのに CUDA が使えません（gpu_gen: 0 にすれば cpu で動く）")
     dataset = create_dataset(opt)  # create a dataset given opt.dataset_mode and other options
     dataset_size = len(dataset)  # get the number of images in the dataset.
     print(f"The number of training images = {dataset_size}")
@@ -59,11 +73,13 @@ if __name__ == "__main__":
             iter_start_time = time.time()  # timer for computation per iteration
             t_data = iter_start_time - iter_data_time
 
-            total_iters += opt.batch_size
-            epoch_iter += opt.batch_size
+            n_batch = int(data["A"].shape[0])  # [SpicaV5] F-20: 端数バッチは実枚数で数える
+            total_iters += n_batch
+            epoch_iter += n_batch
             model.total_iters = total_iters  # [SpicaV5] 再開用: state 保存時に使う
             model.set_input(data)  # unpack data from dataset and apply preprocessing
             model.optimize_parameters()  # calculate loss functions, get gradients, update network weights
+            monitor.accumulate(model, n_batch)  # [SpicaV5] F-22: epoch 要約は全 step の平均
 
             step = total_iters // opt.batch_size  # [SpicaV5] print_freq / image_freq は step 単位
             if step % opt.print_freq == 0:

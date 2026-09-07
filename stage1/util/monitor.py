@@ -34,7 +34,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 from tqdm import tqdm
 
-from data.ct_dataset import denormalize, residual_stored
+from data.ct_dataset import denormalize, residual_stored, write_png
 from util.run_paths import epoch_images_dir, samples_dir
 
 LOSS_KEYS_BAR = ("D", "G_GAN", "G_fid")  # バー末尾に出す損失
@@ -72,7 +72,7 @@ class TrainMonitor:
         try:
             for data in dataset:
                 yield data
-                self.bar.update(self.bs)
+                self.bar.update(int(data["A"].shape[0]))  # F-20: 実枚数
         finally:
             self.bar.close()
             self.bar = None
@@ -82,13 +82,16 @@ class TrainMonitor:
         tqdm.write(msg)
 
     # ------------------------------------------------------------------ 損失
+    def accumulate(self, model, n_batch):
+        """毎 step 呼ぶ（F-22）: epoch 要約用に損失をサンプル数で重み付けして積む。"""
+        for k, v in model.get_current_losses().items():
+            self._sum[k] = self._sum.get(k, 0.0) + v * n_batch
+        self._n += n_batch
+
     def step(self, epoch, total_iters, model, t_comp, t_data):
         """print_freq step ごとに呼ぶ: バー末尾・TB scalar・loss_log.txt を更新。"""
         losses = model.get_current_losses()
         d_in_hu = float((model.fake_B.detach() - model.real_A).abs().mean()) * self.hu_per_unit
-        for k, v in losses.items():
-            self._sum[k] = self._sum.get(k, 0.0) + v
-        self._n += 1
         if self.bar is not None:
             postfix = {k: f"{losses[k]:.3f}" for k in LOSS_KEYS_BAR if k in losses}
             postfix["d_in"] = f"{d_in_hu:.0f}HU"
@@ -105,7 +108,7 @@ class TrainMonitor:
                     + " ".join(f"{k}: {v:.4f}" for k, v in losses.items()) + f" d_in_HU: {d_in_hu:.1f}\n")
 
     def end_epoch(self, epoch, total_epochs, total_iters, lr, elapsed):
-        means = {k: v / max(1, self._n) for k, v in self._sum.items()}
+        means = {k: v / max(1, self._n) for k, v in self._sum.items()}  # 全 step のサンプル重み付き平均（F-22）
         line = f"epoch {epoch}/{total_epochs} | " + " ".join(f"{k} {v:.4f}" for k, v in means.items()) + f" | lr {lr:.2e} | {elapsed:.0f}s"
         self.write(line)
         with open(self.log_path, "a", encoding="utf-8") as f:
@@ -131,7 +134,7 @@ class TrainMonitor:
         for tag, a, g, b in sets:
             grid8 = self._grid(a, g, b)
             self.tb.add_image(f"images/{tag}", grid8, total_iters, dataformats="HW")
-            cv2.imwrite(str(self.samples_dir / f"{total_iters:09d}_{tag}.png"), grid8)
+            write_png(self.samples_dir / f"{total_iters:09d}_{tag}.png", grid8)
 
     def _grid(self, a, g, b):
         """各行 [z | G(z) | G(z)−z | x] のグリッドを 8bit（表示用。HU を display_hu_min..max で線形に 0..255、差分は ±diff_range_hu）で返す。"""
@@ -171,9 +174,9 @@ class TrainMonitor:
             stem = Path(path).stem
             pcd16 = denormalize(a[i, 0].detach().cpu().numpy(), *hu)
             eid16 = denormalize(g[i, 0].detach().cpu().numpy(), *hu)
-            cv2.imwrite(str(out_dir / f"{stem}_pcd.png"), pcd16)
-            cv2.imwrite(str(out_dir / f"{stem}_eidlike.png"), eid16)
-            cv2.imwrite(str(out_dir / f"{stem}_R.png"), residual_stored(pcd16, eid16))  # 0 HU = 32768
+            write_png(out_dir / f"{stem}_pcd.png", pcd16)
+            write_png(out_dir / f"{stem}_eidlike.png", eid16)
+            write_png(out_dir / f"{stem}_R.png", residual_stored(pcd16, eid16))  # 0 HU = 32768
             lin = lambda hu: ((hu - o.display_hu_min) / float(o.display_hu_max - o.display_hu_min)).clamp(0.0, 1.0)
             dif = lambda d: ((d + o.diff_range_hu) / float(2 * o.diff_range_hu)).clamp(0.0, 1.0)
             grid = make_grid(torch.stack([lin(A[i]), lin(G[i]), dif(R[i])]), nrow=3, padding=4, pad_value=1.0)[0]

@@ -77,6 +77,18 @@ def denormalize(norm, offset=HU_OFFSET, hu_min=HU_MIN, hu_max=HU_MAX):
     return np.clip(np.round(stored), 0, 65535).astype(np.uint16)
 
 
+def write_png(path, arr):
+    """cv2.imwrite の戻り値を検査して書く（F-21）。失敗を黙って完了扱いにしない。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        ok = cv2.imwrite(str(path), arr)
+    except cv2.error as e:  # 拡張子不明など（OpenCV 5 は False ではなく例外）
+        raise IOError(f"PNG を書き込めません: {path}: {e}") from e
+    if not ok:
+        raise IOError(f"PNG を書き込めません: {path}")
+
+
 R_ZERO = 32768  # 残差 PNG の 0 HU（uint16 で符号付きを表す）
 
 
@@ -246,8 +258,8 @@ class CTDataset(BaseDataset):
         elif opt.sampling == "random":
             self.sampler = RandomSampler(self.idx_a, self.idx_b, self.img_hw, self.patch, opt.patch_stride)
         elif opt.sampling == "paper":
-            stride = 8 if opt.patch_stride == 1 else opt.patch_stride  # 既定 (1) のままなら論文の stride 8 グリッドを使う
-            self.sampler = PaperSampler(self.idx_a, self.idx_b, self.img_hw, self.patch, stride, opt.patches_per_image, opt.patch_seed)
+            # 暗黙の置換はしない（F-19）。論文の stride 8 は yaml に明示する（schema.check_values が sampling=paper → patch_stride 8 を要求）
+            self.sampler = PaperSampler(self.idx_a, self.idx_b, self.img_hw, self.patch, opt.patch_stride, opt.patches_per_image, opt.patch_seed)
             # 固定集合を保存 (再現条件)
             out = Path(opt.checkpoints_dir) / opt.name
             out.mkdir(parents=True, exist_ok=True)
@@ -287,7 +299,9 @@ class CTDataset(BaseDataset):
 
     def fixed_batch(self, n):
         """監視用の固定サンプル。patch_seed から決まる決定的な乱数で index 0..n-1 を引く（学習の乱数列は消費しない、resume 後も同じ）。
-        戻り値: {"A": (n,1,p,p), "B": (n,1,p,p)}"""
+        戻り値: {"A": (n,1,p,p), "B": (n,1,p,p)}。n == 0 なら None（F-17。schema は n ≥ 1 を要求するので防御）"""
+        if n <= 0:
+            return None
         items = [self.sampler.sample(random.Random(self.opt.patch_seed * 1_000_003 + i), i) for i in range(n)]
         return {
             "A": torch.stack([self._patch(a_path, a_pos) for a_path, a_pos, _, _ in items]),
@@ -296,7 +310,9 @@ class CTDataset(BaseDataset):
 
     def fixed_full(self, n):
         """checkpoint 保存時の書き出し用: A（PCD）からフル画像を n 枚、patch_seed で決定的に選ぶ（epoch / resume をまたいで同じスライス）。
-        戻り値: {"paths": [str], "A": (n,1,H,W)}"""
+        戻り値: {"paths": [str], "A": (n,1,H,W)}。n == 0 なら None（F-17）"""
+        if n <= 0:
+            return None
         paths = random.Random(self.opt.patch_seed).sample(self.idx_a.all_paths, min(n, self.idx_a.n_slices))
         return {"paths": paths, "A": torch.stack([torch.from_numpy(_load_normalized(p, *self.hu)).unsqueeze(0) for p in paths])}
 

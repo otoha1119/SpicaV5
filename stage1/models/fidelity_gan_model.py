@@ -34,7 +34,9 @@
   → 4 損失 (このファイル) → 6 学習条件の既定値 (modify_commandline_options)
 """
 
+import os
 import random
+import shutil
 
 import numpy as np
 import torch
@@ -85,6 +87,8 @@ class FidelityGANModel(BaseModel):
             parser.add_argument("--display_hu_max", type=int, default=None, help="表示用の線形範囲の上限 HU")
             parser.add_argument("--diff_range_hu", type=int, default=None, help="差分パネルの ±範囲 HU")
             parser.add_argument("--lambda_fid", type=float, default=None, help="weight λ of the fidelity term ‖G(z) − z‖² (paper: λ = 10)")
+            parser.add_argument("--seed", type=int, default=None, help="乱数 seed（F-15。train.py が起動直後に python / numpy / torch に適用）")
+            parser.add_argument("--require_cuda", action="store_true", help="CUDA が使えなければ止める（F-16。run_train が machines.yaml の gpu_gen ≠ 0 のとき付ける）")
             # 再開用（run_train.py --resume が付ける。設定値ではなく起動器の内部フラグなので schema には無い）
             parser.add_argument("--resume_state", type=str, default=None, help="重みディレクトリの state.pth のパス。--continue_train と併用。optimizer / scheduler / RNG / iteration 数を復元する")
         return parser
@@ -154,7 +158,7 @@ class FidelityGANModel(BaseModel):
             J_D = D_real.mean() + log1mD_fake.mean()
             self.loss_D = -J_D
             self.loss_D_real = D_real.mean().detach()
-            self.loss_D_fake = self._D_from_v(v_fake).mean().detach()
+            self.loss_D_fake = self._D_from_v(v_fake.clamp(max=80.0)).mean().detach()  # 診断値。exp の overflow（−inf 表示）を避ける（F-23）
         else:  # ablation: 本家 GANLoss (lsgan / vanilla)
             self.loss_D_real = self.criterionGAN(v_real, True)
             self.loss_D_fake = self.criterionGAN(v_fake, False)
@@ -176,12 +180,33 @@ class FidelityGANModel(BaseModel):
     # 学習の再開: 本家は重み (*_net_G/D.pth) しか保存しないので、optimizer / RNG / 進捗を同じ重みディレクトリの state.pth に足す
     # ------------------------------------------------------------------
     def save_networks(self, epoch):
-        """本家の保存（重み）に加えて state.pth を同じ重みディレクトリに保存する。tag は 'latest' / 数値 / 'iter_N'。置き場所は util/run_paths.py の規則。"""
-        super().save_networks(epoch)
-        if not self.isTrain:
-            return
+        """重み（net_G / net_D）と state.pth を**同じ重みディレクトリに原子的に**保存する（F-14）。tag は 'latest' / 数値 / 'iter_N'。置き場所は util/run_paths.py の規則。
+        手順: <dir>.tmp/ に 3 ファイルを書く → 既存 <dir> を <dir>.old に rename → .tmp を <dir> に rename → .old を消す。
+        途中で止まっても <dir> に新旧の混在は起きない（.tmp / .old が残るだけ。resume は 3 ファイル揃った <dir> だけを見る）。本家の save_networks は使わない。"""
         if dist.is_initialized() and dist.get_rank() != 0:
             return
+        final = self.ckpt_path(epoch, "state.pth").parent
+        tmp, old = final.with_name(final.name + ".tmp"), final.with_name(final.name + ".old")
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        tmp.mkdir(parents=True)
+        for name in self.model_names:
+            net = getattr(self, "net" + name)
+            net = net.module if hasattr(net, "module") else net  # DDP を外す
+            net = net._orig_mod if hasattr(net, "_orig_mod") else net  # torch.compile を外す
+            torch.save(net.state_dict(), tmp / f"net_{name}.pth")
+        if self.isTrain:
+            torch.save(self._resume_state(), tmp / "state.pth")
+        if old.exists():
+            shutil.rmtree(old)
+        if final.exists():
+            os.replace(final, old)
+        os.replace(tmp, final)
+        if old.exists():
+            shutil.rmtree(old)
+
+    def _resume_state(self):
+        """state.pth の中身（optimizer / RNG / 進捗）。"""
         np_state = np.random.get_state()  # ('MT19937', ndarray(624, uint32), pos, has_gauss, cached_gaussian)
         state = {
             "epoch": int(getattr(self, "cur_epoch", self.opt.epoch_count)),
@@ -198,7 +223,7 @@ class FidelityGANModel(BaseModel):
                 "numpy": (np_state[0], torch.from_numpy(np_state[1].astype(np.int64)), int(np_state[2]), int(np_state[3]), float(np_state[4])),
             },
         }
-        torch.save(state, self.ckpt_path(epoch, "state.pth"))  # 重みと同じディレクトリ（latest/ best/ weights/epoch_NNN/）
+        return state
 
     def setup(self, opt):
         """本家の setup（重み読込・scheduler 生成）のあと、--resume_state があれば optimizer / RNG / 進捗を復元し、scheduler を作り直す。
@@ -206,6 +231,8 @@ class FidelityGANModel(BaseModel):
         super().setup(opt)
         if not (self.isTrain and opt.continue_train and opt.resume_state):
             return
+        if opt.lr_policy != "linear":  # F-12: scheduler の作り直しは linear（epoch_count 起点）でしか成立しない。schema でも制限済み
+            raise NotImplementedError(f"lr_policy={opt.lr_policy} の再開は未対応（scheduler 状態の保存・復元が無い）。linear を使ってください")
         # F-01: state は CPU に読む。map_location=device だと RNG 用の Tensor（numpy の keys）まで CUDA に載り、.numpy() で落ちる。
         #       optimizer の state は load_state_dict が param のデバイスへ自動でキャストする
         state = torch.load(opt.resume_state, map_location="cpu", weights_only=True)

@@ -10,6 +10,7 @@ best/ は latest/ と同じく run 直下の重みディレクトリ（レイア
 
 import argparse
 import datetime
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -28,7 +29,7 @@ def main():
     p = argparse.ArgumentParser(description="epoch の checkpoint を best としてマークする")
     p.add_argument("--machine", required=True)
     p.add_argument("--machines", required=True)
-    p.add_argument("--run", required=True, help="run 名（yyyy_mmdd_HHMM）")
+    p.add_argument("--run", required=True, help="run 名（yyyy_mmdd_HHMM。machines.yaml の checkpoints_dir 配下）か run ディレクトリのパス")
     p.add_argument("--epoch", required=True, help="weights/ にある epoch 番号")
     a = p.parse_args()
     try:
@@ -38,9 +39,9 @@ def main():
         if not isinstance(machines, dict) or a.machine not in machines:
             raise ConfigError(f"machines.yaml にエントリ '{a.machine}' がありません")
         machine = validate(f"machines.{a.machine}", machines[a.machine], MACHINE)
-        run_dir = Path(machine["checkpoints_dir"]) / a.run
+        run_dir = Path(a.run) if (Path(a.run) / LAUNCH_FILE).is_file() else Path(machine["checkpoints_dir"]) / a.run  # run 名 or run ディレクトリのパス
         if not (run_dir / LAUNCH_FILE).is_file():
-            raise ConfigError(f"run が見つかりません: {run_dir}")
+            raise ConfigError(f"run が見つかりません: {run_dir}（run 名か、launch.yaml のある run ディレクトリのパス）")
         srcs = [ckpt_path(run_dir, a.epoch, k) for k in KINDS]
         missing = [str(s) for s in srcs if not s.is_file()]
         if missing:
@@ -49,18 +50,29 @@ def main():
         print(f"[best] 設定エラー: {e}", file=sys.stderr)
         sys.exit(2)
 
-    ckpt_dir(run_dir, "best").mkdir(parents=True, exist_ok=True)
+    # 原子的に差し替える（F-14）: best.tmp/ に 3 ファイルを揃えてから rename。途中で止まっても best/ に新旧が混ざらない
+    final = ckpt_dir(run_dir, "best")
+    tmp, old = final.with_name("best.tmp"), final.with_name("best.old")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
     for kind, src in zip(KINDS, srcs):
-        dst = ckpt_path(run_dir, "best", kind)
-        shutil.copy2(src, dst)
-        print(f"[best] {src.relative_to(run_dir)} -> {dst.relative_to(run_dir)}")
+        shutil.copy2(src, tmp / kind)
+        print(f"[best] {src.relative_to(run_dir)} -> best/{kind}")
+    if old.exists():
+        shutil.rmtree(old)
+    if final.exists():
+        os.replace(final, old)
+    os.replace(tmp, final)
+    if old.exists():
+        shutil.rmtree(old)
     jst = datetime.timezone(datetime.timedelta(hours=9), name="JST")
     note = run_dir / BEST_NOTE
     with open(note, "w", encoding="utf-8") as f:
         f.write(f"epoch: {a.epoch}\nmarked_at: {datetime.datetime.now(jst).isoformat(timespec='minutes')}\n"
                 f"source: {', '.join(str(s.relative_to(run_dir)) for s in srcs)}\n"
                 "note: 判定基準（定量指標）が未実装のため目視で手動指定\n")
-    print(f"[best] run {a.run}: best = epoch {a.epoch} ({note})")
+    print(f"[best] run {run_dir.name}: best = epoch {a.epoch} ({note})")
 
 
 if __name__ == "__main__":

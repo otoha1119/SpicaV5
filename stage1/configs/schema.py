@@ -27,7 +27,8 @@ TRAIN = {
     "optim.batch_size":     Key(int,   "--batch_size",     '論文 "mini-batch size of 40"'),
     "optim.n_epochs":       Key(int,   "--n_epochs",       '論文 "300 epochs"'),
     "optim.n_epochs_decay": Key(int,   "--n_epochs_decay", "lr 線形減衰の epoch 数。論文未記載 (Q-T2) → 0"),
-    "optim.lr_policy":      Key(str,   "--lr_policy",      "junyanz の scheduler 名 (linear | step | plateau | cosine)。decay 0 なら linear で定常"),
+    "optim.lr_policy":      Key(str,   "--lr_policy",      "junyanz の scheduler 名。再開が対応するのは linear のみ（F-12）。decay 0 なら定常"),
+    "optim.seed":           Key(int,   "--seed",           "python / numpy / torch の乱数 seed（F-15）。再現条件として launch.yaml に残る。cudnn.benchmark は本家のままなので完全決定ではない"),
     # loss
     "loss.lambda_fid":      Key(float, "--lambda_fid",     '論文 "We empirically choose λ = 10"。fidelity ‖G(z)−z‖² の重み'),
     # network
@@ -40,7 +41,7 @@ TRAIN = {
     "network.output_nc":    Key(int,   "--output_nc",      "出力チャネル数。grayscale = 1"),
     # data
     "data.patch_size":      Key(int,   "--patch_size",     '論文 "patches of size 128 × 128"。0 でフル画像（推論用）'),
-    "data.patch_stride":    Key(int,   "--patch_stride",   "patch 左上座標の刻み。ケース 1 は 1（任意位置）。論文グリッドは 8"),
+    "data.patch_stride":    Key(int,   "--patch_stride",   "patch 左上座標の刻み。random は 1（任意位置）。sampling=paper のときは論文の 8 を明示する（暗黙置換はしない。F-19）"),
     "data.patches_per_image": Key(int, "--patches_per_image", 'sampling=paper の 1 画像あたり patch 数。論文 "40 patches"'),
     "data.patch_seed":      Key(int,   "--patch_seed",     "sampling=paper の固定集合、--serial_batches 時の再現用 seed"),
     "data.samples_per_epoch": Key(int, "--samples_per_epoch", "sampling=random の 1 epoch のサンプル数。論文の patch 集合 24,000 に合わせる"),
@@ -288,6 +289,7 @@ def check_values(train, mode, machine):
     if train["optim.n_epochs"] < 1: P.append("optim.n_epochs ≥ 1")
     if train["optim.n_epochs_decay"] < 0: P.append("optim.n_epochs_decay ≥ 0")
     if train["optim.lr_policy"] not in LR_POLICIES: P.append(f"optim.lr_policy は {LR_POLICIES} のみ（他方式は再開時の scheduler 復元が未実装）")
+    if train["optim.seed"] < 0: P.append("optim.seed ≥ 0")
     if train["loss.lambda_fid"] < 0: P.append("loss.lambda_fid ≥ 0")
     if train["network.ngf"] < 1 or train["network.ndf"] < 1: P.append("network.ngf / ndf ≥ 1")
     if train["network.norm"] not in NORMS: P.append(f"network.norm は {NORMS}")
@@ -312,6 +314,7 @@ def check_values(train, mode, machine):
     if slf < bs or slf % bs: P.append(f"log.save_latest_freq ({slf}) は optim.batch_size ({bs}) の倍数（画像枚数単位。倍数でないと latest が保存されない）")
     if train["log.epoch_count"] < 1: P.append("log.epoch_count ≥ 1")
     if mode["sampling"] not in SAMPLINGS: P.append(f"sampling は {SAMPLINGS}")
+    if mode["sampling"] == "paper" and train["data.patch_stride"] != 8: P.append("sampling=paper のときは data.patch_stride を論文の 8 にする（暗黙の置換はしない。F-19）")
     if mode["gan_mode"] not in GAN_MODES: P.append(f"gan_mode は {GAN_MODES}")
     if mode["netG"] not in NETGS: P.append(f"netG は {NETGS}")
     if mode["netD"] not in NETDS: P.append(f"netD は {NETDS}")

@@ -2,7 +2,8 @@
 # =============================================================================
 # SpicaV5 起動スクリプト — 取扱説明
 #   OS 共通。mac / Linux はターミナル、Windows は Git Bash か WSL。すべて bash 経由（実行権限は不要）。
-#   リポジトリ直下（このファイルがある場所）で実行する。
+#   リポジトリ直下（このファイルがある場所）で、ホストのシェルから実行する。コンテナ内（bash start.sh shell で入った先）では動かない
+#   （docker が無い。/.dockerenv があれば即エラーで止める）。コンテナ内で使うのは train_stage1.sh / infer_stage1.sh の方。
 #
 # ■ 何をするか
 #   1. configs/machines.yaml からマシン定義（GPU 世代・データのパス）を読む
@@ -16,7 +17,7 @@
 #   ・build / shell / down / tb / infer / resume / best はサブコマンド。それ以外の単語は「マシン名」とみなし、sh 内の MACHINE より優先する。
 #   ・build は「イメージを（再）ビルドしてコンテナを起動し、torch / cuda の確認を表示して終わる」だけ。学習は始めない（本番機の初期セットアップ用）。
 #   ・resume の直後は run 名（yyyy_mmdd_HHMM）、その次が latest / best / epoch 番号なら checkpoint の tag（省略時 latest）。
-#   ・best の直後は run 名と epoch 番号（両方必須）。
+#   ・best の直後は run 名と epoch 番号（両方必須）。best/ は best.tmp/ に揃えてから差し替える。
 #   ・infer は引数を取らない。重みディレクトリ・入力フォルダ・出力形式・元 DICOM ルートは infer_stage1.sh の変数
 #     （WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR）に書く（同名の --flag で上書き可）。
 #   ・マシン名を 2 つ渡すとエラー。configs/machines.yaml に無い名前もエラー（候補を表示）。
@@ -55,10 +56,10 @@
 #       launch.yaml / train_opt.txt / loss_log.txt
 #       latest/net_G.pth, net_D.pth, state.pth        直下の重みディレクトリは latest と best だけ
 #       best/net_G.pth,   net_D.pth, state.pth        bash start.sh best <run> <epoch> で作る（best.txt に epoch を記録）
-#       weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごと
+#       weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごと（+ 学習終了時の最終 epoch。保存は .tmp → rename で原子的）
 #       output_images/samples/   学習中の 128 patch グリッド（8bit、TensorBoard と同じ表示用）
 #       output_images/epoch_NNN/ checkpoint ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit、入力と同じ規約）
-#       infer/<重みディレクトリ名>/<入力フォルダ名>/   bash start.sh infer の出力（full/ patch/ = 16bit PNG、*_dicom/ = DICOM、*_R/ = 残差 PNG、diff_stats.txt、infer.yaml）
+#       infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   bash start.sh infer の出力（実行ごとに別ディレクトリ。full/ patch/ = 16bit PNG、*_dicom/ = DICOM、*_R/ = 残差 PNG、diff_stats.txt、infer.yaml）
 #       tb/                      TensorBoard
 #
 # ■ 設定ファイル（既定値は無い。無いキーはエラー）
@@ -108,6 +109,12 @@
 #   ・GPU に乗っているか: 起動時の "[start] torch ... | cuda available: True/False" を見る
 # =============================================================================
 set -euo pipefail
+
+# --- ホスト専用。コンテナ内で叩かれたら docker が無いので即エラー（WSL 判定より先に見る。コンテナは WSL2 のカーネルを共有するので /proc/version だけでは区別できない） ---
+if [ -f /.dockerenv ]; then
+  echo "[start] start.sh はホスト側で実行するスクリプトです（コンテナ内には docker がありません）。exit でコンテナを抜けて、ホストの PowerShell / ターミナルで bash start.sh <machine> ... を実行してください。コンテナ内で使うのは bash train_stage1.sh / bash infer_stage1.sh です" >&2
+  exit 2
+fi
 
 # --- Windows（Git Bash / MSYS2）対策（F-04 / F-05） ---
 #   ・MSYS2 ランタイムは native の docker.exe に渡す引数・環境変数の中の /workspace/... を C:/Program Files/Git/... に書き換える。
@@ -172,7 +179,7 @@ done
 [ -n "$PY" ] || { echo "[start] python3 と pyyaml がホストに必要です (pip install pyyaml)" >&2; exit 1; }
 
 # --- machines.yaml から gpu_gen / host_data_root / container_data_root を取る（欠落はエラー） ---
-read -r GPU_GEN HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT CHECKPOINTS_DIR < <("$PY" - "$MACHINES" "$MACHINE" <<'PYEOF'
+IFS=$'\t' read -r GPU_GEN HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT CHECKPOINTS_DIR < <("$PY" - "$MACHINES" "$MACHINE" <<'PYEOF'
 import sys, yaml
 path, name = sys.argv[1], sys.argv[2]
 m = yaml.safe_load(open(path, encoding="utf-8"))
@@ -182,7 +189,7 @@ e = m[name]
 missing = [k for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "checkpoints_dir") if k not in e]
 if missing:
     sys.exit(f"[start] machines.yaml の '{name}' にキーがありません: {missing}")
-print(e["gpu_gen"], e["host_data_root"], e["container_data_root"], e["tb_port"], e["checkpoints_dir"])
+print("\t".join(str(e[k]) for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "checkpoints_dir")))  # タブ区切り（パスの空白対応。F-24）
 PYEOF
 )
 

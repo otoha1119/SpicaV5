@@ -15,7 +15,8 @@
 #                  dicom : 前処理を全部戻して DICOM（元 DICOM のヘッダを継承、HU を元の RescaleSlope/Intercept で格納値に戻す）
 #                  both  : 両方
 #   DICOM_DIR      元 DICOM のルート（dicom / both のとき必須。png のときは使わない）。変換時（SpicaV3 convert_pcd.py）と同じ構成であること:
-#                  症例フォルダ名の数値部分 = PCD-nnn の nnn、フォルダ内の *.dcm を名前順に並べた sss 番目（1 始まり）= PCD-nnn-sss
+#                  症例フォルダ名の数値部分 = PCD-nnn の nnn、フォルダ内の *.dcm を名前順に並べた sss 番目（1 始まり）= PCD-nnn-sss。
+#                  書く直前に参照 DICOM と入力 PNG を全画素で照合する（ズレていればエラー）。症例フォルダは単一 Series であること
 #
 # ■ コマンドで上書き（最優先）
 #   bash start.sh infer --weight_dir /workspace/stage1/checkpoints/2026_0907_1742/best --input_dir /workspace/DataSet/PCD512_v2
@@ -23,7 +24,7 @@
 #   bash start.sh infer --mode full --max_slices 4        # 方式の上書き。stage1/configs/schema.py の INFER にあるフラグだけ受け付ける
 #
 # ■ 出力
-#   <run>/infer/<重みディレクトリ名>/<入力フォルダ名>/
+#   <run>/infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻 yyyy_mmdd_HHMMSS>/   （実行ごとに別ディレクトリ。混ざらない）
 #     {full,patch}/<case>/<slice>.png         EID-like（16bit PNG、入力と同じ規約）        … png / both
 #     {full,patch}_dicom/<case>/<slice>.dcm   EID-like（DICOM、元ヘッダ継承・UID は新規）  … dicom / both
 #     {full,patch}_R/<case>/<slice>.png       残差（16bit PNG、0 HU = 32768。PNG のみ）      … infer.yaml の save_residual

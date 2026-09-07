@@ -9,10 +9,10 @@ checkpoint は「重みディレクトリ」単位で扱う（G と D と optimi
   latest/net_G.pth, net_D.pth, state.pth        直下に置く重みディレクトリは latest と best だけ
   best/net_G.pth,   net_D.pth, state.pth        bash start.sh best <run> <epoch> で weights/epoch_NNN/ をコピー
   best.txt                    best がどの epoch か（判定基準がまだ無いので当面は目視で手動指定）
-  weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごとの checkpoint
+  weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごとの checkpoint（保存は <dir>.tmp → rename で原子的。.tmp / .old が残っていたら中断の痕跡）
   output_images/samples/<total_iters>_{current,fixed}.png    学習中の 128 patch グリッド（8bit、TensorBoard と同じ表示用）
   output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png        checkpoint ごとのフル 512（uint16、入力と同じ規約）
-  infer/<重みディレクトリ名>/<入力フォルダ名>/   bash start.sh infer の出力（inference_dir.py。uint16 PNG）
+  infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   bash start.sh infer の出力（inference_dir.py。uint16 PNG / DICOM）。実行ごとに別ディレクトリ
   tb/                         TensorBoard
 """
 
@@ -62,6 +62,8 @@ def saved_tags(run_dir):
     tags = [t for t in TOP_TAGS if (run_dir / t / "net_G.pth").is_file()]
     epochs = []
     for d in (run_dir / WEIGHTS_DIR).glob("*"):
+        if d.name.endswith((".tmp", ".old")):  # 原子的保存の作業ディレクトリ（F-14）は checkpoint ではない
+            continue
         if (d / "net_G.pth").is_file():
             m = re.fullmatch(r"epoch_(\d+)", d.name)
             epochs.append(str(int(m.group(1))) if m else d.name)
@@ -94,6 +96,10 @@ def epoch_images_dir(run_dir, epoch):
     return Path(run_dir) / OUTPUT_IMAGES_DIR / epoch_dirname(epoch)
 
 
-def infer_dir(run_dir, weight_dir, input_dir):
-    """推論の出力先: <run>/infer/<重みディレクトリ名>/<入力フォルダ名>/（同じ重みで別の入力を処理しても衝突しない）。"""
-    return Path(run_dir) / INFER_DIR / Path(weight_dir).name / Path(input_dir).name
+INFER_STAMP_FORMAT = "%Y_%m%d_%H%M%S"
+
+
+def infer_dir(run_dir, weight_dir, input_dir, now):
+    """推論の出力先: <run>/infer/<重みディレクトリ名>/<入力フォルダ名>/<yyyy_mmdd_HHMMSS>/。
+    実行時刻を付けるので、latest / best の中身が変わった後の再実行や --max_slices の部分実行が同じ場所に混ざらない（F-13）。"""
+    return Path(run_dir) / INFER_DIR / Path(weight_dir).name / Path(input_dir).name / now.strftime(INFER_STAMP_FORMAT)

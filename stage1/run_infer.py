@@ -8,7 +8,7 @@
   3. デバイスは machines.yaml の gpu_gen から決める（0 → cpu、それ以外 → cuda）
   4. 出力形式（--output_format png | dicom | both）と元 DICOM ルート（--dicom_dir、dicom / both のとき必須）も infer_stage1.sh の変数から受ける
   5. sh からの上書き（infer.yaml のキーのフラグ、および --weight_dir / --input_dir / --output_format / --dicom_dir）を反映し、解決済み設定を
-     <run>/infer/<重みディレクトリ名>/<入力フォルダ名>/infer.yaml に保存してから inference_dir.py を exec する
+     <run>/infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/infer.yaml に保存してから inference_dir.py を exec する（実行ごとに別ディレクトリ。F-13）
 
 使い方（通常は ../infer_stage1.sh 経由）:
   python run_infer.py --machine PC1 --infer configs/infer.yaml --machines ../configs/machines.yaml \
@@ -134,14 +134,17 @@ def main():
         print(f"[run_infer] 設定エラー: {e}", file=sys.stderr)
         sys.exit(2)
 
-    out_dir = infer_dir(run_dir, weight_dir, input_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    jst = datetime.timezone(datetime.timedelta(hours=9), name="JST")
+    now = datetime.datetime.now(jst)
+    out_dir = infer_dir(run_dir, weight_dir, input_dir, now)  # 実行時刻つき（F-13）
+    if out_dir.exists():
+        print(f"[run_infer] 設定エラー: 出力先が既に存在します（同一秒の再実行）: {out_dir}", file=sys.stderr)
+        sys.exit(2)
+    out_dir.mkdir(parents=True)
     argv = (["--weight_dir", str(weight_dir), "--input_dir", str(input_dir), "--out_dir", str(out_dir), "--device", device,
              "--output_format", output_format, "--dicom_dir", dicom_dir]
             + g_argv + to_argv(infer, INFER))  # 上書きは infer dict に反映済み
 
-    jst = datetime.timezone(datetime.timedelta(hours=9), name="JST")
-    now = datetime.datetime.now(jst)
     with open(out_dir / "infer.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(
             {"timestamp": now.isoformat(timespec="seconds"), "machine_name": a.machine, "device": device, "run_dir": str(run_dir),

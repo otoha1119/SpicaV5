@@ -141,6 +141,8 @@ def main():
         print(f"[run_train] 設定エラー: {e}", file=sys.stderr)
         sys.exit(2)
 
+    if machine["gpu_gen"] != 0:
+        extra = list(extra) + ["--require_cuda"]  # F-16: GPU マシンの定義で CUDA が無ければ train.py が止める（黙って CPU に落ちない）
     argv = build_argv(name, train, mode, machine, extra)
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / launch_name, "w", encoding="utf-8") as f:

@@ -10,7 +10,8 @@ optim:
   batch_size: 40        # 論文 "mini-batch size of 40"
   n_epochs: 300         # 論文 "300 epochs"
   n_epochs_decay: 0     # 論文未記載 (Q-T2)。減衰なし
-  lr_policy: linear     # decay 0 なら定常
+  lr_policy: linear     # decay 0 なら定常。再開が対応するのは linear のみ
+  seed: 0               # python / numpy / torch の乱数 seed（再現条件）。cudnn.benchmark は本家のままなので完全決定ではない
 
 loss:
   lambda_fid: 10.0      # 論文 "We empirically choose λ = 10"。範囲 [−1,1] では再調整対象
@@ -26,7 +27,7 @@ network:
 
 data:
   patch_size: 128       # 論文 "patches of size 128 × 128"
-  patch_stride: 1       # ケース 1: 任意位置。論文グリッドなら 8
+  patch_stride: 1       # random: 任意位置（1）。sampling=paper のときは論文の 8 を明示する
   patches_per_image: 40 # sampling=paper 用。論文 "40 patches"
   patch_seed: 0
   samples_per_epoch: 24000   # sampling=random の epoch 長。論文の patch 集合と同数（batch 40 → 600 iter/epoch）
