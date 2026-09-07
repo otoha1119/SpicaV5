@@ -148,3 +148,7 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 列挙結果を `<checkpoints_dir>/.case_index/<フォルダ名>_<root の hash>.json` にキャッシュ。次回は走査した全ディレクトリの mtime を照合し、一致すれば再走査しない（ファイルの追加・削除で mtime が変わるので自動で再走査）。学習（`CTDataset`）と推論（`inference_dir.py --index_cache_dir`、`run_infer.py` が渡す）で共通
 - `util/dicom_io.py DicomIndex`: 隠しディレクトリを walk から除外
 - 背景: V3 は `.bat` から Windows パスを直接マウントしていたが、V5 を PowerShell の `bash`（= WSL）から起動すると WSL の drvfs 越しになり、メタデータ操作が 1 件数 ms〜十数 ms かかる。列挙は Git Bash 起動（Windows パス直接マウント）か WSL の ext4 にデータを置くとさらに速い
+
+### 起動時の表示を短く（2026-09-07）
+- `options/base_options.py print_options`: 本家の `Options` ブロックの `print` をやめ、`train_opt.txt` に書くだけに（1 行 `options saved to …` を出す）。実効設定は `launch.yaml`
+- `run_train.py` / `run_infer.py`: exec 前に全引数を 1 行で出していたのを、run 名と launch.yaml / infer.yaml の場所だけに（全引数はそのファイルの `argv`）

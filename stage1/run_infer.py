@@ -155,7 +155,7 @@ def main():
         )
 
     cmd = [sys.executable, str(HERE / "inference_dir.py")] + argv
-    print("[run_infer] " + " ".join(cmd), flush=True)
+    print(f"[run_infer] {weight_dir} × {input_dir} → {out_dir}（全引数は infer.yaml の argv）", flush=True)
     os.chdir(HERE)
     os.execv(sys.executable, cmd)
 

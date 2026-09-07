@@ -156,7 +156,7 @@ def main():
         )
 
     cmd = [sys.executable, str(HERE / "train.py")] + argv
-    print("[run_train] " + " ".join(cmd), flush=True)
+    print(f"[run_train] run {name} → {out_dir / launch_name}（全引数はこのファイルの argv）", flush=True)
     os.chdir(HERE)
     os.execv(sys.executable, cmd)
 

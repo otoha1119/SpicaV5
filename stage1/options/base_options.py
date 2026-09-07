@@ -102,7 +102,7 @@ class BaseOptions:
                 comment = "\t[default: %s]" % str(default)
             message += "{:>25}: {:<30}{}\n".format(str(k), str(v), comment)
         message += "----------------- End -------------------"
-        print(message)
+        # [SpicaV5] ターミナルには出さない（長い。実効設定は launch.yaml、全 opt はこのファイル）。本家は print(message) していた
 
         # save to the disk
         expr_dir = Path(opt.checkpoints_dir) / opt.name
@@ -111,6 +111,7 @@ class BaseOptions:
         with open(file_name, "wt") as opt_file:
             opt_file.write(message)
             opt_file.write("\n")
+        print(f"options saved to {file_name}")
 
     def parse(self):
         """Parse our options, create checkpoints directory suffix, and set up gpu device."""
