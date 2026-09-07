@@ -2,12 +2,15 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.5.1
 torchvision==0.20.1
-numpy
-opencv-python-headless
-pyyaml
-wandb
-dominate
-Pillow
-tensorboard
-tqdm
-pydicom
+# torch 以外は上限つきの範囲指定（F-27）。完全な再現条件は初回ビルド成功後にコンテナ内で
+#   pip freeze > /workspace/docker/lock-<gen>.txt
+# を取り、以後は lock を使って再ビルドする（bash start.sh shell → 上のコマンド）。
+# wandb は本家 util/visualizer.py（未使用）だけが import するので入れない
+numpy>=1.26,<3
+opencv-python-headless>=4.10,<6
+pyyaml>=6,<7
+dominate>=2.9,<3
+Pillow>=10,<13
+tensorboard>=2.15,<3
+tqdm>=4.66,<5
+pydicom>=3.0,<4

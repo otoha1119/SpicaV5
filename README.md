@@ -85,7 +85,7 @@ Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT�
 
 処理の経路: `start.sh`（ホスト）→ `docker compose`（`docker/compose.{gen30,gen50,cpu}.yaml`、gen40 は gen30 と共用）→ コンテナ内 `train_stage1.sh` / `infer_stage1.sh` → `stage1/run_train.py` / `run_infer.py`（yaml を検証し全引数明示で exec）→ `stage1/train.py` / `inference_dir.py`。
 
-ホスト要件: docker compose v2、python3 + pyyaml（machines.yaml を読むため）。Windows は Git Bash か WSL。
+ホスト要件: docker compose v2、python3 + pyyaml（machines.yaml を読むため）。Windows は Git Bash か WSL（PowerShell で `bash` と打つと WSL の bash になる。Git Bash なら Windows パスを直接マウントし、WSL なら `wslpath` で変換する）。依存パッケージは `docker/requirements-*.txt`（torch は固定、他は上限つき）。初回ビルド後に `pip freeze > docker/lock-<gen>.txt` を取ると再現条件になる。
 
 Windows のデータパス: `machines.yaml` の `host_data_root` は `D:/DataSet` のようにホスト表記で書く。PowerShell から `bash start.sh` と打つと通常は WSL の bash（`C:\Windows\System32\bash.exe`）が動き、docker も WSL 側の Linux CLI になる。この場合 `D:/...` はそのまま渡せない（`invalid volume specification: 'D:/DataSet/DataSet:/workspace/DataSet:rw'`）ので、`start.sh` が `wslpath` で `/mnt/d/DataSet` に変換して渡す（変換結果は `[start] WSL: host_data_root を変換 ...` に出る）。Git Bash からの起動なら `D:/` のままで Docker Desktop が解釈する。どちらの bash かは `Get-Command bash` で分かる。`host_data_root` がホストに無い場合は起動前にエラーで止める（compose は無いパスを空ディレクトリとして作ってしまうため）。
 
@@ -113,7 +113,7 @@ git reset --hard
   tb/                         TensorBoard
 ```
 
-`state.pth` には optimizer の状態・学習率・RNG（python / torch / numpy）・epoch・iteration 数が入る。scheduler は再開時に作り直す（`lr_policy` は `linear` のみ対応）。学習終了時は `save_epoch_freq` の倍数でなくても最終 epoch を保存する。保存は `<dir>.tmp` に書いてから rename するので、途中で止まっても重みディレクトリに新旧が混ざらない（`.tmp` / `.old` が残っていれば中断の痕跡）。乱数 seed は `train.yaml` の `optim.seed`（cudnn.benchmark は本家のままなので完全な決定性ではない）。単一 GPU のみ対応（DDP は起動時にエラー）。
+`state.pth` には optimizer の状態・学習率・RNG（python / torch / numpy）・epoch・iteration 数が入る。scheduler は再開時に作り直す（`lr_policy` は `linear` のみ対応）。学習終了時は `save_epoch_freq` の倍数でなくても最終 epoch を保存する。保存は `<dir>.tmp` に書いてから rename するので、途中で止まっても重みディレクトリに新旧が混ざらない（`.tmp` / `.old` が残っていれば中断の痕跡）。乱数 seed は `train.yaml` の `optim.seed`（cudnn.benchmark は本家のままなので完全な決定性ではない）。単一 GPU のみ対応（DDP は起動時にエラー）。途中保存の `latest/`（epoch 未完）から再開すると、その epoch を頭からやり直すので更新が余分に入り「中断なし」と同じ学習にはならない。再現性を重視するなら epoch 末の checkpoint（`weights/epoch_NNN/`、または epoch 末に保存された `latest/`）から再開する。
 
 ## 7. 学習中の表示
 

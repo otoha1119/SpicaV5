@@ -153,3 +153,11 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - `options/base_options.py print_options`: 本家の `Options` ブロックの `print` をやめ、`train_opt.txt` に書くだけに（1 行 `options saved to …` を出す）。実効設定は `launch.yaml`
 - `run_train.py` / `run_infer.py`: exec 前に全引数を 1 行で出していたのを、run 名と launch.yaml / infer.yaml の場所だけに（全引数はそのファイルの `argv`）
 - `util/monitor.py`: tqdm の `mininterval` を 0.5 → 0.1、`miniters=1`（GPU で 1 step が速いと表示が飛んで見えたため）
+
+### レビュー修正バッチ 3（2026-09-07、docs/plans/20260907_review-fix-list.md F-27 / F-29 / F-30 / F-31 / F-32）
+- F-27 `../docker/requirements-{gen30,gen50,cpu}.txt`: `wandb` を外す（import するのは本家 `util/visualizer.py` と `test.py` だけで未使用）。torch 以外に上限つき範囲（numpy<3, opencv-python-headless<6, pyyaml<7, dominate<3, Pillow<13, tensorboard<3, tqdm<5, pydicom<4）。lock の取り方をコメントに
+- F-29 `../CLAUDE.md`: 起動コマンドの記述を現行（tb / infer / resume / best）に
+- F-30 `../infer_stage1.sh`: `DICOM_DIR` の初期値を SpicaV3 `convert_pcd.py` の変換元と同じ `DataSet/photonCT/PhotonCT512_original` に
+- F-31 `../README.md`: 途中 latest からの再開の注意、Git Bash / WSL の違い、lock の取り方
+- F-32 `docs/experiments/EXP-20260907-01.md`（定量ベースライン）/ `EXP-20260907-02.md`（FE-GAN 再現 + λ 校正）の事前登録の下書き（Go/No-Go の数値はユーザー確定待ち。docs/ は git 管理外）
+- 未決（ユーザー判断）: F-26 `docs` の gitignore、F-28 junyanz `test.py` 等の削除

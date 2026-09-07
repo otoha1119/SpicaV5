@@ -20,7 +20,7 @@
 #
 # ■ コマンドで上書き（最優先）
 #   bash start.sh infer --weight_dir /workspace/stage1/checkpoints/2026_0907_1742/best --input_dir /workspace/DataSet/PCD512_v2
-#   bash start.sh infer --output_format both --dicom_dir /workspace/DataSet/PhotonCT512_original
+#   bash start.sh infer --output_format both --dicom_dir /workspace/DataSet/photonCT/PhotonCT512_original
 #   bash start.sh infer --mode full --max_slices 4        # 方式の上書き。stage1/configs/schema.py の INFER にあるフラグだけ受け付ける
 #
 # ■ 出力
@@ -44,7 +44,7 @@ set -euo pipefail
 WEIGHT_DIR="/workspace/stage1/checkpoints/2026_0907_1742/best"   # 重みディレクトリ（net_G.pth がある所）
 INPUT_DIR="/workspace/DataSet/PCD512_v2"                          # 処理する PNG 群のフォルダ
 OUTPUT_FORMAT="png"                                               # png | dicom | both
-DICOM_DIR="/workspace/DataSet/PhotonCT512_original"               # 元 DICOM のルート（dicom / both のときだけ使う）
+DICOM_DIR="/workspace/DataSet/photonCT/PhotonCT512_original"      # 元 DICOM のルート（dicom / both のときだけ使う）。SpicaV3 convert_pcd.py の変換元と同じ配置。実機で ls して確認
 # =============================
 
 cd "$(dirname "$0")/stage1"
