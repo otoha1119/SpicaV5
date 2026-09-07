@@ -2,6 +2,7 @@
 # 全環境 Docker 内で実行する。pcd_dir / eid_dir / checkpoints_dir は「コンテナ内から見えるパス」を書く。
 # 推論（bash start.sh infer）もここの gpu_gen で Docker とデバイス（0 → cpu、それ以外 → cuda）を決める。重みと入力のパスは infer_stage1.sh に書く。
 # host_data_root → container_data_root が Docker 起動時のマウント（start.sh が使う。詳細は Docker の項で別途）。
+# host_data_root は Windows 機なら D:/DataSet のようにホスト表記で書く（WSL から起動したときは start.sh が /mnt/d/DataSet に変換する）。ホストに無ければ start.sh がエラーで止める。
 
 PC1:                                   # 研究室 Windows 機
   gpu_gen: 30                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う

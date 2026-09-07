@@ -87,12 +87,15 @@ Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT�
 
 ホスト要件: docker compose v2、python3 + pyyaml（machines.yaml を読むため）。Windows は Git Bash か WSL。
 
+Windows のデータパス: `machines.yaml` の `host_data_root` は `D:/DataSet` のようにホスト表記で書く。PowerShell から `bash start.sh` と打つと通常は WSL の bash（`C:\Windows\System32\bash.exe`）が動き、docker も WSL 側の Linux CLI になる。この場合 `D:/...` はそのまま渡せない（`invalid volume specification: 'D:/DataSet/DataSet:/workspace/DataSet:rw'`）ので、`start.sh` が `wslpath` で `/mnt/d/DataSet` に変換して渡す（変換結果は `[start] WSL: host_data_root を変換 ...` に出る）。Git Bash からの起動なら `D:/` のままで Docker Desktop が解釈する。どちらの bash かは `Get-Command bash` で分かる。`host_data_root` がホストに無い場合は起動前にエラーで止める（compose は無いパスを空ディレクトリとして作ってしまうため）。
+
 改行コード: `.gitattributes` で `.sh` / `.py` / `.yaml` などを LF に固定している（`.sh` はホストの Git Bash とコンテナの Linux bash の両方が読むため）。Windows で `.gitattributes` 追加前に clone した作業ツリーは CRLF になっていて `start.sh: set: pipefail\r: invalid option name`（表示は `: invalid option namet: pipefail` に崩れる）で止まるので、一度 LF で取り直す:
 
 ```
 git pull
 git config core.autocrlf false
-git rm --cached -r . && git reset --hard
+git rm --cached -r .
+git reset --hard
 ```
 
 ## 6. run ディレクトリ（正は `stage1/util/run_paths.py`）

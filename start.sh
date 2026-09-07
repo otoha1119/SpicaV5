@@ -45,6 +45,9 @@
 #   ・MACHINE（下）または引数のマシン名でエントリを選ぶ。
 #   ・gpu_gen → compose: 30 / 40 → docker/compose.gen30.yaml, 50 → docker/compose.gen50.yaml, 0 → docker/compose.cpu.yaml
 #   ・host_data_root → container_data_root をそのまま rw マウント（配下丸ごと、SpicaV3 と同じ）。
+#     Windows 機は host_data_root を D:/DataSet のようにホスト表記で書く。WSL の bash から起動した場合は docker が Linux 側なので
+#     start.sh が wslpath で /mnt/d/DataSet に変換してから渡す（Git Bash は D:/ のままで Docker Desktop が解釈する）。
+#     host_data_root がホストに無ければ起動前にエラーで止める（compose は無いパスを空ディレクトリとして作ってしまい、学習が pcd_dir 無しで落ちるまで気付けないため）。
 #   ・pcd_dir / eid_dir / checkpoints_dir はコンテナ内から見えるパスで書く。
 #   ・実験の保存先は checkpoints_dir/<run>（run = 起動時刻 yyyy_mmdd_HHMM、JST）。レイアウト（正は stage1/util/run_paths.py）:
 #       launch.yaml / train_opt.txt / loss_log.txt
@@ -160,6 +163,16 @@ if missing:
 print(e["gpu_gen"], e["host_data_root"], e["container_data_root"], e["tb_port"], e["checkpoints_dir"])
 PYEOF
 )
+
+# --- host_data_root の正規化: WSL の bash から起動した場合、Windows 表記（D:/...）は Linux 側 docker に渡せないので /mnt/d/... に変換する。
+#     Git Bash（MINGW）は D:/ のままで Docker Desktop が解釈するので変換しない ---
+if grep -qi microsoft /proc/version 2>/dev/null && [[ "$HOST_DATA_ROOT" =~ ^[A-Za-z]:[/\\] ]]; then
+  command -v wslpath >/dev/null 2>&1 || { echo "[start] WSL ですが wslpath が見つかりません。configs/machines.yaml の host_data_root を /mnt/<drive>/... で書いてください" >&2; exit 1; }
+  HOST_DATA_ROOT_WIN="$HOST_DATA_ROOT"
+  HOST_DATA_ROOT="$(wslpath -u "$HOST_DATA_ROOT_WIN")"
+  echo "[start] WSL: host_data_root を変換 $HOST_DATA_ROOT_WIN -> $HOST_DATA_ROOT"
+fi
+[ -d "$HOST_DATA_ROOT" ] || { echo "[start] host_data_root がホストに存在しません: $HOST_DATA_ROOT  → configs/machines.yaml の '$MACHINE' を確認（compose は無いパスを空ディレクトリとして作ってしまうので起動前に止める）" >&2; exit 1; }
 
 case "$GPU_GEN" in
   30|40) GEN=gen30 ;;
