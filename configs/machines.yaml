@@ -13,7 +13,19 @@ PC1:                                   # 研究室 Windows 機
   align_meta: /workspace/DataSet/align_meta.yaml   # ケース 2 用。sampling=aligned のときだけ存在を検査
   checkpoints_dir: /workspace/stage1/checkpoints   # この下に run（yyyy_mmdd_HHMM）。レイアウトは stage1/util/run_paths.py
   num_threads: 8
-  tb_port: 6006                        # TensorBoard（ホスト:コンテナ 同番号で公開）
+  tb_port: 6006            
+  
+PC2:                                   # 研究室 Windows 機
+  gpu_gen: 30                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
+  gpu_name: RTX 3070
+  host_data_root: "D:/DataSet/DataSet"
+  container_data_root: /workspace/DataSet
+  pcd_dir: /workspace/DataSet/PCD512_v2   # 直下に症例フォルダ。論文の z 側 (A)
+  eid_dir: /workspace/DataSet/EID_v5      # 論文の x 側 (B)
+  align_meta: /workspace/DataSet/align_meta.yaml   # ケース 2 用。sampling=aligned のときだけ存在を検査
+  checkpoints_dir: /workspace/stage1/checkpoints   # この下に run（yyyy_mmdd_HHMM）。レイアウトは stage1/util/run_paths.py
+  num_threads: 8
+  tb_port: 6006            # TensorBoard（ホスト:コンテナ 同番号で公開）
 
 mac:                                   # 開発機（Docker、CPU）
   gpu_gen: 0
