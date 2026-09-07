@@ -142,3 +142,9 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - F-24 `../start.sh`: machines.yaml の値をタブ区切りで受ける（パスの空白対応）
 - F-25 `train.py`: `WORLD_SIZE > 1` なら `NotImplementedError`（単一 GPU のみ）
 - 検証（合成データ、CPU venv）: 同じ seed で 2 run の損失が一致、`.tmp` / `.old` が残らない、best の 2 回差し替えと best からの resume、gpu_gen 30 + CUDA 無しで停止、paper + stride 1 は拒否 / stride 8 で格子が 8 刻み、DDP 環境変数で停止、DICOM の DERIVED / SeriesNumber / 画素照合 OK と、PNG すり替え・Series 混在でエラー、推論 2 回で別ディレクトリ、`write_png` の失敗検出、空白入りパスの起動
+
+### データ列挙の高速化とキャッシュ（2026-09-07、PC2 の初回起動で数分止まった件）
+- `data/ct_dataset.py CaseIndex`: `Path.rglob + is_file()`（ファイルごとに stat）を `os.scandir / os.walk` + 拡張子判定に変更。'.' 始まりのファイル・フォルダ（macOS の `._xxx.png`、`.DS_Store`）は無視
+- 列挙結果を `<checkpoints_dir>/.case_index/<フォルダ名>_<root の hash>.json` にキャッシュ。次回は走査した全ディレクトリの mtime を照合し、一致すれば再走査しない（ファイルの追加・削除で mtime が変わるので自動で再走査）。学習（`CTDataset`）と推論（`inference_dir.py --index_cache_dir`、`run_infer.py` が渡す）で共通
+- `util/dicom_io.py DicomIndex`: 隠しディレクトリを walk から除外
+- 背景: V3 は `.bat` から Windows パスを直接マウントしていたが、V5 を PowerShell の `bash`（= WSL）から起動すると WSL の drvfs 越しになり、メタデータ操作が 1 件数 ms〜十数 ms かかる。列挙は Git Bash 起動（Windows パス直接マウント）か WSL の ext4 にデータを置くとさらに速い

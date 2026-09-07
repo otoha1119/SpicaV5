@@ -58,6 +58,7 @@ def parse_args():
     req("--input_dir", help="処理する PNG 群のフォルダ（直下に症例フォルダ、または PNG 直置き）")
     req("--out_dir", help="出力先（通常 <run>/infer/<重みディレクトリ名>/<入力フォルダ名>）")
     req("--device", choices=DEVICES, help="cuda | cpu（machines.yaml の gpu_gen から。cuda が使えなければエラー）")
+    req("--index_cache_dir", help="入力フォルダの列挙結果キャッシュ（<checkpoints_dir>/.case_index。学習と共通）")
     # G の構成（run の launch.yaml から。学習時と同じ G を組む）
     req("--netG")
     req("--ngf", type=int)
@@ -183,7 +184,7 @@ def main():
     if "patch" in modes and a.patch_size % (2**LEVELS):
         raise ValueError(f"patch_size は {2**LEVELS} の倍数である必要があります: {a.patch_size}")
 
-    idx = CaseIndex(input_dir)
+    idx = CaseIndex(input_dir, a.index_cache_dir)
     paths = idx.all_paths if a.max_slices == 0 else idx.all_paths[: a.max_slices]
     n_patches = None
     print(f"[infer] device={device} G={weight_path}")

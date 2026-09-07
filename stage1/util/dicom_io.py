@@ -55,7 +55,8 @@ class DicomIndex:
             if n is None:
                 continue
             files = []
-            for d, _, names in os.walk(entry):
+            for d, dirs, names in os.walk(entry):
+                dirs[:] = sorted(n for n in dirs if not n.startswith("."))
                 files += [os.path.join(d, f) for f in names if f.lower().endswith(".dcm") and not f.startswith(".")]  # macOS の "._xxx.dcm" は除外
             files.sort()
             if files:

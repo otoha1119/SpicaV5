@@ -26,9 +26,11 @@
 【テスト・推論】 patch_size == 0 のとき A のスライスを順にフル画像で返す (B は A と同じ画像をダミーで返す)。
 """
 
+import hashlib
 import json
 import os
 import random
+import time
 import warnings
 from functools import lru_cache
 from pathlib import Path
@@ -110,27 +112,88 @@ def _load_normalized(path, offset, hu_min, hu_max):
 # ---------------------------------------------------------------------------
 class CaseIndex:
     """<root>/<症例>/<slice>.png を {症例: [パス, ...]} に整理する。症例フォルダ直下にサブフォルダがあれば再帰的に拾う。
-    <root> 直下に PNG が直接ある場合は症例名 "_root" として 1 症例扱いにする。"""
+    <root> 直下に PNG が直接ある場合は症例名 "_root" として 1 症例扱いにする。
 
-    def __init__(self, root):
+    列挙は os.walk（scandir）+ 拡張子判定で、ファイルごとの stat はしない（Docker のバインドマウント越しでは stat が 1 件数 ms かかるため。旧 rglob + is_file は 2 倍遅かった）。
+    '.' 始まりのファイル・フォルダは無視する（macOS の AppleDouble "._xxx.png" や .DS_Store が exFAT 経由のコピーで混ざる）。
+
+    cache_dir を渡すと列挙結果を JSON に保存し、次回は「走査した全ディレクトリの mtime が一致」すれば再走査しない
+    （ディレクトリの mtime は直下のファイルの追加・削除で変わる。数十万ファイルの列挙が数十回の stat になる）。ズレていれば再走査して上書き。"""
+
+    EXT = ".png"
+
+    def __init__(self, root, cache_dir=None):
         root = Path(root)
         if not root.is_dir():
             raise RuntimeError(f"データディレクトリが存在しません: {root}")
         self.root = root
-        self.slices = {}
-        # '.' 始まりのファイル・フォルダは無視する（macOS の AppleDouble "._xxx.png" や .DS_Store が exFAT 経由のコピーで混ざる。PNG ではないので読めない）
-        for entry in sorted(root.iterdir()):
-            if entry.is_dir() and not entry.name.startswith("."):
-                files = sorted(str(p) for p in entry.rglob("*") if p.is_file() and p.suffix.lower() == ".png" and not p.name.startswith("."))
-                if files:
-                    self.slices[entry.name] = files
-        loose = sorted(str(p) for p in root.iterdir() if p.is_file() and p.suffix.lower() == ".png" and not p.name.startswith("."))
-        if loose:
-            self.slices["_root"] = loose
+        cache = self._cache_path(root, cache_dir)
+        data = self._load_cache(cache, root) if cache else None
+        if data is None:
+            t0 = time.time()
+            data = self._scan(root)
+            n = sum(len(v) for v in data["slices"].values())
+            print(f"[CaseIndex] {root}: {len(data['slices'])} cases / {n} files を列挙 ({time.time() - t0:.1f}s)" + (f" → cache {cache}" if cache else ""))
+            if cache:
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                with open(cache, "w", encoding="utf-8") as f:
+                    json.dump(data, f)
+        else:
+            print(f"[CaseIndex] {root}: cache hit ({cache})")
+        self.slices = data["slices"]
         if not self.slices:
             raise RuntimeError(f"PNG が見つかりません: {root}")
         self.cases = sorted(self.slices.keys())
         self.all_paths = [p for c in self.cases for p in self.slices[c]]
+
+    # --- 列挙 ---
+    @classmethod
+    def _scan(cls, root):
+        slices, dir_mtimes = {}, {str(root): os.stat(root).st_mtime_ns}
+        loose = []
+        with os.scandir(root) as it:
+            entries = sorted(it, key=lambda e: e.name)
+        for e in entries:
+            if e.name.startswith("."):
+                continue
+            if e.is_dir():
+                files = []
+                for d, dirs, names in os.walk(e.path):
+                    dirs[:] = sorted(n for n in dirs if not n.startswith("."))
+                    dir_mtimes[d] = os.stat(d).st_mtime_ns
+                    files += [os.path.join(d, f) for f in names if f.lower().endswith(cls.EXT) and not f.startswith(".")]
+                files.sort()
+                if files:
+                    slices[e.name] = files
+            elif e.is_file() and e.name.lower().endswith(cls.EXT):
+                loose.append(e.path)
+        if loose:
+            slices["_root"] = sorted(loose)
+        return {"root": str(root), "dir_mtimes": dir_mtimes, "slices": slices}
+
+    # --- キャッシュ ---
+    @staticmethod
+    def _cache_path(root, cache_dir):
+        if cache_dir is None:
+            return None
+        key = hashlib.sha1(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
+        return Path(cache_dir) / f"{root.name}_{key}.json"
+
+    @staticmethod
+    def _load_cache(cache, root):
+        if not cache.is_file():
+            return None
+        try:
+            with open(cache, encoding="utf-8") as f:
+                data = json.load(f)
+            if data.get("root") != str(root):
+                return None
+            for d, m in data["dir_mtimes"].items():  # 走査した全ディレクトリの mtime が一致すれば有効
+                if os.stat(d).st_mtime_ns != m:
+                    return None
+            return data
+        except (OSError, KeyError, ValueError, TypeError):
+            return None
 
     @property
     def n_cases(self):
@@ -239,9 +302,10 @@ class CTDataset(BaseDataset):
 
         dir_a = opt.dir_A
         dir_b = opt.dir_B
-        self.idx_a = CaseIndex(dir_a)
+        cache_dir = Path(opt.checkpoints_dir) / ".case_index"  # 列挙結果のキャッシュ（run 共通。mtime が変われば自動で再走査）
+        self.idx_a = CaseIndex(dir_a, cache_dir)
         if os.path.isdir(dir_b):
-            self.idx_b = CaseIndex(dir_b)
+            self.idx_b = CaseIndex(dir_b, cache_dir)
         else:
             if not self.full_image:
                 raise RuntimeError(f"学習には {dir_b} が必要です")

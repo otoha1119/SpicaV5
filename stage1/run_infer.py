@@ -142,6 +142,7 @@ def main():
         sys.exit(2)
     out_dir.mkdir(parents=True)
     argv = (["--weight_dir", str(weight_dir), "--input_dir", str(input_dir), "--out_dir", str(out_dir), "--device", device,
+             "--index_cache_dir", str(Path(machine["checkpoints_dir"]) / ".case_index"),
              "--output_format", output_format, "--dicom_dir", dicom_dir]
             + g_argv + to_argv(infer, INFER))  # 上書きは infer dict に反映済み
 
