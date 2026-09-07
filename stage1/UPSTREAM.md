@@ -152,3 +152,4 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 ### 起動時の表示を短く（2026-09-07）
 - `options/base_options.py print_options`: 本家の `Options` ブロックの `print` をやめ、`train_opt.txt` に書くだけに（1 行 `options saved to …` を出す）。実効設定は `launch.yaml`
 - `run_train.py` / `run_infer.py`: exec 前に全引数を 1 行で出していたのを、run 名と launch.yaml / infer.yaml の場所だけに（全引数はそのファイルの `argv`）
+- `util/monitor.py`: tqdm の `mininterval` を 0.5 → 0.1、`miniters=1`（GPU で 1 step が速いと表示が飛んで見えたため）

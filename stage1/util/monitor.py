@@ -67,7 +67,8 @@ class TrainMonitor:
     # ------------------------------------------------------------------ ターミナル
     def epoch_bar(self, dataset, epoch, total_epochs):
         """dataset を包んで yield する。バーは画像枚数で進む（1 step = batch_size 枚）。"""
-        self.bar = tqdm(total=self.dataset_size, desc=f"Epoch {epoch}/{total_epochs}", unit="img", leave=False, dynamic_ncols=True, mininterval=0.5)
+        # mininterval=0.1 / miniters=1: 1 step ごとに描画する（0.5 だと GPU では表示が数 step 飛ぶ）。10 Hz なら端末 I/O は問題にならない
+        self.bar = tqdm(total=self.dataset_size, desc=f"Epoch {epoch}/{total_epochs}", unit="img", leave=False, dynamic_ncols=True, mininterval=0.1, miniters=1)
         self._sum, self._n = {}, 0
         try:
             for data in dataset:
