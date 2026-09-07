@@ -56,9 +56,8 @@
 #       launch.yaml / train_opt.txt / loss_log.txt
 #       latest/net_G.pth, net_D.pth, state.pth        直下の重みディレクトリは latest と best だけ
 #       best/net_G.pth,   net_D.pth, state.pth        bash start.sh best <run> <epoch> で作る（best.txt に epoch を記録）
-#       weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごと（+ 学習終了時の最終 epoch。保存は .tmp → rename で原子的）
-#       output_images/samples/   学習中の 128 patch グリッド（8bit、TensorBoard と同じ表示用）
-#       output_images/epoch_NNN/ checkpoint ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit、入力と同じ規約）
+#       weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq（既定 1 = 毎 epoch）ごと（+ 学習終了時の最終 epoch。保存は .tmp → rename で原子的）
+#       output_images/epoch_NNN/ checkpoint（毎 epoch）ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit、入力と同じ規約）。128 patch グリッドは TensorBoard だけ
 #       infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   bash start.sh infer の出力（実行ごとに別ディレクトリ。full/ patch/ = 16bit PNG、*_dicom/ = DICOM、*_R/ = 残差 PNG、diff_stats.txt、infer.yaml）
 #       tb/                      TensorBoard
 #
@@ -83,7 +82,7 @@
 #     port = tb_port、ログ /workspace/tb_server.log）、応答を待ってからホストのブラウザで http://localhost:<tb_port> を開く。
 #   ・既に起動していれば起動せずブラウザだけ開く。コンテナを down すると止まる。ポートが塞がっていたら machines.yaml の tb_port を変える。
 #   ・ブラウザは mac = open、Windows Git Bash = cmd //c start、Linux = xdg-open、WSL = cmd.exe。開けなくても学習は続く。
-#   ・曲線は checkpoints_dir 以下の全 run（yyyy_mmdd_HHMM）が並ぶ。画像は images/current / images/fixed（8bit 表示、同じものが <run>/output_images/samples/）と images/full。
+#   ・曲線は checkpoints_dir 以下の全 run（yyyy_mmdd_HHMM）が並ぶ。画像は images/current / images/fixed（8bit 表示。TB だけ）と images/full。
 #
 # ■ 再開（resume）の仕組み
 #   ・学習中は重み（net_G.pth / net_D.pth）に加えて state.pth（optimizer / RNG / epoch / iteration 数）を同じ重みディレクトリに保存する。

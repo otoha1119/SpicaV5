@@ -161,3 +161,7 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - F-31 `../README.md`: 途中 latest からの再開の注意、Git Bash / WSL の違い、lock の取り方
 - F-32 `docs/experiments/EXP-20260907-01.md`（定量ベースライン）/ `EXP-20260907-02.md`（FE-GAN 再現 + λ 校正）の事前登録の下書き（Go/No-Go の数値はユーザー確定待ち。docs/ は git 管理外）
 - 未決（ユーザー判断）: F-26 `docs` の gitignore、F-28 junyanz `test.py` 等の削除
+
+### 毎 epoch 保存と samples の廃止（2026-09-07、ユーザー指示）
+- `configs/train.yaml log.save_epoch_freq`: 10 → 1（毎 epoch `weights/epoch_NNN/` とフル 512 を保存し、後から最良 epoch を選ぶ）
+- `util/monitor.py`: 128 patch グリッドは TensorBoard にだけ出し、`output_images/samples/` への書き出しを廃止。`util/run_paths.py` の `samples_dir` / `SAMPLES_DIR` を削除

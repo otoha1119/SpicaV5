@@ -106,9 +106,8 @@ git reset --hard
   train_opt.txt, loss_log.txt
   latest/net_G.pth, net_D.pth, state.pth     直下の重みディレクトリは latest と best だけ
   best/…, best.txt                           bash start.sh best で作る（判定は目視。指標ができたら自動化）
-  weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごと
-  output_images/samples/      学習中の 128 patch グリッド [z | G(z) | G(z)−z | x]（8bit、TensorBoard と同じ表示用）
-  output_images/epoch_NNN/    checkpoint ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit）
+  weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq（既定 1 = 毎 epoch）ごと
+  output_images/epoch_NNN/    checkpoint（毎 epoch）ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit）。学習中の 128 patch グリッドは TensorBoard だけ
   infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   推論の出力（§8。実行ごとに別ディレクトリ）
   tb/                         TensorBoard
 ```
@@ -118,7 +117,7 @@ git reset --hard
 ## 7. 学習中の表示
 
 - ターミナル: tqdm バー（画像枚数単位。1 step = batch_size 枚）。末尾に D / G_GAN / G_fid と `d_in`（G(z) − z の平均絶対値 [HU]）。
-- TensorBoard（コンテナ内で自動起動、`machines.yaml` の `tb_port` で公開）: `loss/*`、`diag/*`（D_real、D_fake、d_in_HU）、`time/*`、`train/lr`、`images/current`、`images/fixed`（固定サンプル）、`images/full/<slice>`（checkpoint 時のフル 512）。横軸は総画像枚数。
+- TensorBoard（コンテナ内で自動起動、`machines.yaml` の `tb_port` で公開）: `loss/*`、`diag/*`（D_real、D_fake、d_in_HU）、`time/*`、`train/lr`、`images/current`、`images/fixed`（固定サンプル。128 patch グリッドは TB にだけ出す）、`images/full/<slice>`（checkpoint 時のフル 512）。横軸は総画像枚数。
 - 表示は窓を掛けず HU −1400〜1600（stored 0〜3000）を線形に 0〜255 へ、差分パネルは ±200 HU（`train.yaml` の `log:` で変更可）。
 
 ## 8. 推論（`bash start.sh infer`）

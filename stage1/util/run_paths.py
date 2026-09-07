@@ -10,8 +10,7 @@ checkpoint は「重みディレクトリ」単位で扱う（G と D と optimi
   best/net_G.pth,   net_D.pth, state.pth        bash start.sh best <run> <epoch> で weights/epoch_NNN/ をコピー
   best.txt                    best がどの epoch か（判定基準がまだ無いので当面は目視で手動指定）
   weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごとの checkpoint（保存は <dir>.tmp → rename で原子的。.tmp / .old が残っていたら中断の痕跡）
-  output_images/samples/<total_iters>_{current,fixed}.png    学習中の 128 patch グリッド（8bit、TensorBoard と同じ表示用）
-  output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png        checkpoint ごとのフル 512（uint16、入力と同じ規約）
+  output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png        checkpoint（毎 epoch）ごとのフル 512（uint16、入力と同じ規約）。学習中の 128 patch グリッドは TensorBoard だけ
   infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   bash start.sh infer の出力（inference_dir.py。uint16 PNG / DICOM）。実行ごとに別ディレクトリ
   tb/                         TensorBoard
 """
@@ -24,7 +23,6 @@ RUN_NAME_RE = re.compile(r"^\d{4}_\d{4}_\d{4}$")  # 2026_0907_1742
 TOP_TAGS = ("latest", "best")                    # run 直下に置く重みディレクトリ。それ以外（epoch 番号、iter_N）は weights/
 WEIGHTS_DIR = "weights"
 OUTPUT_IMAGES_DIR = "output_images"
-SAMPLES_DIR = "samples"
 INFER_DIR = "infer"
 BEST_NOTE = "best.txt"
 LAUNCH_FILE = "launch.yaml"
@@ -86,10 +84,6 @@ def find_run_dir(weight_dir):
         if (p / LAUNCH_FILE).is_file():
             return p
     return None
-
-
-def samples_dir(run_dir):
-    return Path(run_dir) / OUTPUT_IMAGES_DIR / SAMPLES_DIR
 
 
 def epoch_images_dir(run_dir, epoch):

@@ -14,8 +14,7 @@ junyanz の util/visualizer.py（wandb / HTML）は使わない。train.py は�
      train/lr（epoch ごと）
      images/current（いま学習中のバッチ先頭 n_images 枚）, images/fixed（学習開始時に固定した同じ patch）
         各行 = [ PCD z | EID-like G(z) | 差分 G(z)−z | 実 EID x ]。128 patch のまま（元サイズに戻さない）
-  ディスク   : <run>/output_images/samples/<total_iters>_{current,fixed}.png — TB と同じ 8bit グリッド（表示用。16bit ではない）
-               <run>/output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png — checkpoint 保存時にフル 512 のスライス n_full_images 枚を
+  ディスク   : <run>/output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png — checkpoint 保存時（毎 epoch）にフル 512 のスライス n_full_images 枚を
                PCD / EID-like / 残差 R = G(z) − z で保存（uint16。pcd/eidlike は HU + hu_offset、R は 32768 + ΔHU）。TB にも images/full/<slice>
                （画像パネルは stored = HU + hu_offset、差分パネルは 32768 + ΔHU。TB は 8bit しか描けないため厳密値はこちら）
   loss_log.txt: print_freq ごとの損失（テキスト。grep 用の保険）
@@ -35,7 +34,7 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 
 from data.ct_dataset import denormalize, residual_stored, write_png
-from util.run_paths import epoch_images_dir, samples_dir
+from util.run_paths import epoch_images_dir
 
 LOSS_KEYS_BAR = ("D", "G_GAN", "G_fid")  # バー末尾に出す損失
 DIAG_KEYS = ("D_real", "D_fake")           # TB で diag/ に分類する損失名
@@ -53,8 +52,6 @@ class TrainMonitor:
         self.dataset_size = dataset_size
         self.run_dir = Path(opt.checkpoints_dir) / opt.name
         self.tb = SummaryWriter(log_dir=str(self.run_dir / "tb"))
-        self.samples_dir = samples_dir(self.run_dir)  # <run>/output_images/samples/
-        self.samples_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = self.run_dir / "loss_log.txt"
         with open(self.log_path, "a", encoding="utf-8") as f:
             f.write(f"================ Training Loss ({time.strftime('%Y-%m-%d %H:%M:%S')}) ================\n")
@@ -119,7 +116,7 @@ class TrainMonitor:
 
     # ------------------------------------------------------------------ 画像
     def log_images(self, model, total_iters):
-        """image_freq step ごとに呼ぶ: images/current と images/fixed を TB へ、同じ 8bit グリッドを output_images/samples/ へ。"""
+        """image_freq step ごとに呼ぶ: images/current と images/fixed を TB へ（8bit 表示用。ディスクには書かない）。"""
         n = self.opt.n_images
         sets = [("current", model.real_A[:n], model.fake_B[:n].detach(), model.real_B[:n])]
         if self.fixed is not None:
@@ -133,9 +130,7 @@ class TrainMonitor:
             net.train(was_training)
             sets.append(("fixed", a, g, b))
         for tag, a, g, b in sets:
-            grid8 = self._grid(a, g, b)
-            self.tb.add_image(f"images/{tag}", grid8, total_iters, dataformats="HW")
-            write_png(self.samples_dir / f"{total_iters:09d}_{tag}.png", grid8)
+            self.tb.add_image(f"images/{tag}", self._grid(a, g, b), total_iters, dataformats="HW")  # TB だけ（ディスクには書かない。2026-09-07 ユーザー判断）
 
     def _grid(self, a, g, b):
         """各行 [z | G(z) | G(z)−z | x] のグリッドを 8bit（表示用。HU を display_hu_min..max で線形に 0..255、差分は ±diff_range_hu）で返す。"""
