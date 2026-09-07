@@ -118,12 +118,13 @@ class CaseIndex:
             raise RuntimeError(f"データディレクトリが存在しません: {root}")
         self.root = root
         self.slices = {}
+        # '.' 始まりのファイル・フォルダは無視する（macOS の AppleDouble "._xxx.png" や .DS_Store が exFAT 経由のコピーで混ざる。PNG ではないので読めない）
         for entry in sorted(root.iterdir()):
-            if entry.is_dir():
-                files = sorted(str(p) for p in entry.rglob("*") if p.is_file() and p.suffix.lower() == ".png")
+            if entry.is_dir() and not entry.name.startswith("."):
+                files = sorted(str(p) for p in entry.rglob("*") if p.is_file() and p.suffix.lower() == ".png" and not p.name.startswith("."))
                 if files:
                     self.slices[entry.name] = files
-        loose = sorted(str(p) for p in root.iterdir() if p.is_file() and p.suffix.lower() == ".png")
+        loose = sorted(str(p) for p in root.iterdir() if p.is_file() and p.suffix.lower() == ".png" and not p.name.startswith("."))
         if loose:
             self.slices["_root"] = loose
         if not self.slices:

@@ -56,7 +56,7 @@ class DicomIndex:
                 continue
             files = []
             for d, _, names in os.walk(entry):
-                files += [os.path.join(d, f) for f in names if f.lower().endswith(".dcm")]
+                files += [os.path.join(d, f) for f in names if f.lower().endswith(".dcm") and not f.startswith(".")]  # macOS の "._xxx.dcm" は除外
             files.sort()
             if files:
                 if n in self.cases:
