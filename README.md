@@ -1,149 +1,167 @@
-# research-skills
+# SpicaV5
 
-汎用ML研究運用スキル群。SOTA調査 → 実験計画 → 実行 → 評価 → 記録 → Tune/Pivot判断 → 報告、という研究サイクル全体をClaude Codeのスキルとして規律化する。
+Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT）風の画像を **非ペア学習**で生成する研究コード。
 
-SpicaV3のCLAUDE.mdにある研究運用ルール——**推測で埋めない・良い結果も悪い結果も記録する・事実と解釈を分ける**——を、毎回意識しなくても実行される仕組みに落とし込んだもの。特定プロジェクトに依存しない汎用・独立型。
+- **Stage 1（本リポジトリの主体）**: PCD512 → EID-like512。別患者の PCD 画像群と EID 画像群から、PCD 固有の成分を除いて EID の分布に寄せる変換 G を学習する。
+- **Stage 2（保留）**: EID-like512 → PCD1024 の超解像。Stage 1 の出力を教師データにする。
 
-設計の全容は [docs/spec.md](docs/spec.md)、実装計画は [docs/superpowers/plans/2026-08-19-research-skills.md](docs/superpowers/plans/2026-08-19-research-skills.md) を参照。
+土台は Park, Baek, You, Choi, Seo, *"Unpaired image denoising using a generative adversarial network in X-ray CT"*, IEEE Access 2019（DOI 10.1109/access.2019.2934178。以下 **FE-GAN**）。GAN 損失に fidelity 項 λ‖G(z)−z‖² を埋め込んだ**一方向・cycle なし**の GAN で、学習フレームワークは [junyanz/pytorch-CycleGAN-and-pix2pix](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix)（commit 2a7afba）を `stage1/` に vendoring して借りている。本家からの変更はすべて `stage1/UPSTREAM.md` に記録する。
 
-## 収録スキル（4本柱）
+---
 
-| スキル | 役割 | 呼び出し |
-|---|---|---|
-| `sota-survey` | 多角的・定量的なSOTA/手法調査 | 自動発火 + `/sota-survey` |
-| `experiment-cycle` | 事前登録つき実験ループ、Tune/Pivot判断（6転換ゲート） | 自動発火 + `/experiment-cycle` |
-| `research-report` | 実験ログ・判断記録からの報告生成 | 自動発火 + `/research-report` |
-| `research-setup` | 対象プロジェクトへの導入・更新（冪等） | `/research-setup` のみ |
+## 1. 全体の流れ
 
-原則：「規律・ワークフロー系は自動発火、破壊的操作（インストール）は明示専用」。
+```
+元 DICOM（PCD-CT / EID-CT）
+   │  前処理（SpicaV3 create_dataset/）: pixel × RescaleSlope + RescaleIntercept = HU → HU + 1400 → uint16 1ch PNG
+   ▼
+<データルート>/PCD512_v2/PCD-nnn/PCD-nnn-sss.png     ← A 側（論文の z）
+<データルート>/EID_v5/EID-nnn/EID-nnn-sss.png        ← B 側（論文の x）
+   │  bash start.sh            学習（128×128 patch、非ペア）
+   ▼
+<checkpoints_dir>/<run>/      重み・ログ・途中画像・checkpoint ごとのフル 512 画像
+   │  bash start.sh infer      症例丸ごと推論（512 を一発 / patch 分割合成 / 両方）
+   ▼
+<run>/infer/<重み>/<入力>/    EID-like（16bit PNG、または元ヘッダを継承した DICOM）
+```
 
-### sota-survey（調査）
+すべて Docker コンテナ内で実行する（mac の CPU も含む）。ホスト側は `bash start.sh` を叩くだけ。
 
-「SOTAを調べて」「代替手法ある？」で発火。問題を定式化してから、**古典 / デファクト / SOTA研究 / 問題再定義の4系統＋異分野越境**で候補を発散させ、次の3点セットで定量的に収束させる：
+## 2. モデル仕様（FE-GAN を論文どおりに再現）
 
-1. **生値テーブル**（精度・速度・実装コスト・データ要件・成熟度。データセット条件併記、検証不能値は「未確認」マーク）
-2. **重み付きスコアリング**（重みはノート内で宣言して恣意性を可視化）
-3. **Pareto所見**
+| 項目 | 仕様 |
+|---|---|
+| Generator | deep convolutional framelet U-Net（論文 Fig. 3）。ConvBlock = Conv3×3（zero pad、bias なし）→ BatchNorm → LeakyReLU(0.2)。3 段（32 / 64 / 128 ch）、bottleneck 128 → 256 → 128。段の間は固定 Haar DWT / IDWT（正規直交、学習しない）。高周波サブバンドは同じ段の IDWT へ直結し、エンコーダ特徴と concat。最終層は 3×3 conv（32 → 1、BN / 活性化なし）。1.36M パラメータ |
+| Discriminator | [Conv4×4 stride 2 → BN → LeakyReLU(0.2)] × 3（32, 32, 128 ch）→ Conv1×1。受容野 22×22 の PatchGAN。83k パラメータ |
+| 目的関数 | J(D,G) = E_x[D(x)] + E_z[log(1 − D(G(z)))] + λ E_z[‖G(z) − z‖²]、G* = argmin_G max_D J、λ = 10。D の出力は D := 1 − exp(v)（v は 1×1 conv の生出力）で実装し、最適 D = 1 − p_G / p_x を満たす。fidelity は画素平均 |
+| 最適化 | Adam、lr 2e-4、β = (0.5, 0.999)、batch 40、300 epoch（減衰なし）、重み初期化 N(0, 0.01) |
+| 入力 | 128×128 patch、1ch。1 epoch = 24,000 サンプル（論文の patch 集合と同数） |
+| 推論 | G は全畳み込み + Haar 3 段なので H, W が 8 の倍数なら 512 を一発で通せる。論文の "patch-by-patch" に対応する patch 分割合成も持つ |
 
-推薦は2〜3件で必ず異なる原理を混ぜ、各推薦に**最小反証実験・タイムボックス・撤退ライン・移行/ロールバック方針**を付ける。最小反証実験はexperiment-cycleの事前登録形式と同一項目なので、採用したらそのまま実験ログへ転記できる。SOTA主張には出典＋確認日必須。棄却候補も理由付きで残す。検索は英語、証拠引用は英語原文のまま。
+論文に記載が無い点（D の実装形、LeakyReLU の傾き、Haar の正規化、β1、減衰、flip の有無、最終層の BN、正規化範囲、推論 stride）は推測で埋めず、根拠つきで `docs/reference/park2019_implementation_checklist.md` §7 に置き、コードとの照合は `docs/reference/20260905_park2019_implementation_review.md` にまとめている。
 
-出力先：`docs/surveys/<YYYYMMDD>_<slug>.md`
+## 3. データ規約
 
-### experiment-cycle（実験ループ）
+| 項目 | 規約 |
+|---|---|
+| ファイル | uint16 **1ch** PNG（8bit や 3ch は読み込み時にエラー） |
+| 値 | `stored = HU + 1400`（HU −1400 → 0、水 0 HU → 1400、EID・PCD 共通） |
+| 学習時の正規化 | `stored − 1400 → clip(−1400, 4096) → [0, 1] → [−1, 1]`。逆変換は最後に 1 回だけ丸め・クリップ |
+| ディレクトリ | `<root>/<症例>/<slice>.png`。症例フォルダ直下にサブフォルダがあれば再帰的に拾う |
+| 命名（PCD） | `PCD-nnn-sss.png`。nnn = 元 DICOM の症例フォルダ名の数値部分、sss = フォルダ内 `.dcm` を名前順に並べた 1 始まりの連番。DICOM 出力はこの規則で元ファイルに対応付ける |
+| サンプリング | `random`（ケース 1: 症例一様 → スライス一様 → 位置一様、A / B 独立）/ `paper`（論文の固定 40 patch/画像、stride 8）/ `aligned`（ケース 2: 症例メタで位置合わせ。切替口だけ用意） |
+| 残差 R | `R = G(z) − z` を uint16 で保存するときは `0 HU = 32768`。`eidlike = pcd + (R − 32768)` が厳密に成り立つ |
 
-「実験して」「学習回して」で発火。中核となる規律：
+患者由来の画像（DICOM・PNG）はリポジトリに入れない。`.gitignore` で `DataSet/`・`stage1/checkpoints/`・`*.pth`・`*.dcm` 等を二重に除外している。
 
-- **事前登録**：実行前に仮説・反証条件・Go/No-Go基準・タイムボックスを固定してから実験する
-- **再現条件の完全記録**：commitハッシュ（dirty有無）・データセット版・seed・試行回数・環境・コピペ可能な再現コマンド
-- **ネガティブ結果も義務記録**。確定した記録は書き換えず追記訂正のみ
-- **凍結ベースラインとの公平比較**：ベースライン確立が先。比較条件を揃える
-- **Tune / Pivot の2レーン制**：局所改善（Tune）を続けるか手法転換（Pivot）するかは、**6つの転換ゲート**で判断する
-  1. 理論的/経験的上限が要件未満と判明
-  2. 同系統実験のN連続棄却（デフォルト3。`docs/research-config.md` で上書き可）
-  3. 定数でなく計算量オーダーの変更が必要
-  4. 集計指標は停滞しつつ特定データスライスが失敗し続ける
-  5. 複雑性・保守コストの増加が利得を上回る
-  6. 手法の前提を壊す新要件
-- **Pivotの最終決断だけは人間（あなた）の承認が必須**。それ以外の承認ゲートはない。承認後の転換先探索はsota-surveyに接続する
+## 4. 設定ファイル（既定値・フォールバック禁止）
 
-出力先：実験ログ `docs/experiments/EXP-<YYYYMMDD>-<seq>.md`、判断記録 `docs/decisions/<YYYYMMDD>_<slug>.md`
+すべての値はどこかのファイルに**必ず**書く。必須キーの欠落・未知のキー・型違いは起動時にエラーで止まり、コード側も `set_defaults(None)` + 番兵検査で「設定ファイルを経由せずに動く」事故を防ぐ。唯一の正は `stage1/configs/schema.py`。
 
-### research-report（報告）
+| ファイル | 内容 |
+|---|---|
+| `stage1/configs/train.yaml` | 学習パラメータ全部（optim / loss / network / data / log）。各行に論文の出典 |
+| `stage1/configs/mode.yaml` | アルゴリズムの切替（sampling、gan_mode、netG、netD、final_norm_act、serial_batches） |
+| `stage1/configs/infer.yaml` | 推論の方式（mode full \| patch \| both、patch の size / stride / blend / batch_size、max_slices、save_residual、DICOM の Rescale 値） |
+| `configs/machines.yaml` | マシン定義（Stage 共通）: gpu_gen（30 / 40 / 50 / 0 = CPU）、ホスト側データルート → コンテナ側マウント先、pcd_dir / eid_dir / align_meta / checkpoints_dir / num_threads / tb_port |
 
-「進捗まとめて」で発火。`docs/{experiments,decisions,surveys}/` の記録を読み、事実（記録の生値を転記）と解釈（報告時点の考察）を分離した報告書を生成する。ネガティブ結果を省略しない。記録にない数値は補完せず「記録なし」と書く。
+優先順位は **sh のコマンド引数 > yaml**。`bash start.sh --n_epochs 50` のように schema にあるフラグだけ上書きできる（無いフラグはエラー）。
 
-出力先：`docs/reports/<YYYYMMDD>_<slug>.md`
+## 5. 起動（`bash start.sh`）
 
-### research-setup（インストーラ）
+リポジトリ直下で実行。マシン名はファイル内の `MACHINE="PC1"` に書き、`bash start.sh PC2` のように引数で渡せば上書きされる。
 
-`/research-setup` 専用（自動発火しない）。対象プロジェクトで実行すると、8手順を検証しながら対話的に進める。**冪等**——再実行しても壊れず、スキル更新の配り直しにも同じコマンドを使う。
+| コマンド | 動き |
+|---|---|
+| `bash start.sh` | コンテナ起動（イメージが無ければビルド）→ TensorBoard 起動 → ブラウザを開く → 学習 |
+| `bash start.sh build` | イメージを（再）ビルド → コンテナ起動 → torch / cuda の確認表示で終了（学習しない。本番機の初期セットアップ用） |
+| `bash start.sh resume <run> [latest\|best\|<epoch>]` | その run の checkpoint から続きを学習（optimizer / RNG / 進捗を復元。run 起動時の設定を使う） |
+| `bash start.sh best <run> <epoch>` | `weights/epoch_NNN/` を `best/` にコピーして `best.txt` に記録 |
+| `bash start.sh infer [--flag ...]` | 症例丸ごと推論（§8） |
+| `bash start.sh tb` | TensorBoard だけ起動してブラウザを開く |
+| `bash start.sh shell` / `down` | コンテナに入る / 停止・削除 |
 
-## セットアップ
+実験名（run）は起動時刻 `yyyy_mmdd_HHMM`（JST）。同一分の再起動は上書き。
 
-### 1. インストーラを呼べるようにする（初回のみ）
+処理の経路: `start.sh`（ホスト）→ `docker compose`（`docker/compose.{gen30,gen50,cpu}.yaml`、gen40 は gen30 と共用）→ コンテナ内 `train_stage1.sh` / `infer_stage1.sh` → `stage1/run_train.py` / `run_infer.py`（yaml を検証し全引数明示で exec）→ `stage1/train.py` / `inference_dir.py`。
 
-このリポジトリの `skills/research-setup` へのシンボリックリンクをユーザーレベルの `~/.claude/skills/` に張る：
+ホスト要件: docker compose v2、python3 + pyyaml（machines.yaml を読むため）。Windows は Git Bash か WSL。
+
+## 6. run ディレクトリ（正は `stage1/util/run_paths.py`）
+
+```
+<checkpoints_dir>/2026_0907_1742/
+  launch.yaml                 解決済み設定（再開時は launch_resume_<日時>.yaml が増える）
+  train_opt.txt, loss_log.txt
+  latest/net_G.pth, net_D.pth, state.pth     直下の重みディレクトリは latest と best だけ
+  best/…, best.txt                           bash start.sh best で作る（判定は目視。指標ができたら自動化）
+  weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごと
+  output_images/samples/      学習中の 128 patch グリッド [z | G(z) | G(z)−z | x]（8bit、TensorBoard と同じ表示用）
+  output_images/epoch_NNN/    checkpoint ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit）
+  infer/<重みディレクトリ名>/<入力フォルダ名>/   推論の出力（§8）
+  tb/                         TensorBoard
+```
+
+`state.pth` には optimizer の状態・学習率・RNG（python / torch / numpy）・epoch・iteration 数が入る。scheduler は再開時に作り直す。
+
+## 7. 学習中の表示
+
+- ターミナル: tqdm バー（画像枚数単位。1 step = batch_size 枚）。末尾に D / G_GAN / G_fid と `d_in`（G(z) − z の平均絶対値 [HU]）。
+- TensorBoard（コンテナ内で自動起動、`machines.yaml` の `tb_port` で公開）: `loss/*`、`diag/*`（D_real、D_fake、d_in_HU）、`time/*`、`train/lr`、`images/current`、`images/fixed`（固定サンプル）、`images/full/<slice>`（checkpoint 時のフル 512）。横軸は総画像枚数。
+- 表示は窓を掛けず HU −1400〜1600（stored 0〜3000）を線形に 0〜255 へ、差分パネルは ±200 HU（`train.yaml` の `log:` で変更可）。
+
+## 8. 推論（`bash start.sh infer`）
+
+学習済みの重みで PNG フォルダを丸ごと EID-like に変換する。指定は `infer_stage1.sh` 冒頭の 4 変数（同名の `--flag` で上書き可）:
 
 ```bash
-ln -s /Users/otoha/Documents/program/Claude/research-skills/skills/research-setup ~/.claude/skills/research-setup
+WEIGHT_DIR="/workspace/stage1/checkpoints/2026_0907_1742/best"   # net_G.pth があるディレクトリ（latest/ best/ weights/epoch_NNN/）
+INPUT_DIR="/workspace/DataSet/PCD512_v2"                          # 処理する PNG 群
+OUTPUT_FORMAT="png"                                               # png | dicom | both
+DICOM_DIR="/workspace/DataSet/PhotonCT512_original"               # 元 DICOM ルート（dicom / both のとき）
 ```
 
-### 2. 対象プロジェクトで実行
-
-対象の研究プロジェクトをClaude Codeで開き：
-
-```
-/research-setup
-```
-
-### 3. インストーラがやること
-
-| # | 内容 |
+| 項目 | 仕様 |
 |---|---|
-| 1 | 配布元（このリポジトリの `skills/`）の特定と検証 |
-| 2 | 自作3スキル（sota-survey / experiment-cycle / research-report）を対象の `.claude/skills/` へコピー |
-| 3 | 外部スキル11種の導入（下表）。`.agents/skills/` 止まりで認識されない事故への対策（シンボリックリンク補修）つき |
-| 4 | superpowersプラグインの有効化（`.claude/settings.json`。壊れたJSONなら書き込まず中断） |
-| 5 | 記録ディレクトリ `docs/{surveys,experiments,decisions,reports}/` の作成 |
-| 6 | `docs/research-config.md` の生成（既存なら不変更）と、評価指標・ベースラインの対話設定 |
-| 7 | CLAUDE.mdへ研究運用ルールを追記（マーカー区間 `<!-- research-skills:start/end -->` で冪等に置換） |
-| 8 | 全スキルの認識検証と導入結果一覧の提示 |
+| G の構成 | 重みディレクトリの上にある run の `launch.yaml` から取る（学習時と同じ G を組む） |
+| デバイス | `machines.yaml` の `gpu_gen`（0 → cpu、それ以外 → cuda。cuda が使えなければエラー、cpu には落とさない） |
+| mode `full` | 512 を一発で G に通す |
+| mode `patch` | `patch.size` の patch を `patch.stride` 刻みの均等格子（端まで過不足なく被覆）で切り、`patch.batch_size` 枚ずつ G に通し、窓 `uniform` / `hann` で重み付き平均 |
+| mode `both` | 両方を保存し、スライスごとの \|full − patch\| の mean / max [HU] を `diff_stats.txt` に記録 |
+| 出力 PNG | `{full,patch}/<症例>/<slice>.png`（16bit、入力と同じ規約。そのまま次段の学習データになる）、`{full,patch}_R/`（残差、0 HU = 32768） |
+| 出力 DICOM | `{full,patch}_dicom/<症例>/<slice>.dcm`。元 DICOM のヘッダを継承し画素だけ置換。HU → 格納値は `infer.yaml` の `dicom.rescale_slope / rescale_intercept`（参照 DICOM のタグと全枚照合、違えばエラー）。SOP / Series UID は新規、SeriesDescription に由来を記す |
+| 解決済み設定 | 出力先に `infer.yaml` を保存 |
 
-### 導入される外部スキル
+BatchNorm は eval（running 統計）。checkpoint 時のフル画像と同じ経路なので、同じ重み・同じスライスなら結果は一致する。
 
-| 提供元 | スキル | 用途 |
-|---|---|---|
-| mattpocock/skills | `research` / `grilling` / `grill-me` | 一次情報の深掘り調査／計画の詰め（グリル） |
-| K-Dense-AI/scientific-agent-skills | `paper-lookup` | 文献検索（arXiv・PubMed・Semantic Scholar等11 API横断） |
-| 〃 | `literature-review` | 系統的文献レビュー |
-| 〃 | `citation-management` | 引用検証・DOI→BibTeX |
-| 〃 | `scientific-writing` | 引用追跡つき科学文書執筆 |
-| 〃 | `peer-review` | 査読シミュレーション |
-| lllllllama/rigorpilot-skills | `ai-research-reproduction` | 論文リポジトリの再現実装 |
-| 〃 | `env-and-assets-bootstrap` | 環境・データセット・重みの準備 |
-| 〃 | `safe-debug` | 診断してから直す安全デバッグ |
-
-実験ループ本体（RigorPilotのrun-train等）は自作のexperiment-cycleと競合するため意図的に導入しない。wandb/skillsはTensorBoard運用継続のため見送り。
-
-## 日常の使い方（研究サイクル）
+## 9. リポジトリ構成
 
 ```
-新テーマ・頭打ち時
-  「この問題の手法を調べて」 → sota-survey が docs/surveys/ に調査ノート
-        ↓ 推薦を採用
-  「この手法で実験して」 → experiment-cycle が事前登録 → 実行 → docs/experiments/ に記録
-        ↓ 結果をもとに
-  Tune継続（そのまま次の実験へ） or 頭打ち → 6ゲート判定 → あなたが承認したらPivot
-        ↓ 節目で
-  「今月の進捗まとめて」 → research-report が docs/reports/ に報告書
-```
-
-閾値などのプロジェクト固有調整は `docs/research-config.md` を直接編集する。
-
-## 共通規約（全スキル共通）
-
-- **実験ID**：`EXP-<YYYYMMDD>-<seq>`（例：EXP-20260819-01）
-- **記録パス**：`docs/{surveys, experiments, decisions, reports}/` に固定
-- **言語**：検索・論文読解は英語／証拠引用は英語原文のまま／記録・報告・要約は日本語（専門用語は英語のまま）
-- **科学的規律**：ベースライン先行、成功基準の事前固定、ネガティブ結果も記録、確定記録は追記訂正のみ、SOTA主張には出典＋確認日
-
-## 既知の問題（初回使用前に確認）
-
-1. **【要修正】シンボリックリンク経由の配布元検出**：現状のresearch-setup手順1は、シンボリックリンク経由で呼ばれるとbase directoryが論理パスで渡されるため配布元の特定に失敗する（実測確認済み）。修正は手順1に「シンボリックリンクの場合は `realpath` で実体パスに解決してから親を辿る」の1文を追加するだけ。**修正が入るまでは、手順1で止まったらClaudeに「realpathで解決して」と伝えれば先へ進める**
-2. `research-config.md` の「チューニングのタイムボックス」「データセット規約」はどのスキルもまだ読まない（前者は実験ごとの事前登録が実質カバー、後者は人間向けメモ）
-3. 体裁の細部（括弧種の不統一等）が数件残っている。詳細はリポジトリ内 `.superpowers/sdd/2026-08-19-research-skills/progress.md` のparked項目を参照
-
-## リポジトリ構成
-
-```
-research-skills/
-├── README.md                  # 本ファイル
+SpicaV5/
+├── start.sh                 起動スクリプト（ホスト）。ヘッダーが取扱説明
+├── train_stage1.sh          学習の入口（コンテナ内）
+├── infer_stage1.sh          推論の入口（コンテナ内。WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR）
+├── configs/machines.yaml    マシン定義（Stage 共通）
+├── docker/                  Dockerfile / compose / requirements（gen30, gen50, cpu）
+├── stage1/                  junyanz 本家の vendoring + Stage 1 の実装
+│   ├── UPSTREAM.md          本家からの変更履歴（全部）
+│   ├── configs/             schema.py, train.yaml, mode.yaml, infer.yaml
+│   ├── models/              fidelity_gan_model.py, wavelet_generator.py, paper_discriminator.py（+ 本家）
+│   ├── data/ct_dataset.py   16bit 1ch PNG の読み込み・正規化・サンプリング
+│   ├── util/                monitor.py（表示）, run_paths.py（run レイアウト）, dicom_io.py（DICOM 出力）
+│   ├── run_train.py / train.py / run_infer.py / inference_dir.py / mark_best.py
+│   └── checkpoints/         run の出力（git 管理外）
 ├── docs/
-│   ├── spec.md                # 確定仕様（grillingセッションで合意した設計の全容）
-│   └── superpowers/plans/     # 実装計画
-└── skills/
-    ├── sota-survey/           # SKILL.md + templates/survey_note.md
-    ├── experiment-cycle/      # SKILL.md + templates/{exp_log,decision_note}.md
-    ├── research-report/       # SKILL.md + templates/report.md
-    └── research-setup/        # SKILL.md + templates/{research-config,claude-md-snippet}.md
+│   ├── reference/           要件（research_requirements.md）、論文照合チェックリスト、実装レビュー、junyanz 監査
+│   ├── decisions/           方針転換の記録
+│   ├── plans/               実装仕様・各計画書（設定、Docker、データローダ、表示、推論）
+│   ├── surveys/             手法調査
+│   ├── experiments/         実験ログ（EXP-<YYYYMMDD>-<seq>.md、事前登録つき）
+│   └── research-config.md   閾値などの上書き設定
+└── CLAUDE.md                研究運用ルールと現在の方針
 ```
+
+## 10. 関連プロジェクト
+
+- **SpicaV3**: 前世代（F-LSeSim ベース）。DICOM → PNG の前処理スクリプト（`create_dataset/convert_pcd.py`, `convert_eid.py`）と評価指標の設計（SENTINEL-CARE）はこちらを参照する。
+- **SpicaV2**: SR-CycleGAN。DICOM 書き出しの元になった実装がある。
