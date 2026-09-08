@@ -13,7 +13,7 @@
   python run_train.py --machine PC1 --train configs/train.yaml --mode configs/mode.yaml --machines ../configs/machines.yaml -- --n_epochs 50
 再開:
   python run_train.py --machine PC1 ... --resume 2026_0905_1234 [--resume_tag latest|best|30] -- [--n_epochs 400] [--lr 0.0001]
-  → run の**最新の** launch（launch_resume_*.yaml があればそれ、無ければ launch.yaml）の実効設定を基準に、今回の上書きを反映し、
+  → **選んだ checkpoint の state.pth に入っている実効設定**（その重みを作った設定。古い run は最新の launch）を基準に、今回の上書きを反映し、
     重みディレクトリ（<run>/latest | best | weights/epoch_NNN）の state.pth（optimizer / RNG / 進捗）と net_G/D.pth を復元して同じディレクトリに続きを保存する。
     設定は launch_resume_<日時秒>.yaml に保存され、次の再開・推論の基準になる
 """
@@ -106,10 +106,22 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
     probe = (dict(train_yaml), dict(mode_yaml), dict(machine_yaml))
     apply_overrides(overrides, sections(*probe))
     run_dir = Path(probe[2]["checkpoints_dir"]) / a.resume
-    base = latest_launch(run_dir)
-    if not base.is_file():
-        raise ConfigError(f"再開する run が見つかりません: {run_dir / LAUNCH_FILE}")
-    saved = load_yaml(base)
+    if not run_dir.is_dir():
+        raise ConfigError(f"再開する run が見つかりません: {run_dir}")
+    state_path = ckpt_path(run_dir, a.resume_tag, "state.pth")
+    if not state_path.is_file():
+        raise ConfigError(f"再開用 state がありません: {state_path}（保存済み tag: {saved_tags(run_dir)}）")
+    st = torch.load(state_path, map_location="cpu", weights_only=True)
+    # 再開の基準は**選んだ checkpoint の state.pth に入っている実効設定**（その重みを作った設定）。失敗した起動の launch_resume_*.yaml は基準にならない（2026-09-09）。
+    # 古い run（state に config が無い）だけ最新 launch を基準にする
+    if isinstance(st.get("config"), dict) and all(k in st["config"] for k in ("train", "mode", "machine")):
+        saved, base = {k: dict(st["config"][k]) for k in ("train", "mode", "machine")}, state_path
+    else:
+        base = latest_launch(run_dir)
+        if not base.is_file():
+            raise ConfigError(f"{state_path} に設定が無く、{run_dir / LAUNCH_FILE} もありません")
+        print(f"[run_train] 注意: {state_path.name} に実効設定が無い古い run なので、最新の launch（{base.name}）を基準にする")
+        saved = load_yaml(base)
     try:
         # run 作成後に schema に追加されたキー（例: optim.seed, log.preview_bits）は run の launch に無い。今の yaml の値で補い、警告する
         for section, cur, schema in (("train", train_yaml, TRAIN), ("mode", mode_yaml, MODE), ("machine", machine_yaml, MACHINE)):
@@ -131,25 +143,21 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
     for section, cur, sv in (("train", train_yaml, train), ("mode", mode_yaml, mode), ("machine", machine_yaml, machine)):
         diff = {k: (sv.get(k), v) for k, v in cur.items() if sv.get(k) != v and k not in ("log.continue_train", "log.epoch_count")}
         if diff:
-            print(f"[run_train] 注意: 今の {section} 設定は run の実効設定と異なる（run の値を使う。変えるなら --flag で上書き）: {diff}")
+            print(f"[run_train] 注意: 今の {section} 設定は checkpoint の実効設定と異なる（checkpoint の値を使う。変えるなら --flag で上書き）: {diff}")
     applied = apply_overrides(overrides, sections(train, mode, machine))
     if any(f in applied for f in RESUME_ONLY_FLAGS):
         raise ConfigError(f"{' / '.join(RESUME_ONLY_FLAGS)} は再開の内部フラグです（run_train が決めます）")
     if Path(machine["checkpoints_dir"]) / a.resume != run_dir:
         raise ConfigError(f"再開時に checkpoints_dir を変えることはできません: {machine['checkpoints_dir']} != {run_dir.parent}")
-    state_path = ckpt_path(run_dir, a.resume_tag, "state.pth")
-    if not state_path.is_file():
-        raise ConfigError(f"再開用 state がありません: {state_path}（保存済み tag: {saved_tags(run_dir)}）")
     for kind in ("net_G.pth", "net_D.pth"):
         if not ckpt_path(run_dir, a.resume_tag, kind).is_file():
             raise ConfigError(f"再開用の重みがありません: {ckpt_path(run_dir, a.resume_tag, kind)}")
-    st = torch.load(state_path, map_location="cpu", weights_only=True)
     epoch_count = st["epoch"] + 1 if st["epoch_done"] else st["epoch"]  # epoch 末保存なら次の epoch から、途中保存ならその epoch を頭から
     train["log.continue_train"] = True
     train["log.epoch_count"] = epoch_count
     check_values(train, mode, machine)
     extra = ["--epoch", str(a.resume_tag), "--resume_state", str(state_path)]
-    print(f"[run_train] resume {a.resume} from tag '{a.resume_tag}' (base: {base.name}): saved epoch {st['epoch']} (done={st['epoch_done']}), total_iters {st['total_iters']} → epoch_count {epoch_count}, n_epochs {train['optim.n_epochs']}")
+    print(f"[run_train] resume {a.resume} from tag '{a.resume_tag}' (base: {'state.pth の config' if base == state_path else base.name}): saved epoch {st['epoch']} (done={st['epoch_done']}), total_iters {st['total_iters']} → epoch_count {epoch_count}, n_epochs {train['optim.n_epochs']}")
     return a.resume, run_dir, extra, f"launch_resume_{now.strftime('%Y%m%d_%H%M%S')}.yaml", applied, base, train, mode, machine
 
 
@@ -185,6 +193,7 @@ def main():
 
     if machine["gpu_gen"] != 0:
         extra = list(extra) + ["--require_cuda"]  # F-16: GPU マシンの定義で CUDA が無ければ train.py が止める（黙って CPU に落ちない）
+    extra = list(extra) + ["--launch_path", str(out_dir / launch_name)]  # この起動の実効設定を state.pth に写すため（再開の基準。2026-09-09）
     argv = build_argv(name, train, mode, machine, extra)
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / launch_name, "w", encoding="utf-8") as f:

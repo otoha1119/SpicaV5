@@ -4,8 +4,8 @@
 arch: unet_ilumenate    # Conv3×3(zero pad)+ReLU ×2 を 3 段（128 / 256 / 512）、max pool 2 回、up-conv（ConvTranspose 2×2 s2）2 回、skip concat、BN・dropout なし、最終 Conv3×3 → 1ch
 base_ch: 128            # 論文 "128 filters at the first layer doubling at each max pooling layer"
 n_pool: 2               # 論文 "2 max pooling and 2 up-convolutional layers"
-init_type: xavier_uniform   # Keras 既定（Glorot uniform、bias 0）に合わせる | torch（PyTorch 既定）
+init_type: xavier_uniform   # 論文に記載なし。Keras 既定（Glorot uniform、bias 0）に合わせる（読み）| torch（PyTorch 既定）
 loss: mse               # 論文 Eq. 1（MSE）| l1（ablation）。正規化空間 [−1,1] で計算し、表示は HU 換算の RMSE も出す
-final_act: linear       # 論文（活性化なしの回帰）| tanh（出力を [−1,1] に縛る変種。正規化範囲 [−1400, 4096] HU がそのまま値域になる）
+final_act: linear       # 最終層の活性化。論文の図には 1ch への最終層が描かれておらず記載も無い → 回帰なので「無し」と読んだ（読み。docs/plans §4.3）| tanh（出力を [−1,1] に縛る変種）
 residual: false         # true で 出力 = 入力 + net(入力)（変種。論文は false）
 serial_batches: false   # true で sampler を index 決定的に（再現用）

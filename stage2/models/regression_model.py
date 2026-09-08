@@ -3,7 +3,7 @@
   forward   : pred = net(input)（mode.residual=true なら input + net(input)）
   loss      : mse | l1 を正規化空間 [−1,1] で計算。表示用に HU 換算（1.0 = hu_per_unit HU）の RMSE / MAE も返す
   optimizer : Adam(lr, (beta1, beta2))。lr は一定（論文に減衰の記載なし）→ scheduler は持たない
-  checkpoint: 重みディレクトリ（util/run_paths.py）に net_G.pth と state.pth（optimizer / RNG / epoch / total_iters）を**原子的に**保存
+  checkpoint: 重みディレクトリ（util/run_paths.py）に net_G.pth と state.pth（optimizer / RNG / epoch / total_iters / **保存時の実効設定 config**）を**原子的に**保存
               （<dir>.tmp に書く → 既存 <dir> を .old に → .tmp を <dir> に → .old を消す。Stage 1 の save_networks と同じ手順）
   resume    : state.pth から optimizer と RNG（python / torch / numpy）を復元し、lr / betas は今の実効値を再適用（上書きが最優先）
 """
@@ -30,8 +30,9 @@ def _to_tuple(x):
 
 
 class RegressionModel:
-    def __init__(self, train, mode, device):
+    def __init__(self, train, mode, machine, device):
         self.device = device
+        self.config = {"train": dict(train), "mode": dict(mode), "machine": dict(machine)}  # この重みに対応する実効設定（state.pth に入れる。再開の基準）
         self.residual = mode["residual"]
         self.hu_unit = hu_per_unit(train["data.hu_min"], train["data.hu_max"])
         self.net = build_net(mode).to(device)
@@ -97,6 +98,7 @@ class RegressionModel:
             "epoch": int(self.cur_epoch), "epoch_done": bool(self.epoch_done), "total_iters": int(self.total_iters),
             "optimizer": self.optimizer.state_dict(),
             "lr": float(self.optimizer.param_groups[0]["lr"]),
+            "config": self.config,  # 保存時の実効設定（train / mode / machine、平坦キー）。resume はこれを基準にする（失敗した起動の launch を引き継がない。レビュー指摘 2026-09-09）
             "rng": {
                 "python": random.getstate(),
                 "torch": torch.get_rng_state(),

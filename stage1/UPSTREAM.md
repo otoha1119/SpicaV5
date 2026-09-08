@@ -225,3 +225,8 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 同日: `stage2_checkpoints_dir` も同様に追加（Stage 2 の学習フェーズ）
 - 同日: `stage2_tb_port` を追加。`../start.sh` は stage2_tb_port も読んで `TB_PORT_STAGE2` を export（compose が両ポートを公開する）、`tb_running` / `tb_kill` は自分のポート（tb_port）の TensorBoard だけを対象に。`run_train.py start_tensorboard` も同じポートのプロセスだけ止める。`../docker/compose.*.yaml` に Stage 2 のポート公開を追加（ポート設定の変更は次の up でコンテナが作り直されるので学習中に up しない）
 - 同日: `../start.sh` の起動規則を改訂 — コンテナ起動済みなら**どのアクションでも** up を呼ばず exec だけ（学習 / 再開も）、build は起動済みなら拒否、ポート未公開なら注意。中で動く処理（Stage 1 / 2 の学習）を止めないため（ユーザー要望）
+
+### 再開の基準・コンテナ照合・TensorBoard 切替（2026-09-09、Stage 2 レビューの指摘を Stage 1 にも適用）
+- `models/fidelity_gan_model.py`: `--launch_path` を追加し、`state.pth` に保存時の実効設定（launch の train / mode / machine）を `config` として入れる
+- `run_train.py`: 再開の基準を「最新の launch_resume_*.yaml」から「選んだ checkpoint の state.pth の config」に変更（失敗した起動の設定を次回に引き継がない）。config の無い古い run は従来どおり最新 launch。argv に `--launch_path` を付ける
+- `../start.sh`: 起動済みコンテナのマシン名（SPICA_MACHINE）・イメージ・データマウントを今回の指定と照合し、違えば止める。全 exec に `-e SPICA_MACHINE` を渡す。`tb` は「同じポートで全 run の logdir」が動いているときだけ起動済み扱いにし、run 単位のものは止めて起動し直す

@@ -45,6 +45,9 @@ def check_split_on_disk(train, machine):
         missing = [c for c in cases if c not in on_in or c not in on_pcd]
         if missing:
             raise RuntimeError(f"{kind} の症例が入力（{machine['eidlike1024_dir']}）か教師（{machine['pcd1024_dir']}）にありません: {missing}")
+    fixed_case = Path(train["log.full_slice"]).parts[0]  # 固定スライスの症例は train ∪ val に限る（test を毎 epoch 眺めて選ぶと隔離の意味が無くなる。レビュー指摘 2026-09-09）
+    if fixed_case not in set(train_cases) | set(val_cases):
+        raise RuntimeError(f"train.yaml log.full_slice の症例 {fixed_case} が train_cases / val_cases に含まれていません（test の症例は固定プレビューに使えない）: {train['log.full_slice']}")
     for root in (machine["eidlike1024_dir"], machine["pcd1024_dir"]):  # 固定スライス（毎 epoch 書き出す）も起動前に検査する
         if not (Path(root) / train["log.full_slice"]).is_file():
             raise RuntimeError(f"train.yaml log.full_slice がありません: {Path(root) / train['log.full_slice']}（eidlike1024_dir / pcd1024_dir からの相対パス）")

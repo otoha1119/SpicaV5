@@ -39,6 +39,7 @@ import random
 import shutil
 
 import numpy as np
+import yaml
 import torch
 import torch.distributed as dist
 from .base_model import BaseModel
@@ -94,6 +95,7 @@ class FidelityGANModel(BaseModel):
             parser.add_argument("--require_cuda", action="store_true", help="CUDA が使えなければ止める（F-16。run_train が machines.yaml の gpu_gen ≠ 0 のとき付ける）")
             # 再開用（run_train.py --resume が付ける。設定値ではなく起動器の内部フラグなので schema には無い）
             parser.add_argument("--resume_state", type=str, default=None, help="重みディレクトリの state.pth のパス。--continue_train と併用。optimizer / scheduler / RNG / iteration 数を復元する")
+            parser.add_argument("--launch_path", type=str, default=None, help="この起動の実効設定（launch.yaml）。state.pth に train / mode / machine を写し、再開の基準にする（run_train.py が付ける）")
         return parser
 
     def __init__(self, opt):
@@ -208,6 +210,15 @@ class FidelityGANModel(BaseModel):
         if old.exists():
             shutil.rmtree(old)
 
+    def _launch_config(self):
+        """--launch_path（run_train.py が書いた実効設定）の train / mode / machine を返す。無ければ None（手動起動・scratch）。"""
+        path = getattr(self.opt, "launch_path", None)
+        if not path:
+            return None
+        with open(path, encoding="utf-8") as f:
+            launch = yaml.safe_load(f)
+        return {k: dict(launch[k]) for k in ("train", "mode", "machine")}
+
     def _resume_state(self):
         """state.pth の中身（optimizer / RNG / 進捗）。"""
         np_state = np.random.get_state()  # ('MT19937', ndarray(624, uint32), pos, has_gauss, cached_gaussian)
@@ -220,6 +231,7 @@ class FidelityGANModel(BaseModel):
             # scheduler の state は保存しない: junyanz の LambdaLR は --epoch_count を起点に 0 から数える設計なので、
             # 復元すると二重計上になる（lr が 0 や負になる）。再開時は optimizer state を読んだ後に scheduler を作り直す
             "lr": float(self.optimizers[0].param_groups[0]["lr"]),
+            "config": self._launch_config(),  # 保存時の実効設定（train / mode / machine）。resume はこれを基準にする（失敗した起動の launch を引き継がない。2026-09-09）
             "rng": {
                 "python": random.getstate(),
                 "torch": torch.get_rng_state(),

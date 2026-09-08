@@ -11,8 +11,9 @@
   python run_train.py --machine PC1 --train configs/train.yaml --mode configs/mode.yaml --machines ../configs/machines.yaml -- --n_epochs 50
 再開:
   python run_train.py --machine PC1 ... --resume 2026_0908_2130 [--resume_tag latest|best|30] -- [--n_epochs 200]
-  → run の最新の launch（launch_resume_*.yaml があればそれ）の実効設定を基準に、今回の上書きを反映し、重みディレクトリの
-    state.pth（optimizer / RNG / 進捗）と net_G.pth を復元して同じディレクトリに続きを保存する。設定は launch_resume_<日時秒>.yaml に保存される
+  → **選んだ checkpoint の state.pth に入っている実効設定**（その重みを作った設定）を基準に、今回の上書きを反映し、state.pth（optimizer / RNG / 進捗）と
+    net_G.pth を復元して同じディレクトリに続きを保存する。設定は launch_resume_<日時秒>.yaml に保存される（記録用。次の再開の基準は checkpoint 側）。
+    重みの形が実効設定と合わなければ launch を書く前に止める（レビュー指摘 2026-09-09: 失敗した起動の設定を次回に引き継がない）
 """
 
 import argparse
@@ -90,16 +91,44 @@ def prepare_new(train, mode, machine, overrides, now):
     return name, run_dir, 1, None, LAUNCH_FILE, applied, None, train, mode, machine
 
 
+def check_weights_match(weight_path, mode):
+    """net_G.pth の各テンソルの形が、実効 mode で組んだネットと一致するか（--base_ch 等を変えた再開をここで止める。launch を書く前）。"""
+    import torch
+    from models.unet import build_net
+
+    saved = torch.load(weight_path, map_location="cpu", weights_only=True)
+    expect = build_net(mode).state_dict()
+    bad = [f"{k}: 重み {tuple(saved[k].shape) if k in saved else '無し'} ≠ 設定 {tuple(v.shape)}" for k, v in expect.items() if k not in saved or tuple(saved[k].shape) != tuple(v.shape)]
+    extra = [k for k in saved if k not in expect]
+    if bad or extra:
+        raise ConfigError(f"{weight_path} の形が実効設定（arch / base_ch / n_pool）と合いません: " + "; ".join(bad[:3] + [f"余分 {k}" for k in extra[:3]]) + ("" if len(bad) + len(extra) <= 3 else " ..."))
+
+
 def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
-    import torch  # state.pth の進捗を読む
+    """再開の基準は**選んだ checkpoint の state.pth に入っている実効設定**（その重みを作った設定）。失敗した起動の launch_resume_*.yaml は基準にならない。
+    古い run（state に config が無い）だけ最新 launch を基準にする。"""
+    import torch  # state.pth を読む
 
     probe = (dict(train_yaml), dict(mode_yaml), dict(machine_yaml))
     apply_overrides(overrides, sections(*probe))
     run_dir = Path(probe[2]["stage2_checkpoints_dir"]) / a.resume
-    base = latest_launch(run_dir)
-    if not base.is_file():
-        raise ConfigError(f"再開する run が見つかりません: {run_dir / LAUNCH_FILE}")
-    saved = load_yaml(base)
+    if not run_dir.is_dir():
+        raise ConfigError(f"再開する run が見つかりません: {run_dir}")
+    state_path = ckpt_path(run_dir, a.resume_tag, "state.pth")
+    weight_path = ckpt_path(run_dir, a.resume_tag, "net_G.pth")
+    if not state_path.is_file():
+        raise ConfigError(f"再開用 state がありません: {state_path}（保存済み tag: {saved_tags(run_dir)}）")
+    if not weight_path.is_file():
+        raise ConfigError(f"再開用の重みがありません: {weight_path}")
+    st = torch.load(state_path, map_location="cpu", weights_only=True)
+    if isinstance(st.get("config"), dict) and all(k in st["config"] for k in ("train", "mode", "machine")):
+        saved, base = {k: dict(st["config"][k]) for k in ("train", "mode", "machine")}, state_path
+    else:
+        base = latest_launch(run_dir)
+        if not base.is_file():
+            raise ConfigError(f"{state_path} に設定が無く、{run_dir / LAUNCH_FILE} もありません")
+        print(f"[run_train] 注意: {state_path.name} に実効設定が無い古い run なので、最新の launch（{base.name}）を基準にする")
+        saved = load_yaml(base)
     try:
         for section, cur, schema in (("train", train_yaml, TRAIN), ("mode", mode_yaml, MODE), ("machine", machine_yaml, MACHINE)):
             missing = [k for k in schema if k not in saved[section]]
@@ -120,22 +149,17 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
     for section, cur, sv in (("train", train_yaml, train), ("mode", mode_yaml, mode), ("machine", machine_yaml, machine)):
         diff = {k: (sv.get(k), v) for k, v in cur.items() if sv.get(k) != v}
         if diff:
-            print(f"[run_train] 注意: 今の {section} 設定は run の実効設定と異なる（run の値を使う。変えるなら --flag で上書き）: {diff}")
+            print(f"[run_train] 注意: 今の {section} 設定は checkpoint の実効設定と異なる（checkpoint の値を使う。変えるなら --flag で上書き）: {diff}")
     applied = apply_overrides(overrides, sections(train, mode, machine))
     check_train_values(train, mode, machine)
     _check_split(train, machine)
     if Path(machine["stage2_checkpoints_dir"]) / a.resume != run_dir:
         raise ConfigError(f"再開時に stage2_checkpoints_dir を変えることはできません: {machine['stage2_checkpoints_dir']} != {run_dir.parent}")
-    state_path = ckpt_path(run_dir, a.resume_tag, "state.pth")
-    if not state_path.is_file():
-        raise ConfigError(f"再開用 state がありません: {state_path}（保存済み tag: {saved_tags(run_dir)}）")
-    if not ckpt_path(run_dir, a.resume_tag, "net_G.pth").is_file():
-        raise ConfigError(f"再開用の重みがありません: {ckpt_path(run_dir, a.resume_tag, 'net_G.pth')}")
-    st = torch.load(state_path, map_location="cpu", weights_only=True)
-    epoch_count = st["epoch"] + 1 if st["epoch_done"] else st["epoch"]  # epoch 末保存なら次の epoch から、途中保存ならその epoch を頭から
+    check_weights_match(weight_path, mode)  # launch を書く前に、重みと設定の食い違いを止める
+    epoch_count = st["epoch"] + 1 if st["epoch_done"] else st["epoch"]  # epoch 末保存なら次の epoch から、途中保存ならその epoch を頭から（残り batch だけの厳密な再開ではない）
     if epoch_count > train["optim.n_epochs"]:
         raise ConfigError(f"run は既に epoch {st['epoch']} まで終わっています（n_epochs {train['optim.n_epochs']}）。延ばすなら --n_epochs を上書き")
-    print(f"[run_train] resume {a.resume} from tag '{a.resume_tag}' (base: {base.name}): saved epoch {st['epoch']} (done={st['epoch_done']}), total_iters {st['total_iters']} → epoch_count {epoch_count}, n_epochs {train['optim.n_epochs']}")
+    print(f"[run_train] resume {a.resume} from tag '{a.resume_tag}' (base: {base.name if base != state_path else 'state.pth の config'}): saved epoch {st['epoch']} (done={st['epoch_done']}), total_iters {st['total_iters']} → epoch_count {epoch_count}, n_epochs {train['optim.n_epochs']}")
     return a.resume, run_dir, epoch_count, state_path, f"launch_resume_{now.strftime('%Y%m%d_%H%M%S')}.yaml", applied, base, train, mode, machine
 
 
