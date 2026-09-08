@@ -31,7 +31,7 @@ from util.run_paths import LAUNCH_FILE, ckpt_path, latest_launch, run_name, save
 
 
 def start_tensorboard(run_dir, port):
-    """この run の tb/ だけを logdir にして TensorBoard を起動する。前の TensorBoard（Stage 1 の run 単位や全 run 表示）は止める。ログは <run>/tensorboard.log。"""
+    """この run の tb/ だけを logdir にして TensorBoard を起動する。**同じポート（stage2_tb_port）**で動いている前の TensorBoard は止め、Stage 1 のポートのものは触らない。ログは <run>/tensorboard.log。"""
     import shutil
     import signal
     import subprocess
@@ -46,7 +46,7 @@ def start_tensorboard(run_dir, port):
                 cmd = (d / "cmdline").read_bytes()
             except OSError:
                 continue
-            if b"tensorboard" in cmd and b"--logdir" in cmd and int(d.name) != os.getpid():
+            if b"tensorboard" in cmd and b"--logdir" in cmd and (b"--port\x00" + str(port).encode() + b"\x00") in cmd and int(d.name) != os.getpid():
                 try:
                     os.kill(int(d.name), signal.SIGTERM)
                 except OSError:

@@ -38,7 +38,7 @@ RESUME_ONLY_FLAGS = ("--continue_train", "--epoch_count")  # 再開の内部状�
 
 def start_tensorboard(run_dir, port):
     """この run の tb/ だけを logdir にして TensorBoard を起動する（start.sh が SPICA_TB_PORT を渡したときだけ）。
-    前の run の TensorBoard や `bash start.sh tb`（全 run 表示）が動いていれば止める。ログは <run>/tensorboard.log。"""
+    **同じポート**で動いている前の run の TensorBoard や `bash start.sh tb`（全 run 表示）は止める。別ポート（Stage 2 の stage2_tb_port）のものは触らない（2026-09-08）。ログは <run>/tensorboard.log。"""
     import shutil
     import signal
     import subprocess
@@ -53,7 +53,7 @@ def start_tensorboard(run_dir, port):
                 cmd = (d / "cmdline").read_bytes()
             except OSError:
                 continue
-            if b"tensorboard" in cmd and b"--logdir" in cmd and int(d.name) != os.getpid():
+            if b"tensorboard" in cmd and b"--logdir" in cmd and (b"--port\x00" + str(port).encode() + b"\x00") in cmd and int(d.name) != os.getpid():
                 try:
                     os.kill(int(d.name), signal.SIGTERM)
                 except OSError:

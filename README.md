@@ -63,7 +63,7 @@ Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT�
 | `stage1/configs/train.yaml` | 学習パラメータ全部（optim / loss / network / data / log）。各行に論文の出典 |
 | `stage1/configs/mode.yaml` | アルゴリズムの切替（sampling、gan_mode、netG、netD、final_norm_act、serial_batches） |
 | `stage1/configs/infer.yaml` | 推論の方式（mode full \| patch \| both、patch の size / stride / blend / batch_size、max_slices、save_residual、DICOM の Rescale 値） |
-| `configs/machines.yaml` | マシン定義（Stage 共通）: gpu_gen（30 / 40 / 50 / 0 = CPU）、ホスト側データルート → コンテナ側マウント先、pcd_dir / eid_dir / align_meta / checkpoints_dir / num_threads / tb_port、Stage 2 用の pcd1024_dir / eidlike1024_dir（§11） |
+| `configs/machines.yaml` | マシン定義（Stage 共通）: gpu_gen（30 / 40 / 50 / 0 = CPU）、ホスト側データルート → コンテナ側マウント先、pcd_dir / eid_dir / align_meta / checkpoints_dir / num_threads / tb_port、Stage 2 用の pcd1024_dir / eidlike1024_dir / stage2_checkpoints_dir / stage2_tb_port（§11） |
 
 優先順位は **sh のコマンド引数 > yaml**。`bash start.sh --n_epochs 50` のように schema にあるフラグだけ上書きできる（無いフラグはエラー）。
 
@@ -73,8 +73,8 @@ Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT�
 
 | コマンド | 動き |
 |---|---|
-| `bash start.sh` | コンテナ起動（イメージが無ければビルド）→ 学習（その run だけの TensorBoard を起動し、ブラウザを開く） |
-| `bash start.sh build` | イメージを（再）ビルド → コンテナ起動 → torch / cuda の確認表示で終了（学習しない。本番機の初期セットアップ用） |
+| `bash start.sh` | コンテナ起動（イメージが無ければビルド。**起動済みなら up を呼ばず exec だけ**）→ 学習（その run だけの TensorBoard を起動し、ブラウザを開く） |
+| `bash start.sh build` | イメージを（再）ビルド → コンテナ起動 → torch / cuda の確認表示で終了（学習しない。本番機の初期セットアップ用。**コンテナ起動済みなら拒否**。`down` してから） |
 | `bash start.sh resume <run> [latest\|best\|<epoch>]` | その run の checkpoint から続きを学習（optimizer / RNG / 進捗を復元。run 起動時の設定を使う） |
 | `bash start.sh best <run> <epoch>` | `weights/epoch_NNN/` を `best/` にコピーして `best.txt` に記録 |
 | `bash start.sh infer [--flag ...]` | 症例丸ごと推論（§8） |
@@ -215,7 +215,7 @@ Stage 1 推論出力 <run>/infer/<重み>/<入力>/<時刻>/full/<case>/<slice>.
 | `bash start2.sh build` / `shell` / `down` | start.sh と同じ（コンテナは Stage 1 と共用） |
 | `bash start2.sh [マシン名] [--flag ...]` | **学習**。`stage2/configs/train.yaml`（数値と症例分割 `train_cases` / `val_cases` / `test_cases`）と `mode.yaml`（arch / base_ch / n_pool / init_type / loss / final_act / residual）を `stage2/configs/schema.py` で検証し、実効値を `<stage2_checkpoints_dir>/<run>/launch.yaml` に保存して `stage2/train.py` に渡す（junyanz は使わない）。run 名は `yyyy_mmdd_HHMM`。その run の `tb/` で TensorBoard を起動しブラウザを開く。上書きは schema のフラグだけ（list は `--val_cases PCD-017,PCD-018`） |
 | `bash start2.sh resume <run> [latest\|best\|<epoch>]` | 続きから学習（`net_G.pth` + `state.pth` = optimizer / RNG / 進捗を復元。run の最新 launch の実効値を使い、`--n_epochs` 等の上書き可） |
-| `bash start2.sh tb` | Stage 2 の全 run を並べた TensorBoard |
+| `bash start2.sh tb` | Stage 2 の全 run を並べた TensorBoard（`stage2_tb_port`） |
 | `bash start2.sh infer` | 未実装（別フェーズ） |
 
 - 値の規約は Stage 1 と同じ（uint16 1ch、stored = HU + 1400）。補間は float32 → 四捨五入 → clip。cv2.resize の half-pixel 規約は 512 / 1024 の再構成格子の対応と一致する（実ペアで NCC のシフト探索が (0, 0)。計画書 §2.3）
@@ -224,5 +224,6 @@ Stage 1 推論出力 <run>/infer/<重み>/<入力>/<時刻>/full/<case>/<slice>.
 - **症例分割**: `train_cases`（PCD-001〜014）/ `val_cases`（015, 016。epoch 末の指標だけ）/ `test_cases`（017〜020。**一切読まない**）。ディスク上の症例は必ずどれかのリストに入っていること（未割当は起動前にエラー）。ペアはファイル名で対応させ、症例ごとに両方にある名前だけ使う（PCD-006 / 011 / 015 の末尾差はここで吸収。枚数は `<run>/dataset_info.yaml`）
 - **監視**: tqdm バー、TensorBoard scalar（`loss/mse`、`train/rmse_HU`、`val/rmse_HU` と参照線 `val/rmse_input_HU` = 入力 − 教師、`time/*`、`train/lr`）、`loss_log.txt`。画像・preview パネルは別フェーズ
 - **run ディレクトリ**（正は `stage2/util/run_paths.py`）: `launch.yaml`（+ `launch_resume_*.yaml`）、`dataset_info.yaml`、`loss_log.txt`、`latest/` `best/` `weights/epoch_NNN/`（各 `net_G.pth` + `state.pth`、`.tmp` → rename で原子的）、`tb/`
-- Stage 2 の設定の正は `stage2/configs/schema.py`。`configs/machines.yaml` は Stage 共通で、Stage 2 は使うキー（gpu_gen / host_data_root / container_data_root / num_threads / tb_port / pcd1024_dir / eidlike1024_dir）だけ検査する。Stage 1 の schema は未知キーを拒むので、`pcd1024_dir` / `eidlike1024_dir` は `stage1/configs/schema.py` の MACHINE にも宣言してある（Stage 1 は使わない）
+- **Docker と TensorBoard の配線**: コンテナ（spicav5）・`docker/` のイメージと compose・`configs/machines.yaml` は Stage 1 と共用。`start2.sh` は `start.sh` と同じ手順（machines.yaml → compose 選択 → up / exec）。**両 sh とも、コンテナが起動済みならどのアクションでも `up` を呼ばず exec だけ行い、`build` は拒否する**（compose は設定が変わっていると `up -d` でコンテナを作り直し、中の学習を止めるため。止めるのは `down` だけ）。TensorBoard は Stage 2 専用の `stage2_tb_port`（既定 6007）で、compose が `tb_port` と両方を公開し、各 Stage は自分のポートの TensorBoard だけを起動・停止する（同じマシンで両 Stage を同時に学習しても互いを止めない）。compose の設定（ポート等）を変えても起動済みのコンテナには反映されない（ポート未公開の注意が出る）。**中の処理が終わってから `down` → 起動し直す**
+- Stage 2 の設定の正は `stage2/configs/schema.py`。`configs/machines.yaml` は Stage 共通で、Stage 2 は使うキー（gpu_gen / host_data_root / container_data_root / num_threads / tb_port / pcd1024_dir / eidlike1024_dir / stage2_checkpoints_dir / stage2_tb_port）だけ検査する。Stage 1 の schema は未知キーを拒むので、Stage 2 のキーは `stage1/configs/schema.py` の MACHINE にも宣言してある（Stage 1 は使わない）
 

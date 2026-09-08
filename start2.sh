@@ -18,7 +18,8 @@
 #   ・サブコマンド無し = 学習（train_stage2.sh → stage2/run_train.py → train.py）。設定は stage2/configs/train.yaml（数値・症例分割）と mode.yaml（方式）、
 #     保存先は machines.yaml の stage2_checkpoints_dir/<run>（run = 起動時刻 yyyy_mmdd_HHMM、同一分の衝突はエラー）。--flag で上書き（schema のフラグだけ。
 #     list は --val_cases PCD-017,PCD-018）。上書きは実効値として <run>/launch.yaml に保存され、再開はそれを読む。
-#     学習開始時に起動器がその run の tb/ だけを logdir に TensorBoard を起動し、ホストのブラウザを開く（machines.yaml の tb_port。Stage 1 と共用）。
+#     学習開始時に起動器がその run の tb/ だけを logdir に TensorBoard を起動し、ホストのブラウザを開く（machines.yaml の **stage2_tb_port**。Stage 1 の tb_port とは別ポートで、
+#     起動・停止は自分のポートのものだけ。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）。
 #   ・resume <run> [latest|best|<epoch>] : その run の checkpoint から続きを学習（optimizer / RNG / 進捗を復元。run 起動時の設定を使う。--n_epochs 等の上書き可）。
 #   ・tb : Stage 2 の全 run を並べた TensorBoard を起動してブラウザを開く（logdir = stage2_checkpoints_dir）。
 #   ・dataset : Stage 2 の学習データ作成。INPUT_DIR の <case>/<slice>.png（uint16、一辺 input_size = 512）を scale 倍（2 → 1024）に補間し、
@@ -30,7 +31,8 @@
 #   ・build   : イメージを（再）ビルドしてコンテナ起動・torch/cuda 確認まで。学習はしない（start.sh build と同じ）。
 #   ・shell / down : コンテナに入る / 停止・削除（start.sh と同じ。コンテナは Stage 1 と共用なので down は Stage 1 も止める）。
 #   ・infer : 未実装（別フェーズ）。
-#   ・dataset / shell / tb は、コンテナが起動済みなら up を呼ばず exec だけ行う（Stage 1 の学習中でも安全）。学習（train / resume）は up を呼ぶ。
+#   ・コンテナが起動済みなら、どのアクションでも up を呼ばず exec だけ行う（Stage 1 の学習中でも安全）。build は起動済みなら拒否。止めるのは down だけ。
+#     compose の設定を変えたときは、中の処理が終わってから down → 起動し直す（起動済みのままだと反映されず、注意が出る）。
 #
 # ■ 例
 #   bash start2.sh                                # 学習（sh 内の MACHINE）。TensorBoard が開く
@@ -38,7 +40,7 @@
 #   bash start2.sh --val_cases PCD-017,PCD-018 --test_cases PCD-019,PCD-020 --train_cases PCD-001,PCD-002,...   # 分割の一時変更（恒久的には train.yaml）
 #   bash start2.sh resume 2026_0908_2130          # その run の latest から再開
 #   bash start2.sh resume 2026_0908_2130 30 --n_epochs 200   # epoch 30 の checkpoint から、epoch 数を延ばして再開
-#   bash start2.sh tb                             # Stage 2 の全 run を並べた TensorBoard
+#   bash start2.sh tb                             # Stage 2 の全 run を並べた TensorBoard（stage2_tb_port）
 #   bash start2.sh dataset                        # dataset_stage2.sh の INPUT_DIR → machines.yaml の eidlike1024_dir、stage2/configs/dataset.yaml の方式
 #   bash start2.sh PC1 dataset                    # マシン名を指定（sh 内の MACHINE より優先）
 #   bash start2.sh dataset --input_dir /workspace/stage1/checkpoints/2026_0907_2222/infer/epoch_141/PCD512_v2/2026_0908_120000/full
@@ -52,7 +54,8 @@
 #   stage2/configs/mode.yaml      方式（arch / base_ch / n_pool / init_type / loss / final_act / residual / serial_batches）
 #   stage2/configs/dataset.yaml   データ作成の方式（scale / interp / input_size）
 #   stage2/configs/schema.py      Stage 2 の設定ファイルの唯一の正（必須キー・型・フラグ）
-#   configs/machines.yaml         マシン定義（Stage 共通。Stage 2 は gpu_gen / host_data_root / container_data_root / num_threads / tb_port / pcd1024_dir / eidlike1024_dir / stage2_checkpoints_dir を使う）
+#   configs/machines.yaml         マシン定義（Stage 共通。Stage 2 は gpu_gen / host_data_root / container_data_root / num_threads / pcd1024_dir / eidlike1024_dir / stage2_checkpoints_dir / stage2_tb_port を使う。
+#                                 tb_port は compose が Stage 1 のポートも公開するために読むだけ）
 #
 # ■ run ディレクトリ（正は stage2/util/run_paths.py）
 #   <stage2_checkpoints_dir>/<run>/  launch.yaml（実効設定。再開で launch_resume_*.yaml が増える）, dataset_info.yaml（症例分割とペア枚数）, loss_log.txt,
@@ -128,17 +131,17 @@ done
 [ -n "$PY" ] || { echo "[start2] python3 と pyyaml がホストに必要です (pip install pyyaml)" >&2; exit 1; }
 
 # --- machines.yaml から gpu_gen / host_data_root / container_data_root / tb_port を取る（欠落はエラー） ---
-IFS=$'\t' read -r GPU_GEN HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT CHECKPOINTS_DIR < <("$PY" - "$MACHINES" "$MACHINE" <<'PYEOF'
+IFS=$'\t' read -r GPU_GEN HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT CHECKPOINTS_DIR TB_PORT_STAGE2 < <("$PY" - "$MACHINES" "$MACHINE" <<'PYEOF'
 import sys, yaml
 path, name = sys.argv[1], sys.argv[2]
 m = yaml.safe_load(open(path, encoding="utf-8"))
 if not isinstance(m, dict) or name not in m:
     sys.exit(f"[start2] {path} にエントリ '{name}' がありません。候補: {list(m) if isinstance(m, dict) else '(不正な形式)'}  → start2.sh の MACHINE かコマンド引数のマシン名を直してください")
 e = m[name]
-missing = [k for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "stage2_checkpoints_dir") if k not in e]
+missing = [k for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "stage2_checkpoints_dir", "stage2_tb_port") if k not in e]
 if missing:
     sys.exit(f"[start2] machines.yaml の '{name}' にキーがありません: {missing}")
-print("\t".join(str(e[k]) for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "stage2_checkpoints_dir")))
+print("\t".join(str(e[k]) for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "stage2_checkpoints_dir", "stage2_tb_port")))  # tb_port は compose が Stage 1 のポートも公開するため
 PYEOF
 )
 
@@ -158,7 +161,7 @@ case "$GPU_GEN" in
   *) echo "[start2] gpu_gen=$GPU_GEN は未対応 (30 / 40 / 50 / 0)" >&2; exit 1 ;;
 esac
 COMPOSE=("docker" "compose" "-f" "$ROOT/docker/compose.$GEN.yaml" "-p" "spicav5")
-export HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT SPICA_MACHINE="$MACHINE"
+export HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT TB_PORT_STAGE2 SPICA_MACHINE="$MACHINE"
 echo "[start2] machine=$MACHINE gpu_gen=$GPU_GEN -> $GEN | mount $HOST_DATA_ROOT -> $CONTAINER_DATA_ROOT | action=$ACTION ${BUILD:+(rebuild)}${RESUME:+ resume=$RESUME tag=$RESUME_TAG}"
 
 if [ "$ACTION" = down ]; then
@@ -166,20 +169,24 @@ if [ "$ACTION" = down ]; then
   exit 0
 fi
 
-# 起動。dataset / shell / tb はコンテナが起動済みなら up を呼ばず exec だけ行う（Stage 1 の学習中に compose がコンテナを作り直さないように）
+# 起動の規則（start.sh と同じ。コンテナは Stage 1 / Stage 2 で共用なので、中で動いている処理を止めないことを最優先にする）
+#   ・コンテナ spicav5 が起動済みなら、**どのアクションでも up を呼ばず exec だけ行う**。compose は設定が変わっていると up -d でコンテナを作り直し、中の学習を殺すため
+#   ・build は起動済みなら拒否する。コンテナを止めるのは down だけ
 container_running() { [ "$(docker inspect -f '{{.State.Running}}' spicav5 2>/dev/null)" = "true" ]; }
-case "$ACTION" in
-  dataset|shell|tb)
-    if container_running; then
-      echo "[start2] コンテナ spicav5 は起動済み（Stage 1 の学習中なら触らない）。up は呼ばず exec だけ行う"
-    else
-      "${COMPOSE[@]}" up -d
-      "${COMPOSE[@]}" exec -T spicav5 python -c "import torch; print('[start2] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())"
-    fi ;;
-  *)
-    "${COMPOSE[@]}" up -d $BUILD
-    "${COMPOSE[@]}" exec -T spicav5 python -c "import torch; print('[start2] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())" ;;
-esac
+port_published() { [ -n "$(docker port spicav5 "$1" 2>/dev/null)" ]; }
+if container_running; then
+  if [ "$ACTION" = build ]; then
+    echo "[start2] コンテナ spicav5 は起動済みです（Stage 1 / Stage 2 の学習中かもしれません）。build はコンテナを作り直すので、中の処理が終わってから bash start2.sh down → bash start2.sh build の順で実行してください" >&2
+    exit 2
+  fi
+  echo "[start2] コンテナ spicav5 は起動済み（中の処理は触らない）。up は呼ばず exec だけ行う"
+  if ! port_published "$TB_PORT_STAGE2"; then
+    echo "[start2] 注意: 起動中のコンテナはポート $TB_PORT_STAGE2 を公開していません（compose の設定を変えた後に down していない）。処理は動くが TensorBoard はホストから見えない。中の処理が終わってから bash start2.sh down → 起動し直してください"
+  fi
+else
+  "${COMPOSE[@]}" up -d $BUILD
+  "${COMPOSE[@]}" exec -T spicav5 python -c "import torch; print('[start2] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())"
+fi
 if [ "$ACTION" = build ]; then
   echo "[start2] ビルド完了。コンテナ spicav5 は起動したまま（学習: bash start2.sh / データ作成: bash start2.sh dataset / 停止: bash start2.sh down）"
   exit 0
@@ -195,17 +202,14 @@ open_browser() {
     *) return 1 ;;
   esac
 }
-tb_running() {
-  "${COMPOSE[@]}" exec -T spicav5 bash -c 'for p in /proc/[0-9]*; do [ "$p" = "/proc/$$" ] && continue; tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "tensorboard --logdir" && exit 0; done; exit 1'
+tb_kill() {  # コンテナ内の **Stage 2 のポート（stage2_tb_port）** の TensorBoard だけ止める（Stage 1 の tb_port のものは触らない）
+  "${COMPOSE[@]}" exec -T spicav5 bash -c 'for p in /proc/[0-9]*; do [ "$p" = "/proc/$$" ] && continue; tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "tensorboard --logdir.* --port '"$TB_PORT_STAGE2"' " && kill "${p#/proc/}" 2>/dev/null; done; exit 0'
 }
-tb_kill() {
-  "${COMPOSE[@]}" exec -T spicav5 bash -c 'for p in /proc/[0-9]*; do [ "$p" = "/proc/$$" ] && continue; tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "tensorboard --logdir" && kill "${p#/proc/}" 2>/dev/null; done; exit 0'
-}
-start_tensorboard() {  # 全 run 表示（logdir = stage2_checkpoints_dir）
-  local url="http://localhost:$TB_PORT"
+start_tensorboard() {  # 全 run 表示（logdir = stage2_checkpoints_dir、port = stage2_tb_port）
+  local url="http://localhost:$TB_PORT_STAGE2"
   tb_kill
-  echo "[start2] TensorBoard を起動: logdir=$CHECKPOINTS_DIR port=${TB_PORT}（ログ: /workspace/tb_server.log）"
-  "${COMPOSE[@]}" exec -d spicav5 bash -c "tensorboard --logdir '$CHECKPOINTS_DIR' --port '$TB_PORT' --bind_all > /workspace/tb_server.log 2>&1"
+  echo "[start2] TensorBoard を起動: logdir=$CHECKPOINTS_DIR port=${TB_PORT_STAGE2}（ログ: /workspace/tb_server_stage2.log）"
+  "${COMPOSE[@]}" exec -d spicav5 bash -c "tensorboard --logdir '$CHECKPOINTS_DIR' --port '$TB_PORT_STAGE2' --bind_all > /workspace/tb_server_stage2.log 2>&1"
   if command -v curl >/dev/null 2>&1; then
     for _ in $(seq 1 20); do curl -s -o /dev/null "$url" && break; sleep 1; done
   else
@@ -215,7 +219,7 @@ start_tensorboard() {  # 全 run 表示（logdir = stage2_checkpoints_dir）
   open_browser "$url" || echo "[start2] ブラウザを自動で開けませんでした。$url を手で開いてください"
 }
 open_when_ready() {  # バックグラウンド: 起動器が起動する run 単位の TensorBoard の応答を待ってブラウザを開く（最大 120 秒）
-  local url="http://localhost:$TB_PORT"
+  local url="http://localhost:$TB_PORT_STAGE2"
   for _ in $(seq 1 120); do
     if curl -s -o /dev/null "$url"; then
       echo "[start2] TensorBoard: $url（この run だけ。全 run は bash start2.sh tb）"
@@ -235,8 +239,8 @@ case "$ACTION" in
     tb_kill
     if command -v curl >/dev/null 2>&1; then open_when_ready & fi
     if [ -n "$RESUME" ]; then
-      exec_it -e SPICA_TB_PORT="$TB_PORT" -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash train_stage2.sh "$@"
+      exec_it -e SPICA_TB_PORT="$TB_PORT_STAGE2" -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash train_stage2.sh "$@"
     else
-      exec_it -e SPICA_TB_PORT="$TB_PORT" spicav5 bash train_stage2.sh "$@"
+      exec_it -e SPICA_TB_PORT="$TB_PORT_STAGE2" spicav5 bash train_stage2.sh "$@"
     fi ;;
 esac

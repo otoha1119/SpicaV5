@@ -18,6 +18,7 @@ PC1:                                   # 研究室 Windows 機
   checkpoints_dir: /workspace/stage1/checkpoints   # この下に run（yyyy_mmdd_HHMM）。レイアウトは stage1/util/run_paths.py
   num_threads: 8
   tb_port: 6006            
+  stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
   
 PC2:                                   # 研究室 Windows 機
   gpu_gen: 30                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
@@ -33,6 +34,7 @@ PC2:                                   # 研究室 Windows 機
   checkpoints_dir: /workspace/stage1/checkpoints   # この下に run（yyyy_mmdd_HHMM）。レイアウトは stage1/util/run_paths.py
   num_threads: 8
   tb_port: 6006            # TensorBoard（ホスト:コンテナ 同番号で公開）
+  stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
 
 mac:                                   # 開発機（Docker、CPU）
   gpu_gen: 0
@@ -48,3 +50,4 @@ mac:                                   # 開発機（Docker、CPU）
   checkpoints_dir: /workspace/stage1/checkpoints
   num_threads: 2
   tb_port: 6006
+  stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）

@@ -40,3 +40,4 @@ docs
 
 # TensorBoard のサーバログ（start.sh がコンテナ内 /workspace に書く）
 /tb_server.log
+/tb_server_stage2.log

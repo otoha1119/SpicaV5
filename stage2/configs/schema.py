@@ -8,7 +8,7 @@
 
 machines.yaml は Stage 共通ファイルなので、Stage 2 は「自分が使うキー」（MACHINE）の存在と型だけ検査し、Stage 1 だけのキー
 （pcd_dir / eid_dir / align_meta / checkpoints_dir ...）は無視する（validate_shared）。Stage 1 側は未知キーを拒むので、Stage 2 専用のキー
-（pcd1024_dir / eidlike1024_dir / stage2_checkpoints_dir）は stage1/configs/schema.py の MACHINE にも flag None で宣言してある。キーを足すときは両方に書く。
+（pcd1024_dir / eidlike1024_dir / stage2_checkpoints_dir / stage2_tb_port）は stage1/configs/schema.py の MACHINE にも flag None で宣言してある。キーを足すときは両方に書く。
 
 Stage 2 の train.py は junyanz ではなく自前なので、起動器（run_train.py）は argv ではなく **解決済みの launch.yaml を train.py に渡す**。
 flag は「sh からの上書き」の名前としてだけ使う（Stage 1 の flag = train.py の引数名、とは役割が違う）。
@@ -83,7 +83,7 @@ MACHINE = {
     "host_data_root":        Key(str, None,                      "Docker 起動時にマウントするホスト側のデータルート（start2.sh が使う）"),
     "container_data_root":   Key(str, None,                      "マウント先（コンテナ内）。dataset の出力先はこの配下に限る"),
     "num_threads":           Key(int, "--num_threads",           "make_dataset.py の worker 数 / 学習の DataLoader worker 数（0 で逐次・メインプロセス）"),
-    "tb_port":               Key(int, None,                      "TensorBoard のポート（start2.sh が compose に渡す。Stage 1 と共用）"),
+    "stage2_tb_port":        Key(int, None,                      "Stage 2 の TensorBoard のポート（Stage 1 の tb_port とは別。start2.sh が compose に両方渡し、Stage 2 はこちらで起動する）"),
     "pcd1024_dir":           Key(str, "--pcd1024_dir",           "Stage 2 の教師 PCD1024（<case>/<slice>.png、1ch uint16、512 と同じ命名）"),
     "eidlike1024_dir":       Key(str, "--eidlike1024_dir",       "Stage 2 の学習入力。bash start2.sh dataset の出力先（EID-like512 を ×2 補間）で、学習はここを読む。container_data_root 配下"),
     "stage2_checkpoints_dir": Key(str, "--stage2_checkpoints_dir", "Stage 2 の run（yyyy_mmdd_HHMM）の保存先ルート。レイアウトは stage2/util/run_paths.py"),
@@ -260,7 +260,7 @@ def _problems_to_error(where, problems):
 def _check_machine(machine, P):
     if machine["gpu_gen"] not in GPU_GENS: P.append(f"gpu_gen は {GPU_GENS}")
     if machine["num_threads"] < 0: P.append("num_threads ≥ 0")
-    if not (1 <= machine["tb_port"] <= 65535): P.append("tb_port は 1..65535")
+    if not (1 <= machine["stage2_tb_port"] <= 65535): P.append("stage2_tb_port は 1..65535")
 
 
 def check_dataset_values(dataset, machine):

@@ -223,3 +223,5 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 ### Stage 2 用キー（2026-09-08）
 - `configs/schema.py`: `MACHINE` に `pcd1024_dir` / `eidlike1024_dir`（flag None、Stage 1 は使わない）を追加。`../configs/machines.yaml` は Stage 共通で Stage 2（`stage2/`、`start2.sh`）がこの 2 キーを読むため、未知キーで Stage 1 の検証が落ちないように宣言だけ置く。旧 run の resume は既存の「run 作成後に追加されたキーは今の yaml の値で補う」処理で通る
 - 同日: `stage2_checkpoints_dir` も同様に追加（Stage 2 の学習フェーズ）
+- 同日: `stage2_tb_port` を追加。`../start.sh` は stage2_tb_port も読んで `TB_PORT_STAGE2` を export（compose が両ポートを公開する）、`tb_running` / `tb_kill` は自分のポート（tb_port）の TensorBoard だけを対象に。`run_train.py start_tensorboard` も同じポートのプロセスだけ止める。`../docker/compose.*.yaml` に Stage 2 のポート公開を追加（ポート設定の変更は次の up でコンテナが作り直されるので学習中に up しない）
+- 同日: `../start.sh` の起動規則を改訂 — コンテナ起動済みなら**どのアクションでも** up を呼ばず exec だけ（学習 / 再開も）、build は起動済みなら拒否、ポート未公開なら注意。中で動く処理（Stage 1 / 2 の学習）を止めないため（ユーザー要望）

@@ -95,6 +95,7 @@ MACHINE = {
     "pcd1024_dir":         Key(str, None,                "Stage 2 の教師 PCD1024。Stage 1 は使わない"),
     "eidlike1024_dir":     Key(str, None,                "Stage 2 の学習入力（bash start2.sh dataset の出力先）。Stage 1 は使わない"),
     "stage2_checkpoints_dir": Key(str, None,           "Stage 2 の run の保存先ルート。Stage 1 は使わない"),
+    "stage2_tb_port":      Key(int, None,                "Stage 2 の TensorBoard のポート（compose が両方公開するので start.sh も読む）。Stage 1 の TensorBoard は tb_port"),
 }
 
 # ---------------------------------------------------------------------------
