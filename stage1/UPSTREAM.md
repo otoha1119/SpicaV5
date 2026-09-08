@@ -218,3 +218,4 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 問題: `run_infer.py` / `run_crop.py` が `diff_range_hu`（crop は display_hu_* / preview_bits も）を run の launch.yaml から取っていたため、200 / 1600 の時代に起動した run ではカラー範囲 ±200・表示 0〜3000 のまま出ていた
 - 修正: 表示は重みに紐づく値ではないので、**現在の `configs/train.yaml` の log**（`--train`、TRAIN schema で検証）から取る。`run_infer.display_argv`（共通）。G の構成と HU 正規化は従来どおり launch.yaml。`infer_stage1.sh` / `crop_stage1.sh` に `--train configs/train.yaml` を追加。出力の infer.yaml / crop.yaml に `display` として記録
 - 学習中の TB / preview は run の launch の値（古い run を resume するときに今の値にしたければ `bash start.sh resume <run> --diff_range_hu 300 --display_hu_max 2100`）
+- `train.py`: `save_latest_freq` ごとの "saving the latest model" の表示を消した（保存は従来どおり。2026-09-08 ユーザー指示）

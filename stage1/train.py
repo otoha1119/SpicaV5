@@ -88,8 +88,7 @@ if __name__ == "__main__":
             if step % opt.image_freq == 0:
                 monitor.log_images(model, total_iters)
 
-            if total_iters % opt.save_latest_freq == 0:  # cache our latest model every <save_latest_freq> iterations（画像枚数）
-                monitor.write(f"saving the latest model (epoch {epoch}, total_iters {total_iters})")
+            if total_iters % opt.save_latest_freq == 0:  # cache our latest model every <save_latest_freq> iterations（画像枚数）。表示はしない（2026-09-08 ユーザー指示。保存はする）
                 save_suffix = f"iter_{total_iters}" if opt.save_by_iter else "latest"
                 model.save_networks(save_suffix)
 
