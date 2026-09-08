@@ -13,6 +13,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+INTERP_FLAGS = {"nearest": cv2.INTER_NEAREST, "bilinear": cv2.INTER_LINEAR, "bicubic": cv2.INTER_CUBIC, "area": cv2.INTER_AREA, "lanczos": cv2.INTER_LANCZOS4}
+
 
 def read_stored(path):
     """16bit 1ch PNG を uint16 (H, W) で読む。1ch・uint16 以外は受け付けない。"""
@@ -40,6 +42,21 @@ def denormalize(norm, offset, hu_min, hu_max):
     hu = n01 * (hu_max - hu_min) + hu_min
     stored = hu + offset
     return np.clip(np.round(stored), 0, 65535).astype(np.uint16)
+
+
+def upsample(stored, scale, interp):
+    """uint16 (H, W) → uint16 (H·scale, W·scale)。float32 で cv2.resize（half-pixel 規約）→ 四捨五入 → [0, 65535] に clip。
+    make_dataset.py（データセット作成）と学習時の実 EID テストスライス（1 枚）の両方がこれを使う（同じ関数 = 同じ結果）。"""
+    h, w = stored.shape
+    out = cv2.resize(stored.astype(np.float32), (w * scale, h * scale), interpolation=INTERP_FLAGS[interp])
+    return np.clip(np.rint(out), 0, 65535).astype(np.uint16)
+
+
+def to_display(stored, offset, disp_min, disp_max, bits):
+    """stored uint16 → 表示用（HU を disp_min..disp_max で線形に 0..最大値へ。窓は掛けない）。bits 16 → uint16 0..65535、8 → uint8 0..255。"""
+    hu = stored.astype(np.float32) - offset
+    g = np.clip((hu - disp_min) / float(disp_max - disp_min), 0.0, 1.0)
+    return (g * 65535.0).round().astype(np.uint16) if bits == 16 else (g * 255.0).round().astype(np.uint8)
 
 
 def hu_per_unit(hu_min, hu_max):

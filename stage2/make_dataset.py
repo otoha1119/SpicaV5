@@ -12,7 +12,7 @@ INPUT_DIR の <case>/<slice>.png（uint16 1ch、一辺 input_size = 512）を sc
   5. 出力先.tmp に 1 枚ずつ書く（num_threads 並列）。1 枚でも失敗すれば止めて .tmp を残す（黙って飛ばさない）
   6. manifest.yaml（由来・方式・症例ごとの枚数・実効設定）を書き、枚数を検算してから出力先に rename する
 
-補間は cv2.resize（half-pixel 規約: 出力画素 (x+0.5)/scale − 0.5 の位置を入力上で補間）。float32 で補間 → 四捨五入 → [0, 65535] に clip → uint16。
+補間は data/ct_io.py の upsample（cv2.resize、half-pixel 規約: 出力画素 (x+0.5)/scale − 0.5 の位置を入力上で補間。float32 → 四捨五入 → [0, 65535] → uint16）。学習時の実 EID テストスライスも同じ関数。
 
 使い方（通常は ../dataset_stage2.sh 経由）:
   python make_dataset.py --machine PC1 --config configs/dataset.yaml --machines ../configs/machines.yaml \
@@ -28,15 +28,14 @@ from multiprocessing import Pool
 from pathlib import Path
 
 import cv2
-import numpy as np
 import yaml
 from tqdm import tqdm
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import DATASET, MACHINE, ConfigError, apply_overrides, check_dataset_values, validate, validate_shared  # noqa: E402
+from data.ct_io import read_stored, upsample, write_png  # noqa: E402  補間・読み書きは data/ct_io.py に集約（学習時の実 EID テストスライスと同じ関数）
 
-INTERP_FLAGS = {"nearest": cv2.INTER_NEAREST, "bilinear": cv2.INTER_LINEAR, "bicubic": cv2.INTER_CUBIC, "area": cv2.INTER_AREA, "lanczos": cv2.INTER_LANCZOS4}
 PATH_FLAGS = ("--input_dir",)  # sh の変数を --flag で上書きできる（start2.sh の引数が最優先）。出力先は machines.yaml のキーなので --eidlike1024_dir（MACHINE のフラグ）
 MANIFEST = "manifest.yaml"
 EXT = ".png"
@@ -108,37 +107,6 @@ def scan(root):
 # ---------------------------------------------------------------------------
 # 1 枚の変換（worker）
 # ---------------------------------------------------------------------------
-def read_stored(path):
-    """16bit 1ch PNG を uint16 (H, W) で読む。1ch・uint16 以外は受け付けない（Stage 1 read_stored と同じ）。"""
-    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-    if img is None:
-        raise IOError(f"画像を読み込めません: {path}")
-    if img.ndim != 2:
-        raise ValueError(f"1ch PNG のみ対応です (ndim={img.ndim}, shape={img.shape}): {path}")
-    if img.dtype != np.uint16:
-        raise ValueError(f"uint16 PNG のみ対応です (dtype={img.dtype}): {path}")
-    return img
-
-
-def write_png(path, arr):
-    """cv2.imwrite の戻り値を検査して書く。失敗を黙って完了扱いにしない（Stage 1 write_png と同じ）。"""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        ok = cv2.imwrite(str(path), arr)
-    except cv2.error as e:
-        raise IOError(f"PNG を書き込めません: {path}: {e}") from e
-    if not ok:
-        raise IOError(f"PNG を書き込めません: {path}")
-
-
-def upsample(stored, scale, interp):
-    """uint16 (H, W) → uint16 (H·scale, W·scale)。float32 で補間し、四捨五入して [0, 65535] に clip する。"""
-    h, w = stored.shape
-    out = cv2.resize(stored.astype(np.float32), (w * scale, h * scale), interpolation=INTERP_FLAGS[interp])
-    return np.clip(np.rint(out), 0, 65535).astype(np.uint16)
-
-
 def _init_worker():
     cv2.setNumThreads(1)  # プロセス並列なので OpenCV 内部のスレッドは使わない
 

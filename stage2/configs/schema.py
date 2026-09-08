@@ -43,7 +43,7 @@ TRAIN = {
     "optim.beta2":        Key(float, "--beta2",        "Adam β2。Keras 既定 0.999"),
     "optim.batch_size":   Key(int,   "--batch_size",   "論文未記載。ユーザー決定 2026-09-08: まず 16、様子を見て変える"),
     "optim.n_epochs":     Key(int,   "--n_epochs",     '論文 "Training consisted of 100 epochs"。lr は一定（減衰の記載なし）'),
-    "optim.seed":         Key(int,   "--seed",         "python / numpy / torch の乱数 seed（再現条件）。cudnn.benchmark は使わないが完全決定は保証しない"),
+    "optim.seed":         Key(int,   "--seed",         "python / numpy / torch の乱数 seed（再現条件）。cudnn.benchmark は Stage 1 と同じく有効なので完全決定ではない"),
     # data
     "data.patch_size":        Key(int,  "--patch_size",        '論文 "Patches of size 128 × 128 pixels"（1024 グリッド上）。ユーザー決定 128。4 の倍数（pool 2 回）'),
     "data.samples_per_epoch": Key(int,  "--samples_per_epoch", "1 epoch のサンプル数（random sampling: 症例一様 → スライス一様 → 位置一様、入力と教師は同じ位置）。論文の 1 epoch ≈ 61,101 組に合わせて 64,000"),
@@ -59,7 +59,9 @@ TRAIN = {
     "log.save_epoch_freq":         Key(int, "--save_epoch_freq",         "重み（weights/epoch_NNN/）を保存する epoch 間隔。1 = 毎 epoch"),
     "log.save_latest_freq":        Key(int, "--save_latest_freq",        "latest/ を保存する間隔（画像枚数。batch_size の倍数）"),
     "log.val_max_slices_per_case": Key(int, "--val_max_slices_per_case", "epoch 末の検証で val 症例ごとに使うフル 1024 スライスの上限（等間隔に間引く。0 で全部）"),
-    "log.full_slice":              Key(str, "--full_slice",              "epoch 末に TensorBoard へ出す固定スライス（eidlike1024_dir / pcd1024_dir からの相対パス。Stage 1 の log.full_slice と同じ位置 PCD-002/PCD-002-215.png）"),
+    "log.full_slice":              Key(str, "--full_slice",              "epoch 末にフル 1024 で書き出す固定スライス（eidlike1024_dir / pcd1024_dir からの相対パス。PCD-002/PCD-002-236.png、ユーザー決定 2026-09-09）→ output_images/epoch_NNN/ と preview_fixed_<slice>/"),
+    "log.eid_slice":               Key(str, "--eid_slice",               "実 EID のテストスライス（eid_dir = EID_v5 からの相対パス。EID-049/EID-049-079.png）。毎 epoch 512 → ×scale 補間（eidlike1024_dir の manifest.yaml の方式）→ U-Net に通し、固定パネルの 4 列目に出す"),
+    "log.preview_bits":            Key(int, "--preview_bits",            "output_images/preview_*/（表示用）のビット深度。16 = 表示範囲を 0..65535 に伸ばす（Stage 1 と同じ）| 8"),
     "log.n_full_random":           Key(int, "--n_full_random",           "epoch 末に TensorBoard へ出すランダムスライスの枚数（epoch ごとに別。train ∪ val から。0 で無し）"),
     "log.display_hu_min":          Key(int, "--display_hu_min",          "TensorBoard 画像の線形表示範囲の下限 HU（この値以下を黒）。Stage 1 と同じ −1400"),
     "log.display_hu_max":          Key(int, "--display_hu_max",          "同上の上限 HU（この値以上を白）。Stage 1 と同じ 2100（stored 3500）"),
@@ -89,6 +91,7 @@ MACHINE = {
     "num_threads":           Key(int, "--num_threads",           "make_dataset.py の worker 数 / 学習の DataLoader worker 数（0 で逐次・メインプロセス）"),
     "stage2_tb_port":        Key(int, None,                      "Stage 2 の TensorBoard のポート（Stage 1 の tb_port とは別。start2.sh が compose に両方渡し、Stage 2 はこちらで起動する）"),
     "pcd1024_dir":           Key(str, "--pcd1024_dir",           "Stage 2 の教師 PCD1024（<case>/<slice>.png、1ch uint16、512 と同じ命名）"),
+    "eid_dir":               Key(str, "--eid_dir",               "実 EID512（ImageCAS、EID_v5。Stage 1 の x 側と同じキー）。学習では log.eid_slice の 1 枚だけ読む"),
     "eidlike1024_dir":       Key(str, "--eidlike1024_dir",       "Stage 2 の学習入力。bash start2.sh dataset の出力先（EID-like512 を ×2 補間）で、学習はここを読む。container_data_root 配下"),
     "stage2_checkpoints_dir": Key(str, "--stage2_checkpoints_dir", "Stage 2 の run（yyyy_mmdd_HHMM）の保存先ルート。レイアウトは stage2/util/run_paths.py"),
 }
@@ -307,6 +310,8 @@ def check_train_values(train, mode, machine):
     if slf < bs or slf % bs: P.append(f"log.save_latest_freq ({slf}) は optim.batch_size ({bs}) の倍数（画像枚数単位。倍数でないと latest が保存されない）")
     if train["log.val_max_slices_per_case"] < 0: P.append("log.val_max_slices_per_case ≥ 0（0 で全部）")
     if not train["log.full_slice"]: P.append("log.full_slice（固定スライスの相対パス）を指定")
+    if not train["log.eid_slice"]: P.append("log.eid_slice（実 EID テストスライスの相対パス）を指定")
+    if train["log.preview_bits"] not in (8, 16): P.append("log.preview_bits は 8 | 16")
     if train["log.n_full_random"] < 0: P.append("log.n_full_random ≥ 0")
     if train["log.display_hu_min"] >= train["log.display_hu_max"]: P.append("log.display_hu_min < display_hu_max")
     if mode["arch"] not in ARCHS: P.append(f"arch は {ARCHS}")

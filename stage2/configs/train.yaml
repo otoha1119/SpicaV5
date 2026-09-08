@@ -26,11 +26,13 @@ data:
 
 log:
   print_freq: 100                # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）
-  save_epoch_freq: 1             # 毎 epoch 重み（weights/epoch_NNN/）を保存し、後から最良 epoch を選べるようにする（100 epoch で約 3 GB）
+  save_epoch_freq: 1             # 毎 epoch 重み（weights/epoch_NNN/）を保存し、後から最良 epoch を選べるようにする（net_G.pth 約 39 MB + state.pth 約 78 MB → 100 epoch で約 12 GB）
   save_latest_freq: 6400         # latest/ の保存間隔（画像枚数。batch 16 なら 400 step ごと）
   val_max_slices_per_case: 100   # epoch 末の検証で val 症例ごとに使うフル 1024 スライスの上限（等間隔に間引く。0 で全部 ≈ 1,000 枚/症例）
-  # TensorBoard の画像（epoch 末。パネル [EID-like1024 | PCD1024 | PCD-like1024]、8bit。ディスクの preview は別フェーズ）
-  full_slice: PCD-002/PCD-002-215.png   # 固定スライス（Stage 1 の log.full_slice と同じ位置）。eidlike1024_dir / pcd1024_dir 両方からの相対パス → images/full/fixed
-  n_full_random: 1        # epoch ごとに別のランダムスライス（train ∪ val から。名前と train/val を ラベルに出す）→ images/full/random
+  # epoch 末のフル 1024 画像（Stage 1 と同じ 2 系統: output_images/epoch_NNN/ の生 16bit と preview_*/ の表示用。TensorBoard にも同じパネル。ユーザー決定 2026-09-09）
+  full_slice: PCD-002/PCD-002-236.png   # 固定スライス。eidlike1024_dir / pcd1024_dir 両方からの相対パス → epoch_NNN/PCD-002-236_{eidlike,pcd1024,pcdlike}.png, preview_fixed_PCD-002-236/, TB images/full/fixed
+  eid_slice: EID-049/EID-049-079.png    # 実 EID のテストスライス（eid_dir = EID_v5 からの相対パス）。毎 epoch 1 枚だけ 512 → 1024 に補間（eidlike1024_dir/manifest.yaml の方式）して U-Net に通す → 固定パネルの 4 列目
+  n_full_random: 1        # epoch ごとに別のランダムスライス（train ∪ val から。名前と train/val をラベルに出す）→ epoch_NNN/<slice>_{eidlike,pcd1024,pcdlike}.png, preview_random/, TB images/full/random（3 列）
+  preview_bits: 16        # preview_*/ のビット深度。16 = 表示範囲（stored 0〜3500）を 0..65535 に伸ばす（Stage 1 と同じ）| 8
   display_hu_min: -1400   # 表示の線形範囲（Stage 1 と同じ）。stored 0 = HU −1400 を黒
   display_hu_max: 2100    # stored 3500 = HU 2100 を白。窓は掛けない

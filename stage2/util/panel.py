@@ -48,7 +48,11 @@ def build_panel(cols, labels):
     return np.concatenate([top, panel, top], axis=0)
 
 
-def full_labels(epoch, name=None):
-    """フル画像パネルのラベル（並び順 EID-like1024 → PCD1024 → PCD-like1024。ユーザー指示 2026-09-08）。name はスライス名（ランダムのとき）。"""
+def full_labels(epoch, name=None, eid_name=None):
+    """フル画像パネルのラベル（並び順 EID-like1024 → PCD1024 → PCD-like1024 [→ 実 EID テスト]。ユーザー指示 2026-09-08/09）。
+    name はスライス名（ランダムのとき）、eid_name は実 EID テストスライス名（固定パネルの 4 列目。None なら 3 列）。"""
     tail = f"   {name}" if name else ""
-    return [f"EID-like1024  (input){tail}", "PCD1024  (teacher)", f"PCD-like1024  (output)   epoch {int(epoch)}"]
+    labels = [f"EID-like1024  (input){tail}", "PCD1024  (teacher)", f"PCD-like1024  (output)   epoch {int(epoch)}"]
+    if eid_name:
+        labels.append(f"{eid_name} -> PCD-like1024   (real EID test)")
+    return labels

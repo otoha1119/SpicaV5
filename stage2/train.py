@@ -4,10 +4,9 @@
   1. run_train.py が書いた launch.yaml（実効値）を読み、schema で再検証する（既定値なし）
   2. seed → device（machines.yaml の gpu_gen ≠ 0 なら CUDA 必須。黙って CPU に落ちない）→ PairDataset → DataLoader → RegressionModel
   3. 再開（--resume_state）なら重みと optimizer / RNG / 進捗を復元する
-  4. epoch ループ: print_freq step ごとに scalar、save_latest_freq 枚ごとに latest/、epoch 末に val 指標 + latest/ + weights/epoch_NNN/ + TB のフル画像パネル
-     （固定 = train.yaml log.full_slice、ランダム = n_full_random 枚。[EID-like1024 | PCD1024 | PCD-like1024]）
+  4. epoch ループ: print_freq step ごとに scalar、save_latest_freq 枚ごとに latest/、epoch 末に val 指標 + latest/ + weights/epoch_NNN/ + フル 1024 画像
+     （固定 = train.yaml log.full_slice、ランダム = n_full_random 枚、実 EID テスト = log.eid_slice。output_images/ の生 16bit と preview、TB のパネル。util/monitor.py）
   5. 最終 epoch は save_epoch_freq の倍数でなくても保存する
-ディスクへの preview 出力は別フェーズ。
 """
 
 import argparse
@@ -56,6 +55,7 @@ def main():
 
     random.seed(train["optim.seed"]); np.random.seed(train["optim.seed"]); torch.manual_seed(train["optim.seed"]); torch.cuda.manual_seed_all(train["optim.seed"])
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    torch.backends.cudnn.benchmark = True  # Stage 1（junyanz base_model）と同じ。patch は固定サイズなので速くなる（完全な決定性は無い。seed の doc 参照）
     if a.require_cuda and device.type != "cuda":
         raise RuntimeError("machines.yaml の gpu_gen ≠ 0 なのに CUDA が使えません（gpu_gen: 0 にすれば cpu で動く）")
 
@@ -63,6 +63,8 @@ def main():
     with open(run_dir / DATASET_INFO_FILE, "w", encoding="utf-8") as f:
         yaml.safe_dump({"train_cases": dataset.train_cases, "val_cases": dataset.val_cases, "test_cases": dataset.test_cases,
                         "image_hw": list(dataset.img_hw), "counts": dataset.info,
+                        "fixed_slice": list(dataset.fixed_pair), "eid_test_slice": dataset.eid_path,
+                        "eid_upsample": {"scale": dataset.upsample_cfg[0], "interp": dataset.upsample_cfg[1], "from": f"{machine['eidlike1024_dir']}/manifest.yaml"},
                         "val_slices_per_epoch": len(dataset.val_slices())}, f, allow_unicode=True, sort_keys=False)
     bs = train["optim.batch_size"]
     loader = DataLoader(dataset, batch_size=bs, shuffle=False, num_workers=machine["num_threads"], pin_memory=(device.type == "cuda"), drop_last=False)
@@ -102,7 +104,7 @@ def main():
         if epoch % save_epoch == 0:
             model.save(run_dir, "latest")
             model.save(run_dir, epoch)
-            monitor.log_full_images(model, dataset, dataset.full_slices(epoch), epoch, total_iters)  # [EID-like1024 | PCD1024 | PCD-like1024] を TB へ
+            monitor.save_full_images(model, dataset, dataset.full_slices(epoch), epoch, total_iters)  # 生 16bit / preview / TB（固定 + ランダム + 実 EID テスト）
             last_saved_epoch = epoch
         last_epoch = epoch
         monitor.end_epoch(epoch, n_epochs, total_iters, model.optimizer.param_groups[0]["lr"], time.time() - t_epoch, val)
@@ -111,7 +113,7 @@ def main():
         monitor.write(f"saving the final model (epoch {last_epoch}, iters {total_iters})")
         model.save(run_dir, "latest")
         model.save(run_dir, last_epoch)
-        monitor.log_full_images(model, dataset, dataset.full_slices(last_epoch), last_epoch, total_iters)
+        monitor.save_full_images(model, dataset, dataset.full_slices(last_epoch), last_epoch, total_iters)
     monitor.write(f"[train] 完了: {run_dir}（latest: {ckpt_dir(run_dir, 'latest')}）")
     monitor.close()
 

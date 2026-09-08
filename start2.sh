@@ -202,14 +202,20 @@ open_browser() {
     *) return 1 ;;
   esac
 }
+tb_running() {  # コンテナ内で **Stage 2 のポート（stage2_tb_port）** の TensorBoard が動いているか（Stage 1 の tb_port のものは無視）
+  "${COMPOSE[@]}" exec -T spicav5 bash -c 'for p in /proc/[0-9]*; do [ "$p" = "/proc/$$" ] && continue; tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "tensorboard --logdir.* --port '"$TB_PORT_STAGE2"' " && exit 0; done; exit 1'
+}
 tb_kill() {  # コンテナ内の **Stage 2 のポート（stage2_tb_port）** の TensorBoard だけ止める（Stage 1 の tb_port のものは触らない）
   "${COMPOSE[@]}" exec -T spicav5 bash -c 'for p in /proc/[0-9]*; do [ "$p" = "/proc/$$" ] && continue; tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "tensorboard --logdir.* --port '"$TB_PORT_STAGE2"' " && kill "${p#/proc/}" 2>/dev/null; done; exit 0'
 }
-start_tensorboard() {  # 全 run 表示（logdir = stage2_checkpoints_dir、port = stage2_tb_port）
+start_tensorboard() {  # 全 run 表示（logdir = stage2_checkpoints_dir、port = stage2_tb_port）。start.sh と同じく、起動済みなら起動し直さない
   local url="http://localhost:$TB_PORT_STAGE2"
-  tb_kill
-  echo "[start2] TensorBoard を起動: logdir=$CHECKPOINTS_DIR port=${TB_PORT_STAGE2}（ログ: /workspace/tb_server_stage2.log）"
-  "${COMPOSE[@]}" exec -d spicav5 bash -c "tensorboard --logdir '$CHECKPOINTS_DIR' --port '$TB_PORT_STAGE2' --bind_all > /workspace/tb_server_stage2.log 2>&1"
+  if ! tb_running; then
+    echo "[start2] TensorBoard を起動: logdir=$CHECKPOINTS_DIR port=${TB_PORT_STAGE2}（ログ: /workspace/tb_server_stage2.log）"
+    "${COMPOSE[@]}" exec -d spicav5 bash -c "tensorboard --logdir '$CHECKPOINTS_DIR' --port '$TB_PORT_STAGE2' --bind_all > /workspace/tb_server_stage2.log 2>&1"
+  else
+    echo "[start2] TensorBoard は起動済み ($url)"
+  fi
   if command -v curl >/dev/null 2>&1; then
     for _ in $(seq 1 20); do curl -s -o /dev/null "$url" && break; sleep 1; done
   else
