@@ -108,8 +108,11 @@ git reset --hard
   best/…, best.txt                           bash start.sh best で作る（判定は目視。指標ができたら自動化）
   weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq（既定 1 = 毎 epoch）ごと
   output_images/epoch_NNN/    checkpoint（毎 epoch）ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit = HU が読める）
-  output_images/preview_fixed_<slice>/epoch_NNN.png   固定スライス（train.yaml log.full_slice）の表示用パネル [PCD | EID-like | R]。epoch 順に並べて見比べる。R 列はカラー（下記）、最下段に凡例
-  output_images/preview_random/epoch_NNN_<slice>.png  epoch ごとに別のランダムスライス（log.n_full_random 枚）の同じパネル（表示範囲 stored 0〜3500 を 16bit いっぱいに伸ばす）
+  output_images/preview_fixed_<slice>/                固定スライス（train.yaml log.full_slice）の表示用（表示範囲 stored 0〜3500 を線形に、log.preview_bits の深度）
+    00_pcd_<slice>.png, 01_eid_<eid_slice>.png        代表: PCD 入力と EID（log.eid_slice）。初回の checkpoint で 1 回だけ（名前順で先頭）
+    epoch_NNN_eidlike.png, epoch_NNN_R_color.png      epoch ごとの EID-like（グレー）と R（カラー、下記）
+    epoch_NNN_panel.png                               上を並べた [EID | EID-like | PCD | R + ゲージ]、各列の下にラベル。epoch 順に並べて見比べる
+  output_images/preview_random/epoch_NNN_<slice>.png  epoch ごとに別のランダムスライス（log.n_full_random 枚）の同じパネル（パネルだけ）
   （学習中の 128 patch グリッドは TensorBoard だけ）
   infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   推論の出力（§8。実行ごとに別ディレクトリ）
   tb/                         TensorBoard
@@ -121,7 +124,7 @@ git reset --hard
 
 - ターミナル: tqdm バー（画像枚数単位。1 step = batch_size 枚）。末尾に D / G_GAN / G_fid と `d_in`（G(z) − z の平均絶対値 [HU]）。
 - TensorBoard（学習の起動器が **その run の `tb/` だけ**を logdir にして自動起動。前の run のものは止める。全 run を並べるときは `bash start.sh tb`。`machines.yaml` の `tb_port` で公開）: `loss/*`、`diag/*`（D_real、D_fake、d_in_HU）、`time/*`、`train/lr`、`images/current`、`images/fixed`（固定サンプル。128 patch グリッドは TB にだけ出す）、`images/full/<slice>`（checkpoint 時のフル 512）。横軸は総画像枚数。
-- 表示は窓を掛けず HU −1400〜2100（stored 0〜3500）を線形に黒〜白へ。差分パネル（R = G(z) − z）はカラーで、白 = 0 HU（変化なし）、純青 = −300 HU（G が HU を下げた）、純赤 = +300 HU（上げた）、白から純色へ線形、範囲外は端の色で飽和（`train.yaml` の `log.diff_range_hu`、実装は `stage1/util/residual_color.py`）。パネルの最下段に凡例。TensorBoard は 8bit、`preview_*/` は RGB 3ch で `log.preview_bits`（16 = 表示範囲を 0〜65535 に伸ばす / 8）。16bit の `_R.png` はグレーの生データのまま（CT 論文の差分図の標準。図にするときは窓をキャプションに書く）。
+- 表示は窓を掛けず HU −1400〜2100（stored 0〜3500）を線形に黒〜白へ。差分パネル（R = G(z) − z）はカラーで、白 = 0 HU（変化なし）、純青 = −300 HU（G が HU を下げた）、純赤 = +300 HU（上げた）、白から純色へ線形、範囲外は端の色で飽和（`train.yaml` の `log.diff_range_hu`、実装は `stage1/util/residual_color.py`）。パネル（`stage1/util/panel.py`）は白い余白、各列の下にラベル帯（`EID` / `EID-like G(z) epoch NNN` / `PCD z` / `R = G(z) - z [HU]`）、R の右に小さな縦ゲージ（+300 … 0 … −300 の目盛り）。文字は cv2 の組み込みフォント（商用フォントはリポジトリに入れられないため）。TensorBoard は 8bit、`preview_*/` は RGB 3ch で `log.preview_bits`（16 = 表示範囲を 0〜65535 に伸ばす / 8）。16bit の `_R.png` はグレーの生データのまま（CT 論文の差分図の標準。図にするときは窓をキャプションに書く）。
 
 ## 8. 推論（`bash start.sh infer`）
 

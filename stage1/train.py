@@ -56,7 +56,8 @@ if __name__ == "__main__":
     model.setup(opt)  # regular setup: load and print networks; create schedulers（[SpicaV5] --resume_state があれば optimizer / RNG も復元）
     fixed = dataset.dataset.fixed_batch(opt.n_images) if hasattr(dataset.dataset, "fixed_batch") else None  # [SpicaV5] 監視用の固定サンプル（128 patch）
     full_slices = dataset.dataset.full_slices if hasattr(dataset.dataset, "full_slices") else (lambda epoch: None)  # [SpicaV5] checkpoint 時に書き出すフル 512（固定 1 + epoch ごとのランダム）
-    monitor = TrainMonitor(opt, dataset_size, fixed)  # [SpicaV5]
+    eid_ref = dataset.dataset.eid_reference() if hasattr(dataset.dataset, "eid_reference") else None  # [SpicaV5] パネルの右端に並べる EID の代表（固定）
+    monitor = TrainMonitor(opt, dataset_size, fixed, eid_ref)  # [SpicaV5]
     total_iters = getattr(model, "resume_total_iters", 0)  # [SpicaV5] 再開時は保存された画像枚数から続ける
     total_epochs = opt.n_epochs + opt.n_epochs_decay
     last_epoch, last_saved_epoch = None, None  # [SpicaV5] F-06: ループ終了時に最終 epoch が未保存なら保存する

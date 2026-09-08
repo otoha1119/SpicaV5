@@ -14,8 +14,10 @@ junyanz の util/visualizer.py（wandb / HTML）は使わない。train.py は�
      train/lr（epoch ごと）
      images/current（いま学習中のバッチ先頭 n_images 枚）, images/fixed（学習開始時に固定した同じ patch）
         各行 = [ PCD z | EID-like G(z) | 差分 G(z)−z | 実 EID x ]。128 patch のまま（元サイズに戻さない）。差分列はカラー（下記）、最下段に凡例
-  ディスク   : <run>/output_images/preview_fixed_<slice>/epoch_NNN.png — 固定スライス（train.yaml log.full_slice）の [PCD | EID-like | R] 横並びパネルを epoch ごとに
-               <run>/output_images/preview_random/epoch_NNN_<slice>.png — epoch ごとに別のランダムスライス（n_full_random 枚）の同じパネル
+  ディスク   : <run>/output_images/preview_fixed_<slice>/ — 固定スライス（train.yaml log.full_slice）の表示用。個別に保存（2026-09-08 ユーザー指示）:
+                 00_pcd_<slice>.png, 01_eid_<eid_slice>.png（代表。PCD 入力と EID（log.eid_slice）。初回の checkpoint で 1 回だけ）
+                 epoch_NNN_eidlike.png（グレー）, epoch_NNN_R_color.png（カラー、512×512）, epoch_NNN_panel.png（[EID | EID-like | PCD | R + ゲージ] 横並び、各列の下にラベル。util/panel.py）
+               <run>/output_images/preview_random/epoch_NNN_<slice>.png — epoch ごとに別のランダムスライス（n_full_random 枚）の同じパネル（パネルだけ）
                （RGB 3ch。preview_bits 16 = 表示範囲を 0..65535 に伸ばした 16bit / 8。TB は images/full/fixed, images/full/random）
                <run>/output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png — 上の各スライスの生 uint16（HU が読める）を
                PCD / EID-like / 残差 R = G(z) − z で保存（uint16。pcd/eidlike は HU + hu_offset、R は 32768 + ΔHU）。TB にも images/full/<slice>
@@ -38,6 +40,7 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 
 from data.ct_dataset import denormalize, residual_stored, write_png
+from util.panel import build_panel, full_labels
 from util.residual_color import colorbar_rgb01, residual_rgb01, rgb_to_bgr
 from util.run_paths import epoch_images_dir, preview_dir
 
@@ -49,11 +52,12 @@ DIAG_KEYS = ("D_real", "D_fake")           # TB で diag/ に分類する損失�
 
 
 class TrainMonitor:
-    def __init__(self, opt, dataset_size, fixed_batch):
+    def __init__(self, opt, dataset_size, fixed_batch, eid_ref=None):
         """
         opt          : junyanz の opt（print_freq / image_freq / n_images / display_hu_* / diff_range_hu / hu_* / lambda_fid / batch_size を使う）
         dataset_size : 1 epoch の画像枚数（バーの total）
         fixed_batch  : {"A": (n,1,p,p), "B": (n,1,p,p)} 監視用の固定サンプル（CTDataset.fixed_batch）。None なら fixed は出さない
+        eid_ref      : {"path": str, "B": (1,1,H,W)} フル画像パネルの右端に並べる EID の代表（CTDataset.eid_reference）。None なら列を出さない
         """
         self.opt = opt
         self.bs = opt.batch_size
@@ -65,6 +69,8 @@ class TrainMonitor:
             f.write(f"================ Training Loss ({time.strftime('%Y-%m-%d %H:%M:%S')}) ================\n")
         self.hu_per_unit = (opt.hu_max - opt.hu_min) / 2.0  # 正規化 [-1,1] の 1.0 が何 HU か
         self.fixed = fixed_batch
+        self.eid_ref = eid_ref
+        self.eid_stem = Path(eid_ref["path"]).stem if eid_ref is not None else None
         self.bar = None
         self._sum = {}
         self._n = 0
@@ -163,7 +169,9 @@ class TrainMonitor:
     # ------------------------------------------------------------------ フル画像（checkpoint と一緒に）
     def save_full_images(self, model, full, epoch, total_iters):
         """checkpoint 保存時に、固定スライス 1 枚 + epoch ごとのランダムスライス（CTDataset.full_slices(epoch)）をフル 512 で G に通し、
-        <run>/output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png を uint16 で保存する（TB にも images/full/<slice> を 8bit で）。
+        <run>/output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png を uint16 で保存する（TB にも images/full/fixed|random を 8bit で）。
+        表示用は preview_fixed_<slice>/（代表 PCD / EID を 1 回、epoch ごとに EID-like / R カラー / パネル）と preview_random/（パネルだけ）。
+        パネルは [EID | EID-like | PCD | R + ゲージ]（util/panel.py。各列の下にラベル、R の右に縦ゲージ。TB の images/full/* も同じ絵）。
         推論は full-image モード（G は全畳み込み + 3 段 Haar なので H, W が 8 の倍数なら一発で通る）。
         uint16 化は inference_dir.py と同じ関数（denormalize / residual_stored）で、eidlike = pcd + (R − 32768) が厳密に成り立つ。"""
         if full is None or full["A"].shape[0] == 0:
@@ -182,6 +190,12 @@ class TrainMonitor:
         A, G = to_hu(a), to_hu(g)
         R = G - A
         hu = (o.hu_offset, o.hu_min, o.hu_max)
+        lin, col = self._panel_fns()
+        E = lin(to_hu(self.eid_ref["B"])[0]) if self.eid_ref is not None else None  # EID の代表 (3,H,W) [0,1]（パネル右端。固定）
+        bits = to_u16 if o.preview_bits == 16 else to_u8  # preview の深度（16 = 表示範囲を 0..65535 に伸ばす）
+        gray_png = lambda p3: bits(p3[0].numpy())  # (3,H,W) のグレーパネル → 1ch 画像  # noqa: E731
+        rgb_png = lambda hwc: rgb_to_bgr(bits(hwc))  # (H,W,3) RGB → cv2 用 BGR  # noqa: E731
+        ep = epoch_images_dir(self.run_dir, epoch).name  # epoch_NNN
         for i, (path, kind) in enumerate(zip(full["paths"], full["kinds"])):
             stem = Path(path).stem
             pcd16 = denormalize(a[i, 0].detach().cpu().numpy(), *hu)
@@ -189,18 +203,25 @@ class TrainMonitor:
             write_png(out_dir / f"{stem}_pcd.png", pcd16)
             write_png(out_dir / f"{stem}_eidlike.png", eid16)
             write_png(out_dir / f"{stem}_R.png", residual_stored(pcd16, eid16))  # 0 HU = 32768
-            lin, col = self._panel_fns()
-            grid = make_grid(torch.stack([lin(A[i]), lin(G[i]), col(R[i])]), nrow=3, padding=4, pad_value=GRID_PAD).permute(1, 2, 0).numpy()  # [PCD | EID-like | R]、(H,W,3) [0,1]
-            panel01 = np.concatenate([grid, colorbar_rgb01(o.diff_range_hu, grid.shape[1])], axis=0)  # 最下段に R の凡例
+            hwc = lambda p3: p3.permute(1, 2, 0).numpy()  # (3,H,W) → (H,W,3)  # noqa: E731
+            cols = ([hwc(E)] if E is not None else []) + [hwc(lin(G[i])), hwc(lin(A[i])), hwc(col(R[i]))]
+            labels = full_labels(epoch) if E is not None else full_labels(epoch)[1:]
+            panel01 = build_panel(cols, labels, o.diff_range_hu)  # [EID | EID-like | PCD | R + ゲージ]、(Hp,Wp,3) [0,1]
             tag = "fixed" if kind == "fixed" else ("random" if full["kinds"].count("random") == 1 else f"random{i}")  # TB のタグは固定（スライダーで epoch を追える）
             self.tb.add_image(f"images/full/{tag}", to_u8(panel01), total_iters, dataformats="HWC")
-            # 表示用パネル: 同じ絵を preview に（RGB 3ch。cv2 は BGR なので変換して書く）。16bit は表示範囲を 0..65535 に伸ばす（プレビューで正しい明るさ、階調 65536 段）。HU は読めない（生は epoch_NNN/）
-            panel = rgb_to_bgr(to_u16(panel01) if o.preview_bits == 16 else to_u8(panel01))
-            ep = epoch_images_dir(self.run_dir, epoch).name  # epoch_NNN
+            # 表示用（HU は読めない。生は epoch_NNN/）。cv2 は BGR なので RGB は変換して書く
             if kind == "fixed":
-                write_png(preview_dir(self.run_dir, f"fixed_{stem}") / f"{ep}.png", panel)  # preview_fixed_<slice>/epoch_NNN.png
+                # 固定スライス: 代表（PCD / EID。初回だけ）+ epoch ごとの EID-like / R カラー / パネルを個別に（2026-09-08 ユーザー指示）
+                d = preview_dir(self.run_dir, f"fixed_{stem}")
+                if not (d / f"00_pcd_{stem}.png").is_file():
+                    write_png(d / f"00_pcd_{stem}.png", gray_png(lin(A[i])))
+                if E is not None and not (d / f"01_eid_{self.eid_stem}.png").is_file():
+                    write_png(d / f"01_eid_{self.eid_stem}.png", gray_png(E))
+                write_png(d / f"{ep}_eidlike.png", gray_png(lin(G[i])))
+                write_png(d / f"{ep}_R_color.png", rgb_png(col(R[i]).permute(1, 2, 0).numpy()))
+                write_png(d / f"{ep}_panel.png", rgb_png(panel01))
             else:
-                write_png(preview_dir(self.run_dir, "random") / f"{ep}_{stem}.png", panel)  # preview_random/epoch_NNN_<slice>.png
+                write_png(preview_dir(self.run_dir, "random") / f"{ep}_{stem}.png", rgb_png(panel01))  # preview_random/epoch_NNN_<slice>.png（パネルだけ）
         self.write(f"saved full-size images ({len(full['paths'])} slices) -> {out_dir}")
 
     def close(self):

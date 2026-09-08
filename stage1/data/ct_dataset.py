@@ -315,6 +315,8 @@ class CTDataset(BaseDataset):
         # 固定スライス（毎 epoch のフル画像）は起動時に存在を検査する（無ければ学習前に止める）
         if not self.full_image and not (Path(dir_a) / opt.full_slice).is_file():
             raise RuntimeError(f"train.yaml log.full_slice が dir_A の下にありません: {Path(dir_a) / opt.full_slice}")
+        if not self.full_image and not (Path(dir_b) / opt.eid_slice).is_file():
+            raise RuntimeError(f"train.yaml log.eid_slice が dir_B の下にありません: {Path(dir_b) / opt.eid_slice}")
         # 先頭 1 枚で形式 (uint16 / 1ch) と画像サイズを確定する
         first = read_stored(self.idx_a.all_paths[0])
         self.img_hw = first.shape
@@ -389,6 +391,13 @@ class CTDataset(BaseDataset):
         paths = [str(fixed)] + randoms
         kinds = ["fixed"] + ["random"] * len(randoms)
         return {"paths": paths, "kinds": kinds, "A": torch.stack([torch.from_numpy(_load_normalized(p, *self.hu)).unsqueeze(0) for p in paths])}
+
+    def eid_reference(self):
+        """パネルの右端に並べる EID の代表スライス（--eid_slice、dir_B からの相対パス。固定）。戻り値: {"path": str, "B": (1,1,H,W)}"""
+        p = Path(self.opt.dir_B) / self.opt.eid_slice
+        if not p.is_file():
+            raise RuntimeError(f"EID の代表スライスがありません（train.yaml log.eid_slice は dir_B からの相対パス）: {p}")
+        return {"path": str(p), "B": torch.from_numpy(_load_normalized(str(p), *self.hu)).unsqueeze(0).unsqueeze(0)}
 
     def __len__(self):
         if self.full_image:

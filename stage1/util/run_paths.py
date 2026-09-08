@@ -11,9 +11,11 @@ checkpoint は「重みディレクトリ」単位で扱う（G と D と optimi
   best.txt                    best がどの epoch か（判定基準がまだ無いので当面は目視で手動指定）
   weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごとの checkpoint（保存は <dir>.tmp → rename で原子的。.tmp / .old が残っていたら中断の痕跡）
   output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png        checkpoint（毎 epoch）ごとのフル 512（uint16、入力と同じ規約 = HU が読める）
-  output_images/preview_fixed_<slice>/epoch_NNN.png          固定スライス（train.yaml log.full_slice）の表示用パネル [PCD | EID-like | R]（epoch 順に並べて見比べる。
-                                                             R 列はカラー: 白 = 0、純青 = −log.diff_range_hu、純赤 = +。最下段に凡例。util/residual_color.py）
-  output_images/preview_random/epoch_NNN_<slice>.png         epoch ごとに別のランダムスライス（log.n_full_random 枚）の同じパネル（RGB 3ch。表示範囲を伸ばした 16bit か 8bit）
+  output_images/preview_fixed_<slice>/                       固定スライス（train.yaml log.full_slice）の表示用（表示範囲で線形、log.preview_bits の深度。HU は読めない）
+      00_pcd_<slice>.png, 01_eid_<eid_slice>.png             代表: PCD 入力と EID（log.eid_slice）。初回の checkpoint で 1 回だけ（名前順で先頭に来る）
+      epoch_NNN_eidlike.png, epoch_NNN_R_color.png           epoch ごとの EID-like（グレー 1ch）と R（カラー RGB: 白 = 0、純青 = −log.diff_range_hu、純赤 = +。util/residual_color.py）
+      epoch_NNN_panel.png                                    上を並べた [EID | EID-like | PCD | R + ゲージ]、各列の下にラベル（util/panel.py。TB の images/full/fixed と同じ絵）
+  output_images/preview_random/epoch_NNN_<slice>.png         epoch ごとに別のランダムスライス（log.n_full_random 枚）の同じパネル（パネルだけ。RGB 3ch）
   （学習中の 128 patch グリッドは TensorBoard だけ）
   infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   bash start.sh infer の出力（inference_dir.py。uint16 PNG / DICOM）。実行ごとに別ディレクトリ
       {full,patch}/, {full,patch}_dicom/, {full,patch}_R/（16bit、0 HU = 32768）, {full,patch}_R_color/（同じ R の表示用カラー 8bit RGB）, R_colorbar_pm<range>HU.png（凡例）
@@ -96,7 +98,7 @@ def epoch_images_dir(run_dir, epoch):
 
 
 def preview_dir(run_dir, name):
-    """表示用パネル [PCD | EID-like | R] のディレクトリ: <run>/output_images/preview_<name>/（name = "fixed_<slice>" か "random"）"""
+    """表示用（パネル [EID | EID-like | PCD | R + ゲージ] と個別画像）のディレクトリ: <run>/output_images/preview_<name>/（name = "fixed_<slice>" か "random"）"""
     return Path(run_dir) / OUTPUT_IMAGES_DIR / f"preview_{name}"
 
 

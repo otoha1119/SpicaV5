@@ -190,3 +190,17 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - `run_infer.py`: `R_COLOR_TRAIN_KEYS = {"log.diff_range_hu": "--diff_range_hu"}` を launch.yaml から渡す（無い古い run はエラー）
 - `configs/schema.py`: `log.diff_range_hu` の説明を更新。docs: README / CLAUDE.md / run_paths.py / inference-plan / training-monitor-plan
 - 検証（リポジトリ外 scratch venv + 合成データ、2026-09-08）: 1 epoch 学習 → TB の 4 タグが (H,W,3) uint8 で凡例の両端が純青/純赤、preview が 3ch uint16、`epoch_001/*_R.png` が 1ch uint16 で `eidlike = pcd + (R − 32768)` 厳密一致。`run_infer.py` 経由の推論で `full_R_color/` が `full_R/` から再計算した色と完全一致、`R_colorbar_pm300HU.png` 生成、`--diff_range_hu 300` が launch.yaml から渡ることを確認
+
+### 固定スライスの表示用を個別保存 + パネルに EID の代表を追加（2026-09-08、ユーザー指示）
+- `configs/schema.py` / `train.yaml` / `models/fidelity_gan_model.py`: `log.eid_slice`（`--eid_slice`。eid_dir からの相対パス、例 `EID-001/EID-001-089.png`）を追加。`data/ct_dataset.py` は起動時に dir_B の下の存在を検査し、`eid_reference()` で正規化テンソルを返す。`train.py` が `TrainMonitor(opt, dataset_size, fixed, eid_ref)` で渡す
+- `util/monitor.py save_full_images`: パネルを [PCD | EID-like | R | EID] の 4 列に（TB の images/full/fixed|random と preview の両方）。固定スライスは `preview_fixed_<slice>/` に個別保存:
+  `00_pcd_<slice>.png` と `01_eid_<eid_slice>.png`（代表。初回の checkpoint で 1 回だけ、名前順で先頭）、`epoch_NNN_eidlike.png`（グレー 1ch）、`epoch_NNN_R_color.png`（RGB、凡例なし 512×512）、`epoch_NNN_panel.png`（旧 `epoch_NNN.png`）。
+  深度はすべて `log.preview_bits`。ランダムスライスは `preview_random/epoch_NNN_<slice>.png` のパネルだけ（従来どおり）
+- 旧 run の resume は `run_train.py prepare_resume` が `log.eid_slice` を今の yaml から補って警告する（既存の仕組み）
+- 検証（scratch venv + 合成データ、2 epoch）: `preview_fixed_*/` に 8 ファイル（代表 2 + epoch ごと 3 × 2）、`01_eid` が入力 EID の表示変換と一致、パネル右端列が代表 EID と一致、パネル幅 = 4 × 512 + 5 × 4、`R_color` が 16bit R から再計算した色と一致、TB の images/full/* がパネルと同形
+
+### パネルの並び順・ラベル・ゲージ（2026-09-08、ユーザー確定）
+- `util/panel.py`（新規）: `build_panel(cols, labels, range_hu)` — 並び順 [EID | EID-like | PCD | R]、白い余白、画像の周りに 1px の薄いグレー枠、各列の下に白地・黒文字のラベル帯（`full_labels(epoch)` = `EID` / `EID-like  G(z)   epoch N` / `PCD  z` / `R = G(z) - z   [HU]`）、R の右に小さな縦ゲージ（上 +range 赤、中央 0 白、下 −range 青、±range / ±range/2 / 0 の目盛りと HU）。下端のカラーバーは廃止。入出力は RGB float01（画像列の 16bit 階調を保つ）
+- 文字は cv2 の Hershey（英数のみ）。Calibri / 游ゴシックは商用でリポジトリにもイメージにも入れられないため見送り（ユーザー了承）。TrueType にするなら Pillow（requirements に有り）で OFL フォントを同梱する案が残っている
+- `util/monitor.py save_full_images`: パネルを `build_panel` に置き換え（TB の images/full/* と preview_fixed_*/epoch_NNN_panel.png、preview_random/ の全部）。個別の `epoch_NNN_R_color.png` は 512×512 のまま（ゲージ無し）。128 patch の `images/current` / `fixed` は従来どおり（下端に凡例）
+- 検証（scratch venv + 合成データ、2 epoch）: パネル形状 (560, 2176, 3)、1 列目 = `01_eid`、3 列目 = `00_pcd` と画素一致、TB の images/full/* がパネルと同形。実データ（epoch_118）を `build_panel` で描いて目視確認
