@@ -110,7 +110,17 @@ INFER = {
     "dicom.rescale_intercept": Key(float, "--rescale_intercept", "元 DICOM の RescaleIntercept。PCD（Siemens NAEOTOM Alpha）= −8192（格納値は符号なし 16bit）"),
 }
 
-FILES = {"train": TRAIN, "mode": MODE, "machine": MACHINE, "infer": INFER}
+# ---------------------------------------------------------------------------
+# stage1/configs/crop.yaml — パッチ切り出し（bash start.sh crop）。cases（PCD / EID のペアと左上座標のリスト）は check_crop_cases で別に検証する
+# ---------------------------------------------------------------------------
+CROP = {
+    "patch":       Key(int, "--patch",       "切り出す正方形の一辺（画素）。座標は左上 (x = 列, y = 行)"),
+    "panel_scale": Key(int, "--panel_scale", "並べたパネルだけ最近傍で拡大する倍率（ラベルとゲージが読める大きさに）。個別画像は等倍"),
+    "device":      Key(str, "--device",      "cpu | cuda。学習中に走らせるときは cpu（VRAM を取り合わない）"),
+}
+CROP_CASE_KEYS = {"pcd": str, "pcd_x": int, "pcd_y": int, "eid": str, "eid_x": int, "eid_y": int}
+
+FILES = {"train": TRAIN, "mode": MODE, "machine": MACHINE, "infer": INFER, "crop": CROP}
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +352,37 @@ def check_infer_values(infer):
     if infer["max_slices"] < 0: P.append("max_slices ≥ 0（0 で全部）")
     if infer["dicom.rescale_slope"] == 0: P.append("dicom.rescale_slope ≠ 0")
     _problems_to_error("infer values", P)
+
+
+def check_crop_values(crop):
+    P = []
+    if crop["patch"] < 1: P.append("patch ≥ 1")
+    if crop["panel_scale"] < 1: P.append("panel_scale ≥ 1")
+    if crop["device"] not in ("cpu", "cuda"): P.append("device は cpu | cuda")
+    _problems_to_error("crop values", P)
+
+
+def check_crop_cases(cases):
+    """crop.yaml の cases: 1 件以上のリスト。各件は CROP_CASE_KEYS を全部持ち、余計なキー・型違い・負の座標はエラー。"""
+    if not isinstance(cases, list) or not cases:
+        raise ConfigError("[crop] cases は 1 件以上のリストで指定してください")
+    P = []
+    for i, c in enumerate(cases, 1):
+        if not isinstance(c, dict):
+            P.append(f"case{i}: dict ではありません"); continue
+        missing = [k for k in CROP_CASE_KEYS if k not in c]
+        unknown = [k for k in c if k not in CROP_CASE_KEYS]
+        bad = [k for k, t in CROP_CASE_KEYS.items() if k in c and not _type_ok(c[k], t)]
+        neg = [k for k in ("pcd_x", "pcd_y", "eid_x", "eid_y") if k in c and isinstance(c[k], int) and c[k] < 0]
+        if missing: P.append(f"case{i}: キーがありません {missing}")
+        if unknown: P.append(f"case{i}: 未知のキー {unknown}")
+        if bad: P.append(f"case{i}: 型が違います {bad}")
+        if neg: P.append(f"case{i}: 座標は 0 以上 {neg}")
+        for k in ("pcd", "eid"):
+            if k in c and isinstance(c[k], str) and c[k].count("-") != 2:
+                P.append(f"case{i}: {k} はスライス名 PCD-nnn-sss / EID-nnn-sss の形: {c[k]!r}")
+    _problems_to_error("crop cases", P)
+    return cases
 
 
 def check_opt(opt, where):

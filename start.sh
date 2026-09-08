@@ -3,7 +3,7 @@
 # SpicaV5 起動スクリプト — 取扱説明
 #   OS 共通。mac / Linux はターミナル、Windows は Git Bash か WSL。すべて bash 経由（実行権限は不要）。
 #   リポジトリ直下（このファイルがある場所）で、ホストのシェルから実行する。コンテナ内（bash start.sh shell で入った先）では動かない
-#   （docker が無い。/.dockerenv があれば即エラーで止める）。コンテナ内で使うのは train_stage1.sh / infer_stage1.sh の方。
+#   （docker が無い。/.dockerenv があれば即エラーで止める）。コンテナ内で使うのは train_stage1.sh / infer_stage1.sh / crop_stage1.sh の方。
 #
 # ■ 何をするか
 #   1. configs/machines.yaml からマシン定義（GPU 世代・データのパス）を読む
@@ -12,14 +12,17 @@
 #   4. コンテナ内で train_stage1.sh を実行して学習を始める（shell / down のときは除く）
 #
 # ■ 引数の規則
-#   bash start.sh [マシン名] [build|shell|down|tb|infer] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
+#   bash start.sh [マシン名] [build|shell|down|tb|infer|crop] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
 #   ・--flag より前の単語を読む。順不同。
-#   ・build / shell / down / tb / infer / resume / best はサブコマンド。それ以外の単語は「マシン名」とみなし、sh 内の MACHINE より優先する。
+#   ・build / shell / down / tb / infer / crop / resume / best はサブコマンド。それ以外の単語は「マシン名」とみなし、sh 内の MACHINE より優先する。
 #   ・build は「イメージを（再）ビルドしてコンテナを起動し、torch / cuda の確認を表示して終わる」だけ。学習は始めない（本番機の初期セットアップ用）。
 #   ・resume の直後は run 名（yyyy_mmdd_HHMM）、その次が latest / best / epoch 番号なら checkpoint の tag（省略時 latest）。
 #   ・best の直後は run 名と epoch 番号（両方必須）。best/ は best.tmp/ に揃えてから差し替える。
 #   ・infer は引数を取らない。重みディレクトリ・入力フォルダ・出力形式・元 DICOM ルートは infer_stage1.sh の変数
 #     （WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR）に書く（同名の --flag で上書き可）。
+#   ・crop はパッチ切り出し（512 のフル推論 → 左上 (x, y) から patch 四方を切り出し、EID の代表パッチと並べる。スライド用）。ケース・patch・拡大率・デバイスは
+#     stage1/configs/crop.yaml、重みディレクトリは crop_stage1.sh の WEIGHT_DIR（--weight_dir で上書き可）。出力 <run>/infer/<重み>/crop/<実行時刻>/。
+#   ・shell / infer / crop / best / tb は、コンテナが起動済みなら up を呼ばず exec だけ行う（学習中に打ってもコンテナを作り直さない）。
 #   ・マシン名を 2 つ渡すとエラー。configs/machines.yaml に無い名前もエラー（候補を表示）。
 #   ・--flag 以降は上書き引数としてそのまま train_stage1.sh / infer_stage1.sh へ渡す（sh の引数が最優先）。
 #     受け付けるのは stage1/configs/schema.py にあるフラグだけ（学習は TRAIN / MODE / MACHINE、推論は INFER）。無いフラグはエラー。
@@ -38,6 +41,8 @@
 #   bash start.sh infer                      # 推論。infer_stage1.sh の WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR、stage1/configs/infer.yaml の方式
 #   bash start.sh infer --mode full --max_slices 4                        # 方式を上書きして推論
 #   bash start.sh infer --output_format both --dicom_dir /workspace/DataSet/PhotonCT512_original   # PNG と DICOM の両方を書く
+#   bash start.sh crop                       # パッチ切り出し（学習中でも可）。crop_stage1.sh の WEIGHT_DIR、stage1/configs/crop.yaml のケース
+#   bash start.sh crop --weight_dir /workspace/stage1/checkpoints/2026_0907_1742/weights/epoch_141 --device cuda
 #   bash start.sh mac infer --weight_dir /workspace/stage1/checkpoints/2026_0905_1234/best --input_dir /workspace/DataSet/PCD512_v2
 #                                            # GPU 無しのマシン定義（gpu_gen 0 → cpu）で、重みと入力を引数で指定して推論
 #   bash start.sh tb                         # TensorBoard だけ起動してブラウザを開く（学習はしない）
@@ -61,12 +66,14 @@
 #       output_images/preview_fixed_<slice>/epoch_NNN.png   固定スライス（train.yaml log.full_slice）の表示用パネル [PCD | EID-like | R]（epoch 順に見比べる）
 #       output_images/preview_random/epoch_NNN_<slice>.png  epoch ごとに別のランダムスライスの同じパネル。128 patch グリッドは TensorBoard だけ
 #       infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   bash start.sh infer の出力（実行ごとに別ディレクトリ。full/ patch/ = 16bit PNG、*_dicom/ = DICOM、*_R/ = 残差 PNG、diff_stats.txt、infer.yaml）
+#       infer/<重みディレクトリ名>/crop/<実行時刻>/case<N>_<pcd>_<eid>/   bash start.sh crop の出力（1_EID / 2_EID-like / 3_PCD / 4_R_color の個別 + panel.png、crop.yaml）
 #       tb/                      TensorBoard
 #
 # ■ 設定ファイル（既定値は無い。無いキーはエラー）
 #   stage1/configs/train.yaml   学習パラメータ（数値。各行に論文の出典）
 #   stage1/configs/mode.yaml    モード切替（sampling / gan_mode / netG / netD / ...）
 #   stage1/configs/infer.yaml   推論の方式（mode full|patch|both、patch の size/stride/blend、...）
+#   stage1/configs/crop.yaml    パッチ切り出しのケース（PCD / EID のスライス名と左上座標）、patch、panel_scale、device
 #   configs/machines.yaml       マシン定義（Stage 共通）
 #   stage1/configs/schema.py    上記 4 ファイルの唯一の正（必須キー・型・フラグ）
 #
@@ -99,7 +106,7 @@
 #   ・イメージを作り直す: bash start.sh down → bash start.sh build（→ 学習は bash start.sh）
 #   ・本番機の初回: bash start.sh build で "[start] torch ... | cuda available: True" が出れば準備完了
 #   ・コンテナ内で手動学習: bash start.sh shell → bash train_stage1.sh [--flag value ...]
-#   ・コンテナ内で手動推論: bash start.sh shell → bash infer_stage1.sh [--flag value ...]
+#   ・コンテナ内で手動推論: bash start.sh shell → bash infer_stage1.sh [--flag value ...]（パッチ切り出しは bash crop_stage1.sh）
 #
 # ■ 推論（infer）= 学習済みの重みで PNG フォルダを丸ごと EID-like に変換する
 #   ・重みディレクトリ・入力フォルダ・出力形式・元 DICOM ルートは infer_stage1.sh の WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR（同名の --flag で上書き可）。
@@ -114,7 +121,7 @@ set -euo pipefail
 
 # --- ホスト専用。コンテナ内で叩かれたら docker が無いので即エラー（WSL 判定より先に見る。コンテナは WSL2 のカーネルを共有するので /proc/version だけでは区別できない） ---
 if [ -f /.dockerenv ]; then
-  echo "[start] start.sh はホスト側で実行するスクリプトです（コンテナ内には docker がありません）。exit でコンテナを抜けて、ホストの PowerShell / ターミナルで bash start.sh <machine> ... を実行してください。コンテナ内で使うのは bash train_stage1.sh / bash infer_stage1.sh です" >&2
+  echo "[start] start.sh はホスト側で実行するスクリプトです（コンテナ内には docker がありません）。exit でコンテナを抜けて、ホストの PowerShell / ターミナルで bash start.sh <machine> ... を実行してください。コンテナ内で使うのは bash train_stage1.sh / bash infer_stage1.sh / bash crop_stage1.sh です" >&2
   exit 2
 fi
 
@@ -139,7 +146,7 @@ MACHINE="PC1"          # configs/machines.yaml のエントリ名（PC1 / mac / 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 MACHINES="$ROOT/configs/machines.yaml"
 
-# --- 引数: --flag より前の単語を読む。build / shell / down / tb / resume / infer / best はサブコマンド、それ以外の単語はマシン名（sh 内の MACHINE より優先）。
+# --- 引数: --flag より前の単語を読む。build / shell / down / tb / resume / infer / crop / best はサブコマンド、それ以外の単語はマシン名（sh 内の MACHINE より優先）。
 #     build はビルドだけで終わる（学習しない）。
 #     --flag 以降は上書き引数として train_stage1.sh / infer_stage1.sh へそのまま渡す ---
 ACTION=train; BUILD=""; MACHINE_ARG=""; RESUME=""; RESUME_TAG="latest"; BEST_RUN=""; BEST_EPOCH=""
@@ -155,6 +162,7 @@ while [ $# -gt 0 ]; do
       RESUME="$1"; shift
       if [ $# -gt 0 ] && [[ "$1" =~ ^([0-9]+|latest|best)$ ]]; then RESUME_TAG="$1"; shift; fi ;;
     infer) ACTION=infer; shift ;;
+    crop)  ACTION=crop; shift ;;
     best)
       shift
       [ $# -ge 2 ] && [[ "$1" != --* ]] && [[ "$2" =~ ^[0-9]+$ ]] || { echo "[start] best には run 名と epoch 番号が必要です: bash start.sh best yyyy_mmdd_HHMM <epoch>" >&2; exit 2; }
@@ -221,8 +229,20 @@ if [ "$ACTION" = down ]; then
 fi
 
 # 起動（up -d はイメージが無ければビルドする。build 指定時は --build で強制再ビルド）
-"${COMPOSE[@]}" up -d $BUILD
-"${COMPOSE[@]}" exec -T spicav5 python -c "import torch; print('[start] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())"
+#   shell / infer / crop / best / tb は、コンテナが起動済みなら up を呼ばず exec だけ行う（学習中に打っても compose がコンテナを作り直して学習を殺さないように）
+container_running() { [ "$(docker inspect -f '{{.State.Running}}' spicav5 2>/dev/null)" = "true" ]; }
+case "$ACTION" in
+  shell|infer|crop|best|tb)
+    if container_running; then
+      echo "[start] コンテナ spicav5 は起動済み（学習中なら触らない）。up は呼ばず exec だけ行う"
+    else
+      "${COMPOSE[@]}" up -d
+      "${COMPOSE[@]}" exec -T spicav5 python -c "import torch; print('[start] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())"
+    fi ;;
+  *)
+    "${COMPOSE[@]}" up -d $BUILD
+    "${COMPOSE[@]}" exec -T spicav5 python -c "import torch; print('[start] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())" ;;
+esac
 if [ "$ACTION" = build ]; then
   echo "[start] ビルド完了。コンテナ spicav5 は起動したまま（学習: bash start.sh / 推論: bash start.sh infer / 停止: bash start.sh down）"
   exit 0
@@ -279,6 +299,7 @@ case "$ACTION" in
   tb)    start_tensorboard ;;
   shell) exec_it spicav5 bash ;;
   infer) exec_it spicav5 bash infer_stage1.sh "$@" ;;
+  crop)  exec_it spicav5 bash crop_stage1.sh "$@" ;;
   best)  exec_it spicav5 python stage1/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
   train)
     tb_kill

@@ -19,6 +19,8 @@ checkpoint は「重みディレクトリ」単位で扱う（G と D と optimi
   （学習中の 128 patch グリッドは TensorBoard だけ）
   infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   bash start.sh infer の出力（inference_dir.py。uint16 PNG / DICOM）。実行ごとに別ディレクトリ
       {full,patch}/, {full,patch}_dicom/, {full,patch}_R/（16bit、0 HU = 32768）, {full,patch}_R_color/（同じ R の表示用カラー 8bit RGB）, R_colorbar_pm<range>HU.png（凡例）
+  infer/<重みディレクトリ名>/crop/<実行時刻>/case<N>_<pcd>_<eid>/   bash start.sh crop の出力（crop_patches.py。表示用のみ、16bit 生データは無し）
+      1_EID_<eid>_x<X>_y<Y>.png, 2_EID-like_<pcd>_x_y.png, 3_PCD_<pcd>_x_y.png（グレー 1ch、patch 四方、等倍）, 4_R_color_<pcd>_x_y.png（RGB）, panel.png（[EID | EID-like | PCD | R + ゲージ] を panel_scale 倍）
   tb/                         TensorBoard
 """
 
@@ -103,6 +105,11 @@ def preview_dir(run_dir, name):
 
 
 INFER_STAMP_FORMAT = "%Y_%m%d_%H%M%S"
+
+
+def crop_dir(run_dir, weight_dir, now):
+    """パッチ切り出し（bash start.sh crop）の出力先: <run>/infer/<重みディレクトリ名>/crop/<yyyy_mmdd_HHMMSS>/。推論と同じ木の下、入力フォルダ名の代わりに crop。"""
+    return Path(run_dir) / INFER_DIR / Path(weight_dir).name / "crop" / now.strftime(INFER_STAMP_FORMAT)
 
 
 def infer_dir(run_dir, weight_dir, input_dir, now):

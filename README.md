@@ -78,6 +78,7 @@ Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT�
 | `bash start.sh resume <run> [latest\|best\|<epoch>]` | その run の checkpoint から続きを学習（optimizer / RNG / 進捗を復元。run 起動時の設定を使う） |
 | `bash start.sh best <run> <epoch>` | `weights/epoch_NNN/` を `best/` にコピーして `best.txt` に記録 |
 | `bash start.sh infer [--flag ...]` | 症例丸ごと推論（§8） |
+| `bash start.sh crop [--flag ...]` | パッチ切り出し（§8）。指定 PCD スライスを 512 でフル推論 → 左上 (x, y) から 72 四方を切り出し、EID の代表パッチと並べる（スライド用）。学習中に打ってよい |
 | `bash start.sh tb` | 全 run を並べた TensorBoard を起動してブラウザを開く（比較用） |
 | `bash start.sh shell` / `down` | コンテナに入る / 停止・削除 |
 
@@ -145,6 +146,8 @@ DICOM_DIR="/workspace/DataSet/PhotonCT512_original"               # 元 DICOM �
 | mode `patch` | `patch.size` の patch を `patch.stride` 刻みの均等格子（端まで過不足なく被覆）で切り、`patch.batch_size` 枚ずつ G に通し、窓 `uniform` / `hann` で重み付き平均 |
 | mode `both` | 両方を保存し、スライスごとの \|full − patch\| の mean / max [HU] を `diff_stats.txt` に記録 |
 | 出力 PNG | `{full,patch}/<症例>/<slice>.png`（16bit、入力と同じ規約。そのまま次段の学習データになる）、`{full,patch}_R/`（残差、0 HU = 32768）、`{full,patch}_R_color/`（同じ残差の表示用カラー 8bit RGB、512×512 のまま。範囲は run の `launch.yaml` の `log.diff_range_hu`）、`R_colorbar_pm300HU.png`（凡例 1 枚） |
+
+パッチ切り出し `bash start.sh crop`: ケース（PCD / EID のスライス名と左上座標のペア。既定 2 ケース）・`patch`（72）・`panel_scale`（パネルだけ最近傍で拡大、既定 4）・`device`（既定 cpu。学習中に VRAM を取り合わない）は `stage1/configs/crop.yaml`、重みディレクトリは `crop_stage1.sh` の `WEIGHT_DIR`（`--weight_dir` で上書き可）。表示（格納値 0〜3500 を線形、`preview_bits`、R の範囲）は run の `launch.yaml` から。出力は `<run>/infer/<重みディレクトリ名>/crop/<実行時刻>/case<N>_<pcd>_<eid>/` に `1_EID` / `2_EID-like` / `3_PCD` / `4_R_color`（72×72、等倍）と `panel.png`（`[EID | EID-like | PCD | R + ゲージ]`）。16bit の生データは書かない。`shell` / `infer` / `crop` / `best` / `tb` はコンテナが起動済みなら `up` を呼ばず `exec` だけなので、学習中に打ってもコンテナは作り直されない。
 | 出力 DICOM | `{full,patch}_dicom/<症例>/<slice>.dcm`。元 DICOM のヘッダを継承し画素だけ置換。HU → 格納値は `infer.yaml` の `dicom.rescale_slope / rescale_intercept`（参照 DICOM のタグと全枚照合、違えばエラー）。書く直前に「参照 DICOM から再現した stored 値 == 入力 PNG」を全画素で照合し、症例内の Series が 1 種であることも検査する（単一 Series・単一フレーム CT のみ）。`ImageType` は `DERIVED\SECONDARY`、`SeriesNumber` は元 + 1000、SOP / Series UID は新規、SeriesDescription に由来を記す |
 | 出力先 | `<run>/infer/<重みディレクトリ名>/<入力フォルダ名>/<yyyy_mmdd_HHMMSS>/`。実行ごとに別ディレクトリなので、重みや `--max_slices` を変えた再実行が混ざらない。解決済み設定は `infer.yaml` |
 

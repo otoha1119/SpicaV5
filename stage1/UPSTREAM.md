@@ -204,3 +204,12 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 文字は cv2 の Hershey（英数のみ）。Calibri / 游ゴシックは商用でリポジトリにもイメージにも入れられないため見送り（ユーザー了承）。TrueType にするなら Pillow（requirements に有り）で OFL フォントを同梱する案が残っている
 - `util/monitor.py save_full_images`: パネルを `build_panel` に置き換え（TB の images/full/* と preview_fixed_*/epoch_NNN_panel.png、preview_random/ の全部）。個別の `epoch_NNN_R_color.png` は 512×512 のまま（ゲージ無し）。128 patch の `images/current` / `fixed` は従来どおり（下端に凡例）
 - 検証（scratch venv + 合成データ、2 epoch）: パネル形状 (560, 2176, 3)、1 列目 = `01_eid`、3 列目 = `00_pcd` と画素一致、TB の images/full/* がパネルと同形。実データ（epoch_118）を `build_panel` で描いて目視確認
+
+### パッチ切り出し `bash start.sh crop`（2026-09-08、ユーザー指示）
+- 目的: 小さいパッチの拡大画像をスライドで見せる。指定した PCD スライスを 512 のフル推論にかけ、左上 (x, y) から patch（72）四方を切り出し、EID の代表パッチ（別スライスの指定座標）と並べる
+- `configs/crop.yaml`（新規）: `patch` / `panel_scale` / `device`（CROP schema）+ `cases`（PCD / EID のスライス名と左上座標のリスト。`schema.check_crop_cases` で必須キー・型・負座標・スライス名の形を検査）。既定は PCD-002-236 (266,222) × EID-049-079 (327,188)、PCD-002-222 (298,373) × EID-001-093 (270,343)
+- `run_crop.py`（新規、run_infer.py と同じ流儀）: crop.yaml と machines.yaml を検証、`--weight_dir` から run → 最新 launch の G 構成（`run_infer.generator_argv`）と表示設定（`log.display_hu_min/max`、`preview_bits`、`diff_range_hu`）を取り、`<run>/infer/<重み>/crop/<時刻>/` を作って `crop.yaml`（実効値）を保存し `crop_patches.py` を exec。`device=cuda` で gpu_gen 0 はエラー
+- `crop_patches.py`（新規）: `inference_dir.build_generator / infer_full` で 512 を一発推論。先に全ケースのファイルと座標を検査してから書く（中途半端な出力を残さない）。保存は表示用のみ（16bit 生データ無し。ユーザー指示）: `case<N>_<pcd>_<eid>/1_EID_<eid>_x_y.png`, `2_EID-like_<pcd>_x_y.png`, `3_PCD_<pcd>_x_y.png`（グレー 1ch、等倍）, `4_R_color_<pcd>_x_y.png`（RGB）, `panel.png`（`util/panel.build_panel`、`panel_scale` 倍に最近傍拡大、ラベルの EID-like に重みディレクトリ名）
+- `../crop_stage1.sh`（新規）: `WEIGHT_DIR` を書いて `run_crop.py` を呼ぶ。`../start.sh`: `crop` サブコマンド追加。**shell / infer / crop / best / tb はコンテナが起動済み（`docker inspect` の State.Running）なら `up -d` を呼ばず exec だけ**にした（学習中に打っても compose がコンテナを作り直して学習を殺さないように）。train / build / resume は従来どおり up -d
+- `util/run_paths.py`: `crop_dir(run_dir, weight_dir, now)` とレイアウト記述
+- 検証（scratch venv + 合成データ）: 2 ケースの出力 10 ファイル、切り出し位置が入力の表示変換と画素一致、パネル列が 4 倍拡大と一致、はみ出し・キー欠落・device=cuda on CPU 機・未知フラグの各エラー（はみ出しは書き出し前に止まり画像を残さない）。fake docker で start.sh の crop を dry-run し、起動済みなら up を呼ばないことを確認

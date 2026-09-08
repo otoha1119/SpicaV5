@@ -1,0 +1,23 @@
+# stage1/configs/crop.yaml — パッチ切り出し（bash start.sh crop）の設定。唯一の正は configs/schema.py の CROP（cases は check_crop_cases）。既定値は無い。
+# 指定した PCD スライスを 512 のフル推論にかけ、左上 (x, y) から patch 四方を切り出して、EID の代表パッチと並べる（スライド用）。
+# 重みディレクトリは crop_stage1.sh の WEIGHT_DIR（--weight_dir で上書き可）。G の構成と表示範囲（display_hu_*、preview_bits、diff_range_hu）は run の launch.yaml から。
+# 出力は <run>/infer/<重みディレクトリ名>/crop/<実行時刻>/case<N>_<pcd>_<eid>/（レイアウトは util/run_paths.py）。
+# 学習中に同じコンテナで走らせてよい（start.sh は起動済みコンテナに exec するだけ。device: cpu なら VRAM も取り合わない）。
+
+patch: 72             # 切り出す正方形の一辺（画素）。座標は左上
+panel_scale: 4        # 並べたパネルだけ最近傍で拡大（72 → 288。ラベルとゲージが読める大きさ）。個別画像は等倍
+device: cpu           # cpu | cuda。学習中は cpu（512 を数枚通すだけなので数秒）
+
+cases:                # PCD と EID のペア。スライス名（PCD-nnn-sss / EID-nnn-sss）と左上座標。ファイルは pcd_dir/<PCD-nnn>/<name>.png、eid_dir/<EID-nnn>/<name>.png
+  - pcd: PCD-002-236
+    pcd_x: 266
+    pcd_y: 222
+    eid: EID-049-079
+    eid_x: 327
+    eid_y: 188
+  - pcd: PCD-002-222
+    pcd_x: 298
+    pcd_y: 373
+    eid: EID-001-093
+    eid_x: 270
+    eid_y: 343
