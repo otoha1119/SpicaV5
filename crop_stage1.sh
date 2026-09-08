@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # ===== ここだけ書き換える =====
-WEIGHT_DIR="/workspace/stage1/checkpoints/2026_0907_1742/latest"   # 重みディレクトリ（net_G.pth がある所。学習中なら latest が最新）
+WEIGHT_DIR="/workspace/stage1/checkpoints/2026_0908_0041/weights/epoch_170"   # 重みディレクトリ（net_G.pth がある所。学習中なら latest が最新）
 # =============================
 
 cd "$(dirname "$0")/stage1"
@@ -18,6 +18,7 @@ MACHINE="${SPICA_MACHINE:?SPICA_MACHINE が未設定です。bash start.sh か�
 python run_crop.py \
     --machine "$MACHINE" \
     --crop configs/crop.yaml \
+    --train configs/train.yaml \
     --machines ../configs/machines.yaml \
     --weight_dir "$WEIGHT_DIR" \
     -- "$@"

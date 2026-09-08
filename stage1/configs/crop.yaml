@@ -1,6 +1,6 @@
 # stage1/configs/crop.yaml — パッチ切り出し（bash start.sh crop）の設定。唯一の正は configs/schema.py の CROP（cases は check_crop_cases）。既定値は無い。
 # 指定した PCD スライスを 512 のフル推論にかけ、左上 (x, y) から patch 四方を切り出して、EID の代表パッチと並べる（スライド用）。
-# 重みディレクトリは crop_stage1.sh の WEIGHT_DIR（--weight_dir で上書き可）。G の構成と表示範囲（display_hu_*、preview_bits、diff_range_hu）は run の launch.yaml から。
+# 重みディレクトリは crop_stage1.sh の WEIGHT_DIR（--weight_dir で上書き可）。G の構成は run の launch.yaml から、表示（display_hu_*、preview_bits、diff_range_hu）は現在の configs/train.yaml の log から。
 # 出力は <run>/infer/<重みディレクトリ名>/crop/<実行時刻>/case<N>_<pcd>_<eid>/（レイアウトは util/run_paths.py）。
 # 学習中に同じコンテナで走らせてよい（start.sh は起動済みコンテナに exec するだけ。device: cpu なら VRAM も取り合わない）。
 

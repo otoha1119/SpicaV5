@@ -1,14 +1,14 @@
 """run_crop.py — パッチ切り出し（bash start.sh crop）の起動器（Docker 内で動く）。run_infer.py と同じ流儀。
 
   1. configs/crop.yaml（CROP schema + cases）と ../configs/machines.yaml を schema.py で検証する（既定値は無い）
-  2. 重みディレクトリ（--weight_dir、crop_stage1.sh の変数）から run を探し、最新の launch の実効設定から G の構成・HU 正規化・表示設定
-     （display_hu_min/max、preview_bits、diff_range_hu）を取る（学習時の TensorBoard / preview と同じ見た目になる）
+  2. 重みディレクトリ（--weight_dir、crop_stage1.sh の変数）から run を探し、最新の launch の実効設定から G の構成・HU 正規化を取る。
+     表示設定（display_hu_min/max、preview_bits、diff_range_hu）は**現在の configs/train.yaml**（--train）から取る（表示は重みに紐づかないので古い run でも今の見た目）
   3. '--' の後の上書き（--weight_dir、CROP のフラグ --device / --patch / --panel_scale）を反映する
   4. 出力先 <run>/infer/<重みディレクトリ名>/crop/<実行時刻>/ を作り、実効設定を crop.yaml に保存して crop_patches.py を exec する
 学習中に走らせてよい（start.sh は起動済みコンテナに exec するだけ。device cpu なら VRAM を使わない。出力は学習の書き込み先と別）。
 
 使い方（通常は ../crop_stage1.sh 経由）:
-  python run_crop.py --machine PC1 --crop configs/crop.yaml --machines ../configs/machines.yaml --weight_dir <run>/best -- [--device cuda] [--patch 72]
+  python run_crop.py --machine PC1 --crop configs/crop.yaml --train configs/train.yaml --machines ../configs/machines.yaml --weight_dir <run>/best -- [--device cuda] [--patch 72]
 """
 
 import argparse
@@ -21,11 +21,12 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import CROP, MACHINE, ConfigError, apply_overrides, check_crop_cases, check_crop_values, to_argv, validate  # noqa: E402
-from run_infer import generator_argv, load_yaml  # noqa: E402
+from configs.schema import CROP, MACHINE, TRAIN, ConfigError, apply_overrides, check_crop_cases, check_crop_values, to_argv, validate  # noqa: E402
+from run_infer import display_argv, generator_argv, load_yaml  # noqa: E402
 from util.run_paths import LAUNCH_FILE, crop_dir, find_run_dir, latest_launch  # noqa: E402
 
-DISPLAY_TRAIN_KEYS = {"log.display_hu_min": "--display_hu_min", "log.display_hu_max": "--display_hu_max", "log.preview_bits": "--preview_bits"}  # 表示は学習時と同じ
+# 表示の設定は「現在の configs/train.yaml の log」から取る（run の launch.yaml ではない。古い run でも今の見た目にする）
+DISPLAY_TRAIN_KEYS = {"log.display_hu_min": "--display_hu_min", "log.display_hu_max": "--display_hu_max", "log.preview_bits": "--preview_bits", "log.diff_range_hu": "--diff_range_hu"}
 PATH_FLAGS = ("--weight_dir",)
 
 
@@ -48,6 +49,7 @@ def main():
     p = argparse.ArgumentParser(description="Stage 1 (FE-GAN) パッチ切り出しの起動器")
     p.add_argument("--machine", required=True, help="configs/machines.yaml のエントリ名（pcd_dir / eid_dir / gpu_gen を使う）")
     p.add_argument("--crop", required=True, help="切り出し設定 YAML（configs/crop.yaml）")
+    p.add_argument("--train", required=True, help="学習設定 YAML（configs/train.yaml）。表示の設定（log.display_hu_*, preview_bits, diff_range_hu）だけ使う")
     p.add_argument("--machines", required=True, help="マシン定義 YAML")
     p.add_argument("--weight_dir", required=True, help="重みディレクトリ（net_G.pth がある所）")
     p.add_argument("overrides", nargs=argparse.REMAINDER, help="'--' の後に crop_patches.py の上書き（--weight_dir、CROP schema のフラグ）")
@@ -79,14 +81,8 @@ def main():
             if not Path(machine[k]).is_dir():
                 raise ConfigError(f"machines.yaml の {k} がありません: {machine[k]}")
         launch_path = latest_launch(run_dir)
-        launch = load_yaml(launch_path)
-        g_argv, g_cfg = generator_argv(launch)
-        disp_argv, disp_cfg = [], {}
-        for k, flag in DISPLAY_TRAIN_KEYS.items():
-            if k not in launch["train"]:
-                raise ConfigError(f"launch.yaml の train に {k} がありません（古い run?）")
-            disp_argv += [flag, str(launch["train"][k])]
-            disp_cfg[k] = launch["train"][k]
+        g_argv, g_cfg = generator_argv(load_yaml(launch_path))
+        disp_argv, disp_cfg = display_argv(validate("train", load_yaml(a.train), TRAIN), DISPLAY_TRAIN_KEYS)
     except ConfigError as e:
         print(f"[run_crop] 設定エラー: {e}", file=sys.stderr)
         sys.exit(2)

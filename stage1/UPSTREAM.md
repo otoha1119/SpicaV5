@@ -213,3 +213,8 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - `../crop_stage1.sh`（新規）: `WEIGHT_DIR` を書いて `run_crop.py` を呼ぶ。`../start.sh`: `crop` サブコマンド追加。**shell / infer / crop / best / tb はコンテナが起動済み（`docker inspect` の State.Running）なら `up -d` を呼ばず exec だけ**にした（学習中に打っても compose がコンテナを作り直して学習を殺さないように）。train / build / resume は従来どおり up -d
 - `util/run_paths.py`: `crop_dir(run_dir, weight_dir, now)` とレイアウト記述
 - 検証（scratch venv + 合成データ）: 2 ケースの出力 10 ファイル、切り出し位置が入力の表示変換と画素一致、パネル列が 4 倍拡大と一致、はみ出し・キー欠落・device=cuda on CPU 機・未知フラグの各エラー（はみ出しは書き出し前に止まり画像を残さない）。fake docker で start.sh の crop を dry-run し、起動済みなら up を呼ばないことを確認
+
+### 推論・crop の表示設定は現在の train.yaml から（2026-09-08、ユーザー指摘）
+- 問題: `run_infer.py` / `run_crop.py` が `diff_range_hu`（crop は display_hu_* / preview_bits も）を run の launch.yaml から取っていたため、200 / 1600 の時代に起動した run ではカラー範囲 ±200・表示 0〜3000 のまま出ていた
+- 修正: 表示は重みに紐づく値ではないので、**現在の `configs/train.yaml` の log**（`--train`、TRAIN schema で検証）から取る。`run_infer.display_argv`（共通）。G の構成と HU 正規化は従来どおり launch.yaml。`infer_stage1.sh` / `crop_stage1.sh` に `--train configs/train.yaml` を追加。出力の infer.yaml / crop.yaml に `display` として記録
+- 学習中の TB / preview は run の launch の値（古い run を resume するときに今の値にしたければ `bash start.sh resume <run> --diff_range_hu 300 --display_hu_max 2100`）

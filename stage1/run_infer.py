@@ -3,8 +3,8 @@
 設計: docs/plans/20260907_inference-plan.md
   1. configs/infer.yaml（方式）と ../configs/machines.yaml（checkpoints_dir・gpu_gen）を configs/schema.py で検証する（既定値なし）
   2. 重みディレクトリ（--weight_dir、infer_stage1.sh の変数）に net_G.pth があることを確認し、そこから run（launch.yaml がある所）を探して
-     **最新の launch（launch_resume_*.yaml があればそれ）の実効設定**から G の構成（netG / ngf / input_nc / output_nc / norm / final_norm_act / hu_*）と
-     R のカラー表示の範囲（log.diff_range_hu）を取る
+     **最新の launch（launch_resume_*.yaml があればそれ）の実効設定**から G の構成（netG / ngf / input_nc / output_nc / norm / final_norm_act / hu_*）を取る。
+     R のカラー表示の範囲（log.diff_range_hu）は**現在の configs/train.yaml**（--train）から取る（表示は重みに紐づかないので、古い run でも今の見た目）
      （学習時と同じ G を組むため。今の train.yaml / mode.yaml は見ない。実効値 = yaml + 学習時の上書き。F-02 / F-10）
   3. デバイスは machines.yaml の gpu_gen から決める（0 → cpu、それ以外 → cuda）
   4. 出力形式（--output_format png | dicom | both）と元 DICOM ルート（--dicom_dir、dicom / both のとき必須）も infer_stage1.sh の変数から受ける
@@ -27,14 +27,15 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import INFER, MACHINE, ConfigError, apply_overrides, check_infer_values, to_argv, validate  # noqa: E402
+from configs.schema import INFER, MACHINE, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate  # noqa: E402
 from util.run_paths import LAUNCH_FILE, find_run_dir, infer_dir, latest_launch  # noqa: E402
 
 # launch.yaml の train / mode セクション（平坦キー）→ inference_dir.py のフラグ
 G_TRAIN_KEYS = {"network.ngf": "--ngf", "network.input_nc": "--input_nc", "network.output_nc": "--output_nc", "network.norm": "--norm",
                 "data.hu_offset": "--hu_offset", "data.hu_min": "--hu_min", "data.hu_max": "--hu_max"}
 G_MODE_KEYS = {"netG": "--netG"}
-R_COLOR_TRAIN_KEYS = {"log.diff_range_hu": "--diff_range_hu"}  # R のカラー表示の範囲（学習時の TB と同じ値を使う）
+# 表示の設定は「現在の configs/train.yaml の log」から取る（run の launch.yaml ではない）。表示は重みに紐づく値ではないので、古い run でも今の見た目にする（2026-09-08）
+DISPLAY_TRAIN_KEYS = {"log.diff_range_hu": "--diff_range_hu"}
 G_MODE_BOOL_KEYS = {"final_norm_act": "--final_norm_act"}
 PATH_FLAGS = ("--weight_dir", "--input_dir", "--output_format", "--dicom_dir")  # sh の変数を --flag で上書きできる（start.sh の引数が最優先）
 OUTPUT_FORMATS = ("png", "dicom", "both")
@@ -71,7 +72,7 @@ def generator_argv(launch):
     if not isinstance(train, dict) or not isinstance(mode, dict):
         raise ConfigError("launch.yaml に train / mode セクションがありません")
     argv, cfg = [], {}
-    for k, flag in {**G_TRAIN_KEYS, **R_COLOR_TRAIN_KEYS}.items():
+    for k, flag in G_TRAIN_KEYS.items():
         if k not in train:
             raise ConfigError(f"launch.yaml の train に {k} がありません（古い run?）")
         argv += [flag, str(train[k])]
@@ -90,10 +91,20 @@ def generator_argv(launch):
     return argv, cfg
 
 
+def display_argv(train_flat, keys):
+    """検証済みの現在の train.yaml（平坦 dict）から表示の設定をフラグ列にする。"""
+    argv, cfg = [], {}
+    for k, flag in keys.items():
+        argv += [flag, str(train_flat[k])]
+        cfg[k] = train_flat[k]
+    return argv, cfg
+
+
 def main():
     p = argparse.ArgumentParser(description="Stage 1 (FE-GAN) 推論の起動器")
     p.add_argument("--machine", required=True, help="configs/machines.yaml のエントリ名（gpu_gen でデバイスを決める）")
     p.add_argument("--infer", required=True, help="推論方式 YAML（configs/infer.yaml）")
+    p.add_argument("--train", required=True, help="学習設定 YAML（configs/train.yaml）。表示の設定（log.diff_range_hu）だけ使う")
     p.add_argument("--machines", required=True, help="マシン定義 YAML")
     p.add_argument("--weight_dir", required=True, help="重みディレクトリ（net_G.pth がある所。<run>/latest | <run>/best | <run>/weights/epoch_NNN）")
     p.add_argument("--input_dir", required=True, help="処理する PNG 群のフォルダ")
@@ -132,6 +143,7 @@ def main():
         device = "cpu" if machine["gpu_gen"] == 0 else "cuda"
         launch_path = latest_launch(run_dir)  # 最新の実効設定（F-10）
         g_argv, g_cfg = generator_argv(load_yaml(launch_path))
+        d_argv, d_cfg = display_argv(validate("train", load_yaml(a.train), TRAIN), DISPLAY_TRAIN_KEYS)
     except ConfigError as e:
         print(f"[run_infer] 設定エラー: {e}", file=sys.stderr)
         sys.exit(2)
@@ -146,13 +158,13 @@ def main():
     argv = (["--weight_dir", str(weight_dir), "--input_dir", str(input_dir), "--out_dir", str(out_dir), "--device", device,
              "--index_cache_dir", str(Path(machine["checkpoints_dir"]) / ".case_index"),
              "--output_format", output_format, "--dicom_dir", dicom_dir]
-            + g_argv + to_argv(infer, INFER))  # 上書きは infer dict に反映済み
+            + g_argv + d_argv + to_argv(infer, INFER))  # 上書きは infer dict に反映済み
 
     with open(out_dir / "infer.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(
             {"timestamp": now.isoformat(timespec="seconds"), "machine_name": a.machine, "device": device, "run_dir": str(run_dir),
              "launch": str(launch_path), "weight_dir": str(weight_dir), "input_dir": str(input_dir), "output_format": output_format, "dicom_dir": dicom_dir,
-             "infer": infer, "generator": g_cfg, "overrides": list(overrides), "applied": applied, "argv": argv},
+             "infer": infer, "generator": g_cfg, "display": d_cfg, "overrides": list(overrides), "applied": applied, "argv": argv},
             f, allow_unicode=True, sort_keys=False,
         )
 

@@ -46,7 +46,7 @@ log:
   display_hu_min: -1400   # 表示の線形範囲（stored 0 = HU −1400）。TB と preview_<slice>/ に共通
   display_hu_max: 2100    # （stored 3500 = HU 2100）。この範囲を線形に 0..白へ（窓は掛けない）
   preview_bits: 16        # output_images/preview_*/（[EID | EID-like | PCD | R + ゲージ] のパネルと個別画像）のビット深度。16 = 表示範囲を 0..65535 に伸ばす | 8
-  diff_range_hu: 300      # 差分パネル（R = G(z) − z）のカラー表示の ±範囲 HU。白 = 0、純青 = −300、純赤 = +300、範囲外は飽和。推論の *_R_color/ も同じ値（launch.yaml 経由）
+  diff_range_hu: 300      # 差分パネル（R = G(z) − z）のカラー表示の ±範囲 HU。白 = 0、純青 = −300、純赤 = +300、範囲外は飽和。推論の *_R_color/ と crop もこの現在値を使う（run の launch.yaml ではない）
   save_epoch_freq: 1      # 毎 epoch 重み（weights/epoch_NNN/）とフル 512 画像を保存し、後から最良 epoch を選べるようにする（300 epoch で重み ≈ 5 GB + 画像 ≈ 1 GB）
   save_latest_freq: 5000  # 画像枚数（batch 40 なら 125 step ごと）
   continue_train: false

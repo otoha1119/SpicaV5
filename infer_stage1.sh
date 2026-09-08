@@ -52,6 +52,7 @@ MACHINE="${SPICA_MACHINE:?SPICA_MACHINE が未設定です。bash start.sh か�
 python run_infer.py \
     --machine "$MACHINE" \
     --infer configs/infer.yaml \
+    --train configs/train.yaml \
     --machines ../configs/machines.yaml \
     --weight_dir "$WEIGHT_DIR" \
     --input_dir "$INPUT_DIR" \

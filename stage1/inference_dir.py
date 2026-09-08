@@ -18,7 +18,7 @@ mode
   <out_dir>/full_dicom/<case>/<slice>.dcm  EID-like（DICOM）
   <out_dir>/full_R/<case>/<slice>.png      残差 R = G(z) − z（uint16、0 HU = 32768）。--save_residual のとき。eidlike = pcd + (R − 32768) が厳密に成り立つ。R は PNG のみ
   <out_dir>/full_R_color/<case>/<slice>.png  同じ R の表示用カラー（8bit RGB、512×512 のまま。白 = 0、純青 = −diff_range_hu、純赤 = +。util/residual_color.py）。--save_residual のとき
-  <out_dir>/R_colorbar_pm<range>HU.png    上の凡例 1 枚（--diff_range_hu は run の launch.yaml の log.diff_range_hu。run_infer.py が渡す）
+  <out_dir>/R_colorbar_pm<range>HU.png    上の凡例 1 枚（--diff_range_hu は現在の configs/train.yaml の log.diff_range_hu。run_infer.py が渡す。run の launch.yaml ではない）
   <out_dir>/patch/..., patch_dicom/..., patch_R/..., patch_R_color/...
   <out_dir>/diff_stats.txt                 mode = both のとき
 
