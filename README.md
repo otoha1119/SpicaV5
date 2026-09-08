@@ -3,7 +3,7 @@
 Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT）風の画像を **非ペア学習**で生成する研究コード。
 
 - **Stage 1（本リポジトリの主体）**: PCD512 → EID-like512。別患者の PCD 画像群と EID 画像群から、PCD 固有の成分を除いて EID の分布に寄せる変換 G を学習する。
-- **Stage 2（保留）**: EID-like512 → PCD1024 の超解像。Stage 1 の出力を教師データにする。
+- **Stage 2（着手 2026-09-08、§11）**: EID-like1024 → PCD1024 の教師あり同解像度回帰（U-Net + MSE、ILUMENATE = Koons et al., Med Phys 2025 準拠）。Stage 1 の出力を ×2 補間したものを入力、PCD1024 を教師にする。
 
 土台は Park, Baek, You, Choi, Seo, *"Unpaired image denoising using a generative adversarial network in X-ray CT"*, IEEE Access 2019（DOI 10.1109/access.2019.2934178。以下 **FE-GAN**）。GAN 損失に fidelity 項 λ‖G(z)−z‖² を埋め込んだ**一方向・cycle なし**の GAN で、学習フレームワークは [junyanz/pytorch-CycleGAN-and-pix2pix](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix)（commit 2a7afba）を `stage1/` に vendoring して借りている。本家からの変更はすべて `stage1/UPSTREAM.md` に記録する。
 
@@ -157,9 +157,11 @@ BatchNorm は eval（running 統計）。checkpoint 時のフル画像と同じ�
 
 ```
 SpicaV5/
-├── start.sh                 起動スクリプト（ホスト）。ヘッダーが取扱説明
+├── start.sh                 Stage 1 の起動スクリプト（ホスト）。ヘッダーが取扱説明
+├── start2.sh                Stage 2 の起動スクリプト（ホスト）。dataset | build | shell | down（§11）
 ├── train_stage1.sh          学習の入口（コンテナ内）
 ├── infer_stage1.sh          推論の入口（コンテナ内。WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR）
+├── dataset_stage2.sh        Stage 2 データ作成の入口（コンテナ内。INPUT_DIR / OUTPUT_DIR）
 ├── configs/machines.yaml    マシン定義（Stage 共通）
 ├── docker/                  Dockerfile / compose / requirements（gen30, gen50, cpu）
 ├── stage1/                  junyanz 本家の vendoring + Stage 1 の実装
@@ -170,6 +172,10 @@ SpicaV5/
 │   ├── util/                monitor.py（表示）, run_paths.py（run レイアウト）, dicom_io.py（DICOM 出力）
 │   ├── run_train.py / train.py / run_infer.py / inference_dir.py / mark_best.py
 │   └── checkpoints/         run の出力（git 管理外）
+├── stage2/                  Stage 2（U-Net、ILUMENATE 準拠）。junyanz は使わない
+│   ├── configs/             schema.py（Stage 2 設定の唯一の正）, dataset.yaml
+│   ├── make_dataset.py      512 → 1024 補間でデータセットを作る（manifest.yaml 付き）
+│   └── checkpoints/         run の出力（git 管理外。学習は未実装）
 ├── docs/
 │   ├── reference/           要件（research_requirements.md）、論文照合チェックリスト、実装レビュー、junyanz 監査
 │   ├── decisions/           方針転換の記録
@@ -184,3 +190,27 @@ SpicaV5/
 
 - **SpicaV3**: 前世代（F-LSeSim ベース）。DICOM → PNG の前処理スクリプト（`create_dataset/convert_pcd.py`, `convert_eid.py`）と評価指標の設計（SENTINEL-CARE）はこちらを参照する。
 - **SpicaV2**: SR-CycleGAN。DICOM 書き出しの元になった実装がある。
+
+## 11. Stage 2（EID-like1024 → PCD1024）
+
+Stage 1 が作った EID-like512 を **前処理で ×2 補間して 1024 のファイルにし**、PCD1024（同一患者・同一スキャンの別再構成。`DataSet/PCD1024_v1`）を教師にした教師あり同解像度回帰。土台は ILUMENATE（Koons et al., *Med Phys* 2025;52(7):e17874。入力も教師も 1024 マトリクスで、U-Net + MSE だけ）。仕様と作業計画: `docs/plans/20260908_stage2-unet-implementation-spec.md`。
+
+```
+Stage 1 推論出力 <run>/infer/<重み>/<入力>/<時刻>/full/<case>/<slice>.png   （EID-like512）
+   │  bash start2.sh dataset        ×2 補間（bicubic）→ 同じ <case>/<slice>.png + manifest.yaml
+   ▼
+<DataSet>/EIDlike1024_v1/           学習入力（実 EID の推論用は EID_v5 から同じ道具で EID1024_v1 を作る）
+<DataSet>/PCD1024_v1/               教師（ユーザー作業で変換済み。512 と先頭から 1 対 1、3 症例は末尾の枚数が違うので min まで使う）
+   │  bash start2.sh                学習（未実装）
+```
+
+| コマンド | 動き |
+|---|---|
+| `bash start2.sh [マシン名] dataset [--flag ...]` | `dataset_stage2.sh` の `INPUT_DIR` を `stage2/configs/dataset.yaml`（`scale` 2 / `interp` bicubic / `input_size` 512）で補間し `OUTPUT_DIR` に書く。`--input_dir` / `--output_dir` と `DATASET` のフラグだけ上書き可。出力先は `container_data_root` 配下のサブフォルダで、既にあればエラー（上書きしない）。`OUTPUT_DIR.tmp` に書いて検算後に rename。コンテナが起動済みなら up を呼ばず exec だけ（Stage 1 の学習中でも可） |
+| `bash start2.sh build` / `shell` / `down` | start.sh と同じ（コンテナは Stage 1 と共用） |
+| `bash start2.sh` / `train` / `infer` | 未実装（エラーで止まる） |
+
+- 値の規約は Stage 1 と同じ（uint16 1ch、stored = HU + 1400）。補間は float32 → 四捨五入 → clip。cv2.resize の half-pixel 規約は 512 / 1024 の再構成格子の対応と一致する（実ペアで NCC のシフト探索が (0, 0)。計画書 §2.3）
+- `manifest.yaml` に時刻・マシン・入出力・方式・症例ごとの枚数・上書き・隣の `infer.yaml`（Stage 1 の由来）を残す
+- Stage 2 の設定の正は `stage2/configs/schema.py`。`configs/machines.yaml` は Stage 共通で、Stage 2 は使うキー（gpu_gen / host_data_root / container_data_root / num_threads / tb_port）だけ検査する
+

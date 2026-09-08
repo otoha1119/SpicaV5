@@ -1,0 +1,9 @@
+# stage2/configs/dataset.yaml — Stage 2 データセット作成（bash start2.sh dataset）の方式。唯一の正は configs/schema.py の DATASET。既定値は無い。
+# 入力フォルダ・出力フォルダは dataset_stage2.sh の INPUT_DIR / OUTPUT_DIR（同名の --flag で上書き可）。
+# 設計: docs/plans/20260908_stage2-unet-implementation-spec.md §3
+
+scale: 2            # 拡大率。512 → 1024（PCD1024 と同じ格子に乗せる）
+interp: bicubic     # 補間: nearest | bilinear | bicubic | area | lanczos（cv2.resize）。学習時と実 EID 推論時で同じ値を使うこと（manifest.yaml に残る）
+                    # cv2.resize は画素中心を揃える half-pixel 規約（出力画素 (x+0.5)/scale − 0.5 を入力上で補間）。
+                    # 512 と 1024 の再構成が同じ FOV を共有するときの画素対応と一致する（ユーザー申告 2026-09-08: kernel も同一）
+input_size: 512     # 入力の一辺（画素）。違う大きさ・8bit・3ch はエラー（黙って通さない）
