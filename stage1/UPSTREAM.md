@@ -219,3 +219,6 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 修正: 表示は重みに紐づく値ではないので、**現在の `configs/train.yaml` の log**（`--train`、TRAIN schema で検証）から取る。`run_infer.display_argv`（共通）。G の構成と HU 正規化は従来どおり launch.yaml。`infer_stage1.sh` / `crop_stage1.sh` に `--train configs/train.yaml` を追加。出力の infer.yaml / crop.yaml に `display` として記録
 - 学習中の TB / preview は run の launch の値（古い run を resume するときに今の値にしたければ `bash start.sh resume <run> --diff_range_hu 300 --display_hu_max 2100`）
 - `train.py`: `save_latest_freq` ごとの "saving the latest model" の表示を消した（保存は従来どおり。2026-09-08 ユーザー指示）
+
+### Stage 2 用キー（2026-09-08）
+- `configs/schema.py`: `MACHINE` に `pcd1024_dir` / `eidlike1024_dir`（flag None、Stage 1 は使わない）を追加。`../configs/machines.yaml` は Stage 共通で Stage 2（`stage2/`、`start2.sh`）がこの 2 キーを読むため、未知キーで Stage 1 の検証が落ちないように宣言だけ置く。旧 run の resume は既存の「run 作成後に追加されたキーは今の yaml の値で補う」処理で通る

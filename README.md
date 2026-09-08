@@ -63,7 +63,7 @@ Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT�
 | `stage1/configs/train.yaml` | 学習パラメータ全部（optim / loss / network / data / log）。各行に論文の出典 |
 | `stage1/configs/mode.yaml` | アルゴリズムの切替（sampling、gan_mode、netG、netD、final_norm_act、serial_batches） |
 | `stage1/configs/infer.yaml` | 推論の方式（mode full \| patch \| both、patch の size / stride / blend / batch_size、max_slices、save_residual、DICOM の Rescale 値） |
-| `configs/machines.yaml` | マシン定義（Stage 共通）: gpu_gen（30 / 40 / 50 / 0 = CPU）、ホスト側データルート → コンテナ側マウント先、pcd_dir / eid_dir / align_meta / checkpoints_dir / num_threads / tb_port |
+| `configs/machines.yaml` | マシン定義（Stage 共通）: gpu_gen（30 / 40 / 50 / 0 = CPU）、ホスト側データルート → コンテナ側マウント先、pcd_dir / eid_dir / align_meta / checkpoints_dir / num_threads / tb_port、Stage 2 用の pcd1024_dir / eidlike1024_dir（§11） |
 
 優先順位は **sh のコマンド引数 > yaml**。`bash start.sh --n_epochs 50` のように schema にあるフラグだけ上書きできる（無いフラグはエラー）。
 
@@ -161,7 +161,7 @@ SpicaV5/
 ├── start2.sh                Stage 2 の起動スクリプト（ホスト）。dataset | build | shell | down（§11）
 ├── train_stage1.sh          学習の入口（コンテナ内）
 ├── infer_stage1.sh          推論の入口（コンテナ内。WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR）
-├── dataset_stage2.sh        Stage 2 データ作成の入口（コンテナ内。INPUT_DIR / OUTPUT_DIR）
+├── dataset_stage2.sh        Stage 2 データ作成の入口（コンテナ内。INPUT_DIR。出力先は machines.yaml の eidlike1024_dir）
 ├── configs/machines.yaml    マシン定義（Stage 共通）
 ├── docker/                  Dockerfile / compose / requirements（gen30, gen50, cpu）
 ├── stage1/                  junyanz 本家の vendoring + Stage 1 の実装
@@ -199,18 +199,18 @@ Stage 1 が作った EID-like512 を **前処理で ×2 補間して 1024 のフ
 Stage 1 推論出力 <run>/infer/<重み>/<入力>/<時刻>/full/<case>/<slice>.png   （EID-like512）
    │  bash start2.sh dataset        ×2 補間（bicubic）→ 同じ <case>/<slice>.png + manifest.yaml
    ▼
-<DataSet>/EIDlike1024_v1/           学習入力（実 EID の推論用は EID_v5 から同じ道具で EID1024_v1 を作る）
-<DataSet>/PCD1024_v1/               教師（ユーザー作業で変換済み。512 と先頭から 1 対 1、3 症例は末尾の枚数が違うので min まで使う）
+<DataSet>/EIDlike1024_v1/           学習入力 = machines.yaml の eidlike1024_dir（実 EID の推論用は EID_v5 から同じ道具で EID1024_v1 を作る）
+<DataSet>/PCD1024_v1/               教師 = machines.yaml の pcd1024_dir（ユーザー作業で変換済み。512 と先頭から 1 対 1、3 症例は末尾の枚数が違うので min まで使う）
    │  bash start2.sh                学習（未実装）
 ```
 
 | コマンド | 動き |
 |---|---|
-| `bash start2.sh [マシン名] dataset [--flag ...]` | `dataset_stage2.sh` の `INPUT_DIR` を `stage2/configs/dataset.yaml`（`scale` 2 / `interp` bicubic / `input_size` 512）で補間し `OUTPUT_DIR` に書く。`--input_dir` / `--output_dir` と `DATASET` のフラグだけ上書き可。出力先は `container_data_root` 配下のサブフォルダで、既にあればエラー（上書きしない）。`OUTPUT_DIR.tmp` に書いて検算後に rename。コンテナが起動済みなら up を呼ばず exec だけ（Stage 1 の学習中でも可） |
+| `bash start2.sh [マシン名] dataset [--flag ...]` | `dataset_stage2.sh` の `INPUT_DIR`（変換元。実行ごとに変わるので sh に書く）を `stage2/configs/dataset.yaml`（`scale` 2 / `interp` bicubic / `input_size` 512）で補間し、**`configs/machines.yaml` の `eidlike1024_dir`**（マシンごとのデータ配置。Stage 1 の `pcd_dir` と同じ場所）に書く。`--input_dir`、`--eidlike1024_dir` / `--pcd1024_dir`、`DATASET` のフラグだけ上書き可。出力先は `container_data_root` 配下のサブフォルダで、既にあればエラー（上書きしない）。`<出力先>.tmp` に書いて検算後に rename。コンテナが起動済みなら up を呼ばず exec だけ（Stage 1 の学習中でも可） |
 | `bash start2.sh build` / `shell` / `down` | start.sh と同じ（コンテナは Stage 1 と共用） |
 | `bash start2.sh` / `train` / `infer` | 未実装（エラーで止まる） |
 
 - 値の規約は Stage 1 と同じ（uint16 1ch、stored = HU + 1400）。補間は float32 → 四捨五入 → clip。cv2.resize の half-pixel 規約は 512 / 1024 の再構成格子の対応と一致する（実ペアで NCC のシフト探索が (0, 0)。計画書 §2.3）
 - `manifest.yaml` に時刻・マシン・入出力・方式・症例ごとの枚数・上書き・隣の `infer.yaml`（Stage 1 の由来）を残す
-- Stage 2 の設定の正は `stage2/configs/schema.py`。`configs/machines.yaml` は Stage 共通で、Stage 2 は使うキー（gpu_gen / host_data_root / container_data_root / num_threads / tb_port）だけ検査する
+- Stage 2 の設定の正は `stage2/configs/schema.py`。`configs/machines.yaml` は Stage 共通で、Stage 2 は使うキー（gpu_gen / host_data_root / container_data_root / num_threads / tb_port / pcd1024_dir / eidlike1024_dir）だけ検査する。Stage 1 の schema は未知キーを拒むので、`pcd1024_dir` / `eidlike1024_dir` は `stage1/configs/schema.py` の MACHINE にも宣言してある（Stage 1 は使わない）
 

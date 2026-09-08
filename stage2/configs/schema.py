@@ -7,8 +7,8 @@
 （Stage 間で import し合わない。両方の `configs` パッケージが名前衝突するため）。
 
 machines.yaml は Stage 共通ファイルなので、Stage 2 は「自分が使うキー」（MACHINE）の存在と型だけ検査し、Stage 1 だけのキー
-（pcd_dir / eid_dir / align_meta / checkpoints_dir ...）は無視する（validate_shared）。Stage 1 側は未知キーを拒むので、Stage 2 専用のキーを
-machines.yaml に足すときは stage1/configs/schema.py の MACHINE にも宣言が要る（学習フェーズで扱う）。
+（pcd_dir / eid_dir / align_meta / checkpoints_dir ...）は無視する（validate_shared）。Stage 1 側は未知キーを拒むので、Stage 2 専用のキー
+（pcd1024_dir / eidlike1024_dir）は stage1/configs/schema.py の MACHINE にも flag None で宣言してある。キーを足すときは両方に書く。
 
 各キーの宣言: Key(type, flag, doc)
   type : int | float | str | bool。float は int の値も受け付ける。bool は YAML の true / false のみ
@@ -39,6 +39,8 @@ MACHINE = {
     "container_data_root": Key(str, None, "マウント先（コンテナ内）。dataset の出力先はこの配下に限る"),
     "num_threads":         Key(int, None, "make_dataset.py の worker 数（0 で逐次）。学習では DataLoader の worker 数"),
     "tb_port":             Key(int, None, "TensorBoard のポート（start2.sh が compose に渡す。Stage 1 と共用）"),
+    "pcd1024_dir":         Key(str, "--pcd1024_dir",     "Stage 2 の教師 PCD1024（<case>/<slice>.png、1ch uint16、512 と同じ命名）。学習で使う"),
+    "eidlike1024_dir":     Key(str, "--eidlike1024_dir", "Stage 2 の学習入力。bash start2.sh dataset の出力先（EID-like512 を ×2 補間）で、学習はここを読む。container_data_root 配下"),
 }
 
 INTERPS = ("nearest", "bilinear", "bicubic", "area", "lanczos")
