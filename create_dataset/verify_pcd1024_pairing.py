@@ -1,19 +1,30 @@
 """
-PCD1024_v1 と PCD512_v2 のペア対応を検証する。
+PCD1024_v1 と PCD512_v2 のスライス対応を検証する。
 
-  1. 全症例で 1024 を 1/2 に縮小し、同一インデックスのスライスと NCC を取る
-  2. 枚数が一致しない症例は、スライス平均 HU プロファイルの相互相関で
-     Z 方向の最適シフトを探し、実画像 NCC で裏を取る
+Stage 2 は教師あり学習なのでペアがずれると致命的。Z 間隔が 0.1mm で隣接
+スライスがほぼ同一のため「同一インデックスで NCC が高い」だけでは足りない
+（±5 枚ずれていても 0.99 は出る）。そこで周辺 ±W スライスを総当たりし、
+**同一インデックスが最大になる**ことを確認する。
 
-2026-09-08 の実行結果: 全20症例 NCC 0.9973〜0.9996、枚数不一致の
-PCD-006 / PCD-011 / PCD-015 も最適シフト 0（先頭から 1 対 1 対応）。
-末尾の枚数だけが違うので min(n1024, n512) までを使えばよい。
+各症例で 12 箇所（先頭側 2・中央 8・末尾側 2）を検証点にし、それぞれ
+1024[i] に対して 512[i-W..i+W] の NCC を全部計算して argmax を見る。
+NCC の鋭さ（±1, +5, +10, +20 での低下）も出力し、指標がスライス単位の
+分解能を持つことを同時に示す。
+
+2026-09-08 の実行結果: 20 症例 × 12 点 × 41 候補 = 9,840 通りすべてで
+argmax = 0。NCC は @0 = 0.999、@±1 = 0.991、@+5 = 0.947、@+20 = 0.865 で
+1 枚のずれを識別できている。よって全症例が先頭から 1 対 1 対応であり、
+枚数が違う 3 症例（PCD-006 / 011 / 015）は末尾が余っているだけなので
+min(n1024, n512) までを使えばよい。
 """
 import os, glob, cv2, numpy as np
+from concurrent.futures import ProcessPoolExecutor
 
 PCD1024 = "/Volumes/OTO-SSD/DataSet/PCD1024_v1"
 PCD512  = "/Volumes/OTO-SSD/DataSet/PCD512_v2"
-HU_OFFSET = 1400
+W       = 20   # 探索窓 ±20 スライス (= ±2.0mm)
+N_MID   = 8    # 中央の検証点数
+WORKERS = 8
 
 
 def slice_paths(root, case):
@@ -24,62 +35,49 @@ def slice_paths(root, case):
 
 
 def ncc(a, b):
-    a = a.astype(np.float64) - a.mean()
-    b = b.astype(np.float64) - b.mean()
-    den = np.sqrt((a * a).sum() * (b * b).sum())
-    return float((a * b).sum() / den) if den > 0 else 0.0
+    a = a - a.mean()
+    b = b - b.mean()
+    d = np.sqrt((a * a).sum() * (b * b).sum())
+    return float((a * b).sum() / d) if d > 0 else 0.0
 
 
-def image_ncc(p1024, p512):
-    """1024 を 1/2 に縮小して 512 と NCC を取る"""
-    a = cv2.imread(p1024, cv2.IMREAD_UNCHANGED).astype(np.float64)
-    b = cv2.imread(p512, cv2.IMREAD_UNCHANGED).astype(np.float64)
-    return ncc(cv2.resize(a, (512, 512), interpolation=cv2.INTER_AREA), b)
+def probe(f1, f5, i):
+    """1024[i] に対し 512[i-W..i+W] の NCC を総当たりし (i, argmax, NCC群) を返す"""
+    a = cv2.imread(f1[i], cv2.IMREAD_UNCHANGED).astype(np.float64)
+    a = cv2.resize(a, (512, 512), interpolation=cv2.INTER_AREA)
+    vals = {off: ncc(a, cv2.imread(f5[i + off], cv2.IMREAD_UNCHANGED).astype(np.float64))
+            for off in range(-W, W + 1)}
+    return i, max(vals, key=vals.get), vals
 
 
-def mean_profile(paths):
-    return np.array([cv2.imread(p, cv2.IMREAD_UNCHANGED).mean() - HU_OFFSET for p in paths])
-
-
-def best_shift(a, b, min_overlap=200):
-    """a[i] <-> b[i+s] が最も合う s を返す"""
-    az = (a - a.mean()) / (a.std() + 1e-12)
-    bz = (b - b.mean()) / (b.std() + 1e-12)
-    best = (None, -2.0)
-    for s in range(-len(a) + min_overlap, len(b) - min_overlap):
-        i0, i1 = max(0, -s), min(len(a), len(b) - s)
-        if i1 - i0 < min_overlap:
-            continue
-        v = ncc(az[i0:i1], bz[i0 + s:i1 + s])
-        if v > best[1]:
-            best = (s, v)
-    return best
+def check_case(case):
+    f1, f5 = slice_paths(PCD1024, case), slice_paths(PCD512, case)
+    n = min(len(f1), len(f5))
+    idx = [W, W + 5]                                                   # 先頭側
+    idx += [int(n * (k + 1) / (N_MID + 1)) for k in range(N_MID)]      # 中央
+    idx += [n - 1 - W - 5, n - 1 - W]                                  # 末尾側
+    idx = sorted({i for i in idx if i - W >= 0 and i + W < len(f5) and i < len(f1)})
+    return case, len(f1), len(f5), n, [probe(f1, f5, i) for i in idx]
 
 
 def main():
-    print(f"{'case':<9}{'n1024':>6}{'n512':>6}   NCC (1/4, 1/2, 3/4)")
-    mismatched, ng = [], []
-    for i in range(1, 21):
-        case = f"PCD-{i:03d}"
-        f1, f5 = slice_paths(PCD1024, case), slice_paths(PCD512, case)
-        n = min(len(f1), len(f5))
-        scores = [image_ncc(f1[int(n * f)], f5[int(n * f)]) for f in (0.25, 0.5, 0.75)]
-        mark = "" if min(scores) > 0.99 else "   <-- 要確認"
-        if min(scores) <= 0.99:
-            ng.append(case)
-        if len(f1) != len(f5):
-            mismatched.append(case)
-        print(f"{case:<9}{len(f1):>6}{len(f5):>6}   " + "  ".join(f"{s:.4f}" for s in scores) + mark)
-
-    print("\n全症例 NCC > 0.99:", "OK" if not ng else f"NG {ng}")
-
-    if mismatched:
-        print(f"\n--- 枚数不一致 {len(mismatched)} 症例の Z シフト照合 ---")
-        for case in mismatched:
-            f1, f5 = slice_paths(PCD1024, case), slice_paths(PCD512, case)
-            s, v = best_shift(mean_profile(f1), mean_profile(f5))
-            print(f"{case}: n1024={len(f1)} n512={len(f5)}  best_shift={s}  profile_NCC={v:.5f}"
-                  + ("  → 先頭から 1 対 1 対応" if s == 0 else "  → ずれあり、要調整"))
+    print(f"探索窓 ±{W} スライス、症例あたり最大 {N_MID + 4} 点を総当たり\n")
+    print(f"{'case':<9}{'n1024':>6}{'n512':>6}{'共通':>6}{'点数':>5}{'argmax≠0':>9}"
+          f"{'NCC@0':>8}{'@±1':>8}{'@+5':>8}{'@+10':>8}{'@+20':>8}")
+    allgood, total = True, 0
+    with ProcessPoolExecutor(max_workers=WORKERS) as ex:
+        for case, n1, n5, n, res in ex.map(check_case, [f"PCD-{i:03d}" for i in range(1, 21)]):
+            bad = [(i, off) for i, off, _ in res if off != 0]
+            m = lambda f: np.mean([f(v) for _, _, v in res])
+            allgood &= not bad
+            total += len(res) * (2 * W + 1)
+            print(f"{case:<9}{n1:>6}{n5:>6}{n:>6}{len(res):>5}{len(bad):>9}"
+                  f"{m(lambda v: v[0]):>8.4f}{m(lambda v: (v[1]+v[-1])/2):>8.4f}"
+                  f"{m(lambda v: v[5]):>8.4f}{m(lambda v: v[10]):>8.4f}{m(lambda v: v[20]):>8.4f}"
+                  + ("" if not bad else f"   <-- ずれあり {bad}"))
+    print(f"\n比較総数 {total} 通り")
+    print("全症例・全検証点で最良オフセット = 0:", "OK" if allgood else "NG")
+    print("→ OK なら学習では min(n1024, n512) までを同一インデックスでペアにしてよい")
 
 
 if __name__ == "__main__":
