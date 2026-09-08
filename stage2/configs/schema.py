@@ -59,6 +59,10 @@ TRAIN = {
     "log.save_epoch_freq":         Key(int, "--save_epoch_freq",         "重み（weights/epoch_NNN/）を保存する epoch 間隔。1 = 毎 epoch"),
     "log.save_latest_freq":        Key(int, "--save_latest_freq",        "latest/ を保存する間隔（画像枚数。batch_size の倍数）"),
     "log.val_max_slices_per_case": Key(int, "--val_max_slices_per_case", "epoch 末の検証で val 症例ごとに使うフル 1024 スライスの上限（等間隔に間引く。0 で全部）"),
+    "log.full_slice":              Key(str, "--full_slice",              "epoch 末に TensorBoard へ出す固定スライス（eidlike1024_dir / pcd1024_dir からの相対パス。Stage 1 の log.full_slice と同じ位置 PCD-002/PCD-002-215.png）"),
+    "log.n_full_random":           Key(int, "--n_full_random",           "epoch 末に TensorBoard へ出すランダムスライスの枚数（epoch ごとに別。train ∪ val から。0 で無し）"),
+    "log.display_hu_min":          Key(int, "--display_hu_min",          "TensorBoard 画像の線形表示範囲の下限 HU（この値以下を黒）。Stage 1 と同じ −1400"),
+    "log.display_hu_max":          Key(int, "--display_hu_max",          "同上の上限 HU（この値以上を白）。Stage 1 と同じ 2100（stored 3500）"),
 }
 
 # ---------------------------------------------------------------------------
@@ -302,6 +306,9 @@ def check_train_values(train, mode, machine):
     slf = train["log.save_latest_freq"]
     if slf < bs or slf % bs: P.append(f"log.save_latest_freq ({slf}) は optim.batch_size ({bs}) の倍数（画像枚数単位。倍数でないと latest が保存されない）")
     if train["log.val_max_slices_per_case"] < 0: P.append("log.val_max_slices_per_case ≥ 0（0 で全部）")
+    if not train["log.full_slice"]: P.append("log.full_slice（固定スライスの相対パス）を指定")
+    if train["log.n_full_random"] < 0: P.append("log.n_full_random ≥ 0")
+    if train["log.display_hu_min"] >= train["log.display_hu_max"]: P.append("log.display_hu_min < display_hu_max")
     if mode["arch"] not in ARCHS: P.append(f"arch は {ARCHS}")
     if mode["base_ch"] < 1: P.append("base_ch ≥ 1")
     if mode["n_pool"] < 1: P.append("n_pool ≥ 1")

@@ -29,3 +29,8 @@ log:
   save_epoch_freq: 1             # 毎 epoch 重み（weights/epoch_NNN/）を保存し、後から最良 epoch を選べるようにする（100 epoch で約 3 GB）
   save_latest_freq: 6400         # latest/ の保存間隔（画像枚数。batch 16 なら 400 step ごと）
   val_max_slices_per_case: 100   # epoch 末の検証で val 症例ごとに使うフル 1024 スライスの上限（等間隔に間引く。0 で全部 ≈ 1,000 枚/症例）
+  # TensorBoard の画像（epoch 末。パネル [EID-like1024 | PCD1024 | PCD-like1024]、8bit。ディスクの preview は別フェーズ）
+  full_slice: PCD-002/PCD-002-215.png   # 固定スライス（Stage 1 の log.full_slice と同じ位置）。eidlike1024_dir / pcd1024_dir 両方からの相対パス → images/full/fixed
+  n_full_random: 1        # epoch ごとに別のランダムスライス（train ∪ val から。名前と train/val を ラベルに出す）→ images/full/random
+  display_hu_min: -1400   # 表示の線形範囲（Stage 1 と同じ）。stored 0 = HU −1400 を黒
+  display_hu_max: 2100    # stored 3500 = HU 2100 を白。窓は掛けない

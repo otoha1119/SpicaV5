@@ -1,6 +1,6 @@
 """stage2/util/monitor.py — Stage 2 学習の表示: ターミナル進捗バー（tqdm）+ TensorBoard（scalar のみ）+ loss_log.txt。
 
-Stage 1 の util/monitor.py の scalar 部分に相当する。画像（TB のグリッド・フル画像・preview パネル）は別フェーズで詰める（ユーザー指示 2026-09-08）。
+Stage 1 の util/monitor.py に相当する。画像は epoch 末のフル 1024 パネルだけ（128 patch のグリッドは出さない）。ディスクの preview は別フェーズ（ユーザー指示 2026-09-08）。
 
   ターミナル : 1 epoch = 1 本の tqdm バー（単位 = 画像枚数）。末尾に loss（正規化空間）と RMSE [HU]。epoch 末に 1 行の要約（tqdm.write）
   TensorBoard: <run>/tb/  global_step = total_iters（画像枚数。resume で復元されるので曲線がつながる）
@@ -10,21 +10,32 @@ Stage 1 の util/monitor.py の scalar 部分に相当する。画像（TB の�
      train/lr（epoch ごと）
      val/rmse_HU, val/mae_HU       epoch 末、val 症例のフル 1024（出力 − 教師）
      val/rmse_input_HU, val/mae_input_HU   参照線: 入力 − 教師（何もしない場合）。出力がこれを下回らなければ学習の意味が無い
+     images/full/fixed              epoch 末（save_epoch_freq ごと）: 固定スライス（train.yaml log.full_slice = Stage 1 と同じ PCD-002-215）のパネル
+                                    [EID-like1024 (input) | PCD1024 (teacher) | PCD-like1024 (output)]（util/panel.py。8bit、HU を display_hu_min..max で線形に黒..白）
+     images/full/random（複数なら random0, random1, ...）  epoch ごとに別のランダムスライス（train ∪ val。ラベルに名前と train/val）
   loss_log.txt: print_freq ごとの損失（テキスト。grep 用の保険）と epoch 要約
 """
 
 import time
 from pathlib import Path
 
+import numpy as np
+import torch
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
+from util.panel import build_panel, full_labels
 from util.run_paths import LOSS_LOG_FILE, TB_DIR
+
+to_u8 = lambda x01: (np.clip(x01, 0.0, 1.0) * 255.0).round().astype(np.uint8)  # noqa: E731
 
 
 class TrainMonitor:
-    def __init__(self, run_dir, loss_name, batch_size, dataset_size):
+    def __init__(self, run_dir, train, loss_name, batch_size, dataset_size):
+        """train は launch の実効値（平坦 dict。hu_* と display_hu_* を使う）。"""
         self.run_dir = Path(run_dir)
+        self.hu_min, self.hu_max = train["data.hu_min"], train["data.hu_max"]
+        self.disp_min, self.disp_max = train["log.display_hu_min"], train["log.display_hu_max"]
         self.loss_name = loss_name
         self.batch_size = batch_size
         self.dataset_size = dataset_size
@@ -81,6 +92,26 @@ class TrainMonitor:
         msg = (f"[epoch {epoch}/{total_epochs}] {elapsed:.0f}s, iters {total_iters}, lr {lr:.6f} | "
                f"val rmse {val['rmse_hu']:.1f} HU (input {val['rmse_input_hu']:.1f}) mae {val['mae_hu']:.1f} HU (input {val['mae_input_hu']:.1f}) on {val['n']} slices")
         self.write(msg)
+
+    # ------------------------------------------------------------------ フル画像（epoch 末に TB へ）
+    def _lin(self, t):
+        """(1,H,W) 正規化 tensor → (H,W,3) float01 グレー（HU を display_hu_min..max で線形に黒..白。窓は掛けない）。"""
+        hu = (t[0].float() + 1.0) / 2.0 * (self.hu_max - self.hu_min) + self.hu_min
+        g = ((hu - self.disp_min) / float(self.disp_max - self.disp_min)).clamp(0.0, 1.0).numpy()
+        return np.repeat(g[:, :, None], 3, axis=2)
+
+    def log_full_images(self, model, dataset, full, epoch, total_iters):
+        """固定 1 組 + ランダム n 組（PairDataset.full_slices(epoch)）をフル 1024 で通し、[EID-like1024 | PCD1024 | PCD-like1024] のパネルを TB へ（8bit）。
+        タグは固定（fixed / random / randomN）なので TB のスライダーで epoch を追える。ディスクには書かない（preview は別フェーズ）。"""
+        n_rand = full["kinds"].count("random")
+        for i, ((in_path, pcd_path), kind, name) in enumerate(zip(full["pairs"], full["kinds"], full["names"])):
+            x, t = dataset.load_full(in_path), dataset.load_full(pcd_path)
+            y = model.predict(x)
+            cols = [self._lin(x[0]), self._lin(t[0]), self._lin(y[0])]
+            panel = build_panel(cols, full_labels(epoch, name if kind == "random" else None))
+            tag = "fixed" if kind == "fixed" else ("random" if n_rand == 1 else f"random{i - 1}")
+            self.tb.add_image(f"images/full/{tag}", to_u8(panel), total_iters, dataformats="HWC")
+        model.net.train()
 
     def close(self):
         self.tb.close()

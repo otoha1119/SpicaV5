@@ -4,9 +4,10 @@
   1. run_train.py が書いた launch.yaml（実効値）を読み、schema で再検証する（既定値なし）
   2. seed → device（machines.yaml の gpu_gen ≠ 0 なら CUDA 必須。黙って CPU に落ちない）→ PairDataset → DataLoader → RegressionModel
   3. 再開（--resume_state）なら重みと optimizer / RNG / 進捗を復元する
-  4. epoch ループ: print_freq step ごとに scalar、save_latest_freq 枚ごとに latest/、epoch 末に val 指標 + latest/ + weights/epoch_NNN/
+  4. epoch ループ: print_freq step ごとに scalar、save_latest_freq 枚ごとに latest/、epoch 末に val 指標 + latest/ + weights/epoch_NNN/ + TB のフル画像パネル
+     （固定 = train.yaml log.full_slice、ランダム = n_full_random 枚。[EID-like1024 | PCD1024 | PCD-like1024]）
   5. 最終 epoch は save_epoch_freq の倍数でなくても保存する
-画像（TB グリッド・フル画像・preview）は別フェーズ。
+ディスクへの preview 出力は別フェーズ。
 """
 
 import argparse
@@ -73,7 +74,7 @@ def main():
         model.resume(a.resume_state)
     total_iters = model.total_iters
     val_slices = dataset.val_slices()
-    monitor = TrainMonitor(run_dir, mode["loss"], bs, len(dataset))
+    monitor = TrainMonitor(run_dir, train, mode["loss"], bs, len(dataset))
     n_epochs, print_freq, save_latest, save_epoch = train["optim.n_epochs"], train["log.print_freq"], train["log.save_latest_freq"], train["log.save_epoch_freq"]
     last_epoch, last_saved_epoch = None, None
 
@@ -101,6 +102,7 @@ def main():
         if epoch % save_epoch == 0:
             model.save(run_dir, "latest")
             model.save(run_dir, epoch)
+            monitor.log_full_images(model, dataset, dataset.full_slices(epoch), epoch, total_iters)  # [EID-like1024 | PCD1024 | PCD-like1024] を TB へ
             last_saved_epoch = epoch
         last_epoch = epoch
         monitor.end_epoch(epoch, n_epochs, total_iters, model.optimizer.param_groups[0]["lr"], time.time() - t_epoch, val)
@@ -109,6 +111,7 @@ def main():
         monitor.write(f"saving the final model (epoch {last_epoch}, iters {total_iters})")
         model.save(run_dir, "latest")
         model.save(run_dir, last_epoch)
+        monitor.log_full_images(model, dataset, dataset.full_slices(last_epoch), last_epoch, total_iters)
     monitor.write(f"[train] 完了: {run_dir}（latest: {ckpt_dir(run_dir, 'latest')}）")
     monitor.close()
 

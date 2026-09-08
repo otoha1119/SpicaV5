@@ -67,6 +67,12 @@ class RegressionModel:
             return {"loss": float(loss), "rmse_hu": float(d.pow(2).mean().sqrt()) * self.hu_unit, "mae_hu": float(d.abs().mean()) * self.hu_unit}
 
     @torch.no_grad()
+    def predict(self, x):
+        """監視・検証用の順伝播（eval、勾配なし）。x は (N,1,H,W) 正規化 tensor（CPU 可）。"""
+        self.net.eval()
+        return self.forward(x.to(self.device)).cpu()
+
+    @torch.no_grad()
     def evaluate(self, dataset, slices):
         """val のフル画像で RMSE / MAE [HU] を出す。入力そのまま（何もしない場合）の値も参照線として返す。"""
         self.net.eval()

@@ -40,6 +40,9 @@ def check_split_on_disk(train, machine):
         missing = [c for c in cases if c not in on_in or c not in on_pcd]
         if missing:
             raise RuntimeError(f"{kind} の症例が入力（{machine['eidlike1024_dir']}）か教師（{machine['pcd1024_dir']}）にありません: {missing}")
+    for root in (machine["eidlike1024_dir"], machine["pcd1024_dir"]):  # 固定スライス（TB）も起動前に検査する
+        if not (Path(root) / train["log.full_slice"]).is_file():
+            raise RuntimeError(f"train.yaml log.full_slice がありません: {Path(root) / train['log.full_slice']}（eidlike1024_dir / pcd1024_dir からの相対パス）")
     return {"input": on_in, "pcd": on_pcd}
 
 
@@ -76,6 +79,7 @@ class PairDataset(Dataset):
         self.patch_seed = train["data.patch_seed"]
         self.serial = mode["serial_batches"]
         self.val_max = train["log.val_max_slices_per_case"]
+        self.full_slice, self.n_full_random = train["log.full_slice"], train["log.n_full_random"]
         train_cases, val_cases, test_cases = train["data.train_cases"], train["data.val_cases"], train["data.test_cases"]
 
         check_split_on_disk(train, machine)  # 起動器でも検査済みだが、train.py 単独でも同じ規則で止まるように
@@ -87,6 +91,11 @@ class PairDataset(Dataset):
                 raise RuntimeError(f"{kind} の症例フォルダに PNG がありません: {empty}")
 
         self.train_cases, self.val_cases, self.test_cases = list(train_cases), list(val_cases), list(test_cases)
+        # 固定スライス（毎 epoch TB へ）は起動時に両方のディレクトリで存在を検査する（無ければ学習前に止める。Stage 1 と同じ）
+        self.fixed_pair = (str(Path(machine["eidlike1024_dir"]) / self.full_slice), str(Path(machine["pcd1024_dir"]) / self.full_slice))
+        for p in self.fixed_pair:
+            if not Path(p).is_file():
+                raise RuntimeError(f"train.yaml log.full_slice がありません: {p}（eidlike1024_dir / pcd1024_dir からの相対パス）")
         self.pairs_train, info_train = build_pairs(idx_in, idx_pcd, self.train_cases)
         self.pairs_val, info_val = build_pairs(idx_in, idx_pcd, self.val_cases)
         self.info = {"train": info_train, "val": info_val}
@@ -141,6 +150,17 @@ class PairDataset(Dataset):
                 pairs = [pairs[i] for i in idx]
             out += [(c, a, b) for a, b in pairs]
         return out
+
+    def full_slices(self, epoch):
+        """epoch 末に TB へ出すフル 1024 のペア: 固定 1 組 + epoch ごとに別のランダム n_full_random 組（train ∪ val から。patch_seed と epoch から決定的）。
+        戻り値 {"pairs": [(in, pcd), ...], "kinds": ["fixed", "random", ...], "names": ["PCD-002-215", "PCD-015-123 (val)", ...]}"""
+        pool = [(c, a, b, "train") for c in self.train_cases for a, b in self.pairs_train[c]] + [(c, a, b, "val") for c in self.val_cases for a, b in self.pairs_val[c]]
+        pool = [x for x in pool if x[2] != self.fixed_pair[1]]
+        rng = random.Random(self.patch_seed * 1_000_003 + int(epoch))
+        picks = rng.sample(pool, min(self.n_full_random, len(pool)))
+        return {"pairs": [self.fixed_pair] + [(a, b) for _, a, b, _ in picks],
+                "kinds": ["fixed"] + ["random"] * len(picks),
+                "names": [Path(self.fixed_pair[1]).stem] + [f"{Path(b).stem} ({kind})" for _, _, b, kind in picks]}
 
     def load_full(self, path):
         """フル画像を (1,1,H,W) の正規化 tensor で返す（検証用）。"""
