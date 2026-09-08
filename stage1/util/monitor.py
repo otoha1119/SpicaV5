@@ -13,17 +13,18 @@ junyanz の util/visualizer.py（wandb / HTML）は使わない。train.py は�
      time/sec_per_step, time/data_sec_per_step（データ律速の検出）
      train/lr（epoch ごと）
      images/current（いま学習中のバッチ先頭 n_images 枚）, images/fixed（学習開始時に固定した同じ patch）
-        各行 = [ PCD z | EID-like G(z) | 差分 G(z)−z | 実 EID x ]。128 patch のまま（元サイズに戻さない）
+        各行 = [ PCD z | EID-like G(z) | 差分 G(z)−z | 実 EID x ]。128 patch のまま（元サイズに戻さない）。差分列はカラー（下記）、最下段に凡例
   ディスク   : <run>/output_images/preview_fixed_<slice>/epoch_NNN.png — 固定スライス（train.yaml log.full_slice）の [PCD | EID-like | R] 横並びパネルを epoch ごとに
                <run>/output_images/preview_random/epoch_NNN_<slice>.png — epoch ごとに別のランダムスライス（n_full_random 枚）の同じパネル
-               （preview_bits 16 = 表示範囲を 0..65535 に伸ばした 16bit / 8。TB は images/full/fixed, images/full/random）
+               （RGB 3ch。preview_bits 16 = 表示範囲を 0..65535 に伸ばした 16bit / 8。TB は images/full/fixed, images/full/random）
                <run>/output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png — 上の各スライスの生 uint16（HU が読める）を
                PCD / EID-like / 残差 R = G(z) − z で保存（uint16。pcd/eidlike は HU + hu_offset、R は 32768 + ΔHU）。TB にも images/full/<slice>
                （画像パネルは stored = HU + hu_offset、差分パネルは 32768 + ΔHU。TB は 8bit しか描けないため厳密値はこちら）
   loss_log.txt: print_freq ごとの損失（テキスト。grep 用の保険）
 
 【表示の線形範囲】 TB の 8bit 表示と preview パネルは HU を [display_hu_min, display_hu_max] で線形に 0..白へ（窓は掛けない。既定 −1400..2100 HU = stored 0..3500）。
-   差分パネルは ±diff_range_hu を 0..255 に（0 HU が中間グレー）。
+   差分パネル（G(z) − z）はカラー: 白 = 0 HU（変化なし）、純青 = −diff_range_hu（G が HU を下げた）、純赤 = +diff_range_hu（上げた）。
+   白から純色へ線形、範囲外は端の色で飽和（util/residual_color.py。2026-09-08 ユーザー確定）。グリッドの最下段に凡例（左 −range … 白 … 右 +range）。
 """
 
 import time
@@ -37,9 +38,13 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 
 from data.ct_dataset import denormalize, residual_stored, write_png
+from util.residual_color import colorbar_rgb01, residual_rgb01, rgb_to_bgr
 from util.run_paths import epoch_images_dir, preview_dir
 
 LOSS_KEYS_BAR = ("D", "G_GAN", "G_fid")  # バー末尾に出す損失
+GRID_PAD = 0.5  # 画像グリッドの区切り（中間グレー。差分列の白 = 0 と混ざらないように）
+to_u8 = lambda x01: (np.clip(x01, 0.0, 1.0) * 255.0).round().astype(np.uint8)  # noqa: E731
+to_u16 = lambda x01: (np.clip(x01, 0.0, 1.0) * 65535.0).round().astype(np.uint16)  # noqa: E731
 DIAG_KEYS = ("D_real", "D_fake")           # TB で diag/ に分類する損失名
 
 
@@ -133,19 +138,27 @@ class TrainMonitor:
             net.train(was_training)
             sets.append(("fixed", a, g, b))
         for tag, a, g, b in sets:
-            self.tb.add_image(f"images/{tag}", self._grid(a, g, b), total_iters, dataformats="HW")  # TB だけ（ディスクには書かない。2026-09-07 ユーザー判断）
+            self.tb.add_image(f"images/{tag}", self._grid(a, g, b), total_iters, dataformats="HWC")  # TB だけ（ディスクには書かない。2026-09-07 ユーザー判断）
 
     def _grid(self, a, g, b):
-        """各行 [z | G(z) | G(z)−z | x] のグリッドを 8bit（表示用。HU を display_hu_min..max で線形に 0..255、差分は ±diff_range_hu）で返す。"""
+        """各行 [z | G(z) | G(z)−z | x] のグリッドを 8bit RGB (H,W,3) で返す（表示用）。
+        画像列は HU を display_hu_min..max で線形に黒..白（グレー）、差分列は util/residual_color（白 = 0、純青 = −diff_range_hu、純赤 = +）。最下段に凡例。"""
         o = self.opt
         to_hu = lambda t: (t.detach().float().cpu() + 1.0) / 2.0 * (o.hu_max - o.hu_min) + o.hu_min
         A, G, B = to_hu(a), to_hu(g), to_hu(b)
         D = G - A
-        lin = lambda hu: ((hu - o.display_hu_min) / float(o.display_hu_max - o.display_hu_min)).clamp(0.0, 1.0)
-        dif = lambda d: ((d + o.diff_range_hu) / float(2 * o.diff_range_hu)).clamp(0.0, 1.0)
+        lin, col = self._panel_fns()
         n = A.shape[0]
-        panels8 = torch.stack([p for i in range(n) for p in (lin(A[i]), lin(G[i]), dif(D[i]), lin(B[i]))])  # (4n,1,p,p)
-        return (make_grid(panels8, nrow=4, padding=2, pad_value=1.0)[0] * 255.0).round().clamp(0, 255).to(torch.uint8).numpy()
+        panels = torch.stack([p for i in range(n) for p in (lin(A[i]), lin(G[i]), col(D[i]), lin(B[i]))])  # (4n,3,p,p)
+        grid = make_grid(panels, nrow=4, padding=2, pad_value=GRID_PAD).permute(1, 2, 0).numpy()  # (H,W,3) [0,1]
+        return to_u8(np.concatenate([grid, colorbar_rgb01(o.diff_range_hu, grid.shape[1])], axis=0))
+
+    def _panel_fns(self):
+        """(1,H,W) の HU テンソル → (3,H,W) [0,1] のパネル。lin = グレー（表示範囲で線形）、col = 差分のカラー。"""
+        o = self.opt
+        lin = lambda hu: ((hu - o.display_hu_min) / float(o.display_hu_max - o.display_hu_min)).clamp(0.0, 1.0).expand(3, -1, -1)
+        col = lambda d: torch.from_numpy(residual_rgb01(d[0].numpy(), o.diff_range_hu)).permute(2, 0, 1)
+        return lin, col
 
     # ------------------------------------------------------------------ フル画像（checkpoint と一緒に）
     def save_full_images(self, model, full, epoch, total_iters):
@@ -176,16 +189,13 @@ class TrainMonitor:
             write_png(out_dir / f"{stem}_pcd.png", pcd16)
             write_png(out_dir / f"{stem}_eidlike.png", eid16)
             write_png(out_dir / f"{stem}_R.png", residual_stored(pcd16, eid16))  # 0 HU = 32768
-            lin = lambda hu: ((hu - o.display_hu_min) / float(o.display_hu_max - o.display_hu_min)).clamp(0.0, 1.0)
-            dif = lambda d: ((d + o.diff_range_hu) / float(2 * o.diff_range_hu)).clamp(0.0, 1.0)
-            grid = make_grid(torch.stack([lin(A[i]), lin(G[i]), dif(R[i])]), nrow=3, padding=4, pad_value=1.0)[0]  # [PCD | EID-like | R]、[0,1]
+            lin, col = self._panel_fns()
+            grid = make_grid(torch.stack([lin(A[i]), lin(G[i]), col(R[i])]), nrow=3, padding=4, pad_value=GRID_PAD).permute(1, 2, 0).numpy()  # [PCD | EID-like | R]、(H,W,3) [0,1]
+            panel01 = np.concatenate([grid, colorbar_rgb01(o.diff_range_hu, grid.shape[1])], axis=0)  # 最下段に R の凡例
             tag = "fixed" if kind == "fixed" else ("random" if full["kinds"].count("random") == 1 else f"random{i}")  # TB のタグは固定（スライダーで epoch を追える）
-            self.tb.add_image(f"images/full/{tag}", (grid * 255.0).round().clamp(0, 255).to(torch.uint8).numpy(), total_iters, dataformats="HW")
-            # 表示用パネル: 同じ絵を preview に。16bit は表示範囲を 0..65535 に伸ばす（プレビューで正しい明るさ、階調 65536 段）。HU は読めない（生は epoch_NNN/）
-            if o.preview_bits == 16:
-                panel = (grid * 65535.0).round().clamp(0, 65535).to(torch.int32).numpy().astype(np.uint16)
-            else:
-                panel = (grid * 255.0).round().clamp(0, 255).to(torch.uint8).numpy()
+            self.tb.add_image(f"images/full/{tag}", to_u8(panel01), total_iters, dataformats="HWC")
+            # 表示用パネル: 同じ絵を preview に（RGB 3ch。cv2 は BGR なので変換して書く）。16bit は表示範囲を 0..65535 に伸ばす（プレビューで正しい明るさ、階調 65536 段）。HU は読めない（生は epoch_NNN/）
+            panel = rgb_to_bgr(to_u16(panel01) if o.preview_bits == 16 else to_u8(panel01))
             ep = epoch_images_dir(self.run_dir, epoch).name  # epoch_NNN
             if kind == "fixed":
                 write_png(preview_dir(self.run_dir, f"fixed_{stem}") / f"{ep}.png", panel)  # preview_fixed_<slice>/epoch_NNN.png

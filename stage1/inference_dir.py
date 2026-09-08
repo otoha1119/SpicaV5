@@ -17,7 +17,9 @@ mode
   <out_dir>/full/<case>/<slice>.png        EID-like（uint16、stored = HU + hu_offset。学習データと同じ規約）
   <out_dir>/full_dicom/<case>/<slice>.dcm  EID-like（DICOM）
   <out_dir>/full_R/<case>/<slice>.png      残差 R = G(z) − z（uint16、0 HU = 32768）。--save_residual のとき。eidlike = pcd + (R − 32768) が厳密に成り立つ。R は PNG のみ
-  <out_dir>/patch/..., patch_dicom/..., patch_R/...
+  <out_dir>/full_R_color/<case>/<slice>.png  同じ R の表示用カラー（8bit RGB、512×512 のまま。白 = 0、純青 = −diff_range_hu、純赤 = +。util/residual_color.py）。--save_residual のとき
+  <out_dir>/R_colorbar_pm<range>HU.png    上の凡例 1 枚（--diff_range_hu は run の launch.yaml の log.diff_range_hu。run_infer.py が渡す）
+  <out_dir>/patch/..., patch_dicom/..., patch_R/..., patch_R_color/...
   <out_dir>/diff_stats.txt                 mode = both のとき
 
 BN は eval（running 統計）。学習の checkpoint 時のフル画像（util/monitor.py save_full_images）と同じ。
@@ -40,6 +42,7 @@ from tqdm import tqdm
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from data.ct_dataset import CaseIndex, denormalize, normalize, read_stored, residual_stored, write_png  # noqa: E402
+from util.residual_color import colorbar_filename, colorbar_rgb01, residual_rgb8, rgb_to_bgr  # noqa: E402
 from models import networks  # noqa: E402
 from util.dicom_io import DicomIndex, check_pixels, check_rescale, check_series_unique, write_like_reference  # noqa: E402
 
@@ -69,6 +72,7 @@ def parse_args():
     req("--hu_offset", type=int)
     req("--hu_min", type=int)
     req("--hu_max", type=int)
+    req("--diff_range_hu", type=int, help="R のカラー表示の ±範囲 HU（run の launch.yaml の log.diff_range_hu。学習時の TensorBoard と同じ）")
     # 方式（configs/infer.yaml）
     req("--mode", choices=MODES)
     req("--patch_size", type=int)
@@ -200,6 +204,11 @@ def main():
         run_name = Path(a.weight_dir).parent.name if Path(a.weight_dir).parent.name != "weights" else Path(a.weight_dir).parent.parent.name
         print(f"[infer] dicom: 参照ルート {dicom_index.root}（{len(dicom_index.cases)} 症例）")
 
+    if a.save_residual:  # R のカラー表示の凡例（<out_dir>/ 直下に 1 枚。範囲を名前に入れる）
+        if a.diff_range_hu <= 0:
+            raise ValueError(f"--diff_range_hu は正: {a.diff_range_hu}")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        write_png(out_dir / colorbar_filename(a.diff_range_hu), rgb_to_bgr((colorbar_rgb01(a.diff_range_hu, 512) * 255.0).round().astype(np.uint8)))
     diff_lines = []
     t0 = time.time()
     for p in tqdm(paths, unit="slice", dynamic_ncols=True):
@@ -233,6 +242,8 @@ def main():
                                      f"SpicaV5 EID-like {run_name}/{Path(a.weight_dir).name} {m}", a.rescale_slope, a.rescale_intercept, ds=ref_ds)
             if a.save_residual:
                 write_png(out_dir / f"{m}_R" / rel, residual_stored(pcd16, eid16))
+                delta_hu = eid16.astype(np.int32) - pcd16.astype(np.int32)  # = R_stored − 32768（保存した 16bit と同じ差）
+                write_png(out_dir / f"{m}_R_color" / rel, rgb_to_bgr(residual_rgb8(delta_hu, a.diff_range_hu)))
         if a.mode == "both":
             d = (outs["full"] - outs["patch"]).abs() * hu_per_unit
             diff_lines.append((str(rel), float(d.mean()), float(d.max())))

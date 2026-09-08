@@ -180,3 +180,13 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - `data/ct_dataset.py`: `fixed_full(n)` → `full_slices(epoch)`（固定 + `patch_seed` と epoch から決定的なランダム。resume しても同じ epoch は同じスライス）
 - `util/monitor.py`: 出力先を `preview_fixed_<slice>/epoch_NNN.png` と `preview_random/epoch_NNN_<slice>.png` に分け、TB のタグは `images/full/fixed` / `images/full/random`（固定タグでスライダーが効く）
 - `run_train.py prepare_resume`: 旧 run の launch にある廃止キー（`n_full_images` 等）は警告して無視
+
+### 差分（R = G(z) − z）の表示をカラー化（2026-09-08、ユーザー確定）
+- 配色: 白 = 0 HU、純青 (0,0,255) = −`log.diff_range_hu`、純赤 (255,0,0) = +。白から純色へ線形、範囲外は端の色で飽和。範囲は 200 → **300** HU（`train.yaml` / plan）。
+  試作は epoch_118 の実データで 発散グレー / 青白赤 / 青黒赤 / jet / turbo / |ΔHU| inferno / 両側型 / ±100〜1000 を比較し、CT 論文の差分図（グレー + 窓明記）と発散型（Moreland）の慣行を踏まえて白背景の純色に決めた
+- `util/residual_color.py`（新規）: `residual_rgb01 / residual_rgb8`（ΔHU → RGB）、`colorbar_rgb01`（凡例）、`colorbar_filename`、`rgb_to_bgr`（cv2 用）。monitor と推論で共通
+- `util/monitor.py`: `_grid`（images/current, images/fixed）と `save_full_images`（images/full/*, preview_fixed_*/ preview_random/）の差分列を RGB に。グリッドは (H,W,3)、`add_image(..., dataformats="HWC")`、区切りは中間グレー（`GRID_PAD = 0.5`。白 = 0 と混ざらないため）、最下段に凡例。preview は RGB 3ch（16bit は 0..65535 に伸ばす。cv2 は BGR なので `rgb_to_bgr`）。`epoch_NNN/<slice>_R.png`（16bit 生データ）は変更なし
+- `inference_dir.py`: `--diff_range_hu`（必須）を追加。`--save_residual` のとき `<mode>_R_color/<case>/<slice>.png`（8bit RGB、512×512、凡例なし）と `<out_dir>/R_colorbar_pm<range>HU.png`（1 枚）を書く。色は保存した 16bit R と同じ差（`eid16 − pcd16`）から作るので `_R.png` から再計算した色と一致する
+- `run_infer.py`: `R_COLOR_TRAIN_KEYS = {"log.diff_range_hu": "--diff_range_hu"}` を launch.yaml から渡す（無い古い run はエラー）
+- `configs/schema.py`: `log.diff_range_hu` の説明を更新。docs: README / CLAUDE.md / run_paths.py / inference-plan / training-monitor-plan
+- 検証（リポジトリ外 scratch venv + 合成データ、2026-09-08）: 1 epoch 学習 → TB の 4 タグが (H,W,3) uint8 で凡例の両端が純青/純赤、preview が 3ch uint16、`epoch_001/*_R.png` が 1ch uint16 で `eidlike = pcd + (R − 32768)` 厳密一致。`run_infer.py` 経由の推論で `full_R_color/` が `full_R/` から再計算した色と完全一致、`R_colorbar_pm300HU.png` 生成、`--diff_range_hu 300` が launch.yaml から渡ることを確認

@@ -108,7 +108,7 @@ git reset --hard
   best/…, best.txt                           bash start.sh best で作る（判定は目視。指標ができたら自動化）
   weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq（既定 1 = 毎 epoch）ごと
   output_images/epoch_NNN/    checkpoint（毎 epoch）ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit = HU が読める）
-  output_images/preview_fixed_<slice>/epoch_NNN.png   固定スライス（train.yaml log.full_slice）の表示用パネル [PCD | EID-like | R]。epoch 順に並べて見比べる
+  output_images/preview_fixed_<slice>/epoch_NNN.png   固定スライス（train.yaml log.full_slice）の表示用パネル [PCD | EID-like | R]。epoch 順に並べて見比べる。R 列はカラー（下記）、最下段に凡例
   output_images/preview_random/epoch_NNN_<slice>.png  epoch ごとに別のランダムスライス（log.n_full_random 枚）の同じパネル（表示範囲 stored 0〜3500 を 16bit いっぱいに伸ばす）
   （学習中の 128 patch グリッドは TensorBoard だけ）
   infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   推論の出力（§8。実行ごとに別ディレクトリ）
@@ -121,7 +121,7 @@ git reset --hard
 
 - ターミナル: tqdm バー（画像枚数単位。1 step = batch_size 枚）。末尾に D / G_GAN / G_fid と `d_in`（G(z) − z の平均絶対値 [HU]）。
 - TensorBoard（学習の起動器が **その run の `tb/` だけ**を logdir にして自動起動。前の run のものは止める。全 run を並べるときは `bash start.sh tb`。`machines.yaml` の `tb_port` で公開）: `loss/*`、`diag/*`（D_real、D_fake、d_in_HU）、`time/*`、`train/lr`、`images/current`、`images/fixed`（固定サンプル。128 patch グリッドは TB にだけ出す）、`images/full/<slice>`（checkpoint 時のフル 512）。横軸は総画像枚数。
-- 表示は窓を掛けず HU −1400〜2100（stored 0〜3500）を線形に黒〜白へ、差分パネルは ±200 HU（`train.yaml` の `log:` で変更可）。TensorBoard は 8bit、`preview_<slice>/` は `log.preview_bits`（16 = 表示範囲を 0〜65535 に伸ばす / 8）。
+- 表示は窓を掛けず HU −1400〜2100（stored 0〜3500）を線形に黒〜白へ。差分パネル（R = G(z) − z）はカラーで、白 = 0 HU（変化なし）、純青 = −300 HU（G が HU を下げた）、純赤 = +300 HU（上げた）、白から純色へ線形、範囲外は端の色で飽和（`train.yaml` の `log.diff_range_hu`、実装は `stage1/util/residual_color.py`）。パネルの最下段に凡例。TensorBoard は 8bit、`preview_*/` は RGB 3ch で `log.preview_bits`（16 = 表示範囲を 0〜65535 に伸ばす / 8）。16bit の `_R.png` はグレーの生データのまま（CT 論文の差分図の標準。図にするときは窓をキャプションに書く）。
 
 ## 8. 推論（`bash start.sh infer`）
 
@@ -141,7 +141,7 @@ DICOM_DIR="/workspace/DataSet/PhotonCT512_original"               # 元 DICOM �
 | mode `full` | 512 を一発で G に通す |
 | mode `patch` | `patch.size` の patch を `patch.stride` 刻みの均等格子（端まで過不足なく被覆）で切り、`patch.batch_size` 枚ずつ G に通し、窓 `uniform` / `hann` で重み付き平均 |
 | mode `both` | 両方を保存し、スライスごとの \|full − patch\| の mean / max [HU] を `diff_stats.txt` に記録 |
-| 出力 PNG | `{full,patch}/<症例>/<slice>.png`（16bit、入力と同じ規約。そのまま次段の学習データになる）、`{full,patch}_R/`（残差、0 HU = 32768） |
+| 出力 PNG | `{full,patch}/<症例>/<slice>.png`（16bit、入力と同じ規約。そのまま次段の学習データになる）、`{full,patch}_R/`（残差、0 HU = 32768）、`{full,patch}_R_color/`（同じ残差の表示用カラー 8bit RGB、512×512 のまま。範囲は run の `launch.yaml` の `log.diff_range_hu`）、`R_colorbar_pm300HU.png`（凡例 1 枚） |
 | 出力 DICOM | `{full,patch}_dicom/<症例>/<slice>.dcm`。元 DICOM のヘッダを継承し画素だけ置換。HU → 格納値は `infer.yaml` の `dicom.rescale_slope / rescale_intercept`（参照 DICOM のタグと全枚照合、違えばエラー）。書く直前に「参照 DICOM から再現した stored 値 == 入力 PNG」を全画素で照合し、症例内の Series が 1 種であることも検査する（単一 Series・単一フレーム CT のみ）。`ImageType` は `DERIVED\SECONDARY`、`SeriesNumber` は元 + 1000、SOP / Series UID は新規、SeriesDescription に由来を記す |
 | 出力先 | `<run>/infer/<重みディレクトリ名>/<入力フォルダ名>/<yyyy_mmdd_HHMMSS>/`。実行ごとに別ディレクトリなので、重みや `--max_slices` を変えた再実行が混ざらない。解決済み設定は `infer.yaml` |
 

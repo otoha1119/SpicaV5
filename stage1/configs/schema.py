@@ -57,7 +57,7 @@ TRAIN = {
     "log.display_hu_min":   Key(int,   "--display_hu_min", "表示用の線形範囲の下限 HU（この値以下を黒）"),
     "log.display_hu_max":   Key(int,   "--display_hu_max", "表示用の線形範囲の上限 HU（この値以上を白）。stored 3500 = HU 2100"),
     "log.preview_bits":     Key(int,   "--preview_bits",   "output_images/preview_<slice>/epoch_NNN.png（[PCD | EID-like | R] の横並び、表示用）のビット深度。16 = 表示範囲を 0..65535 に伸ばす（プレビューで正しく見え階調も細かい）| 8"),
-    "log.diff_range_hu":    Key(int,   "--diff_range_hu",  "差分パネル (G(z) − z) の ±範囲 HU（0 HU を中間グレー）"),
+    "log.diff_range_hu":    Key(int,   "--diff_range_hu",  "差分パネル (G(z) − z) のカラー表示の ±範囲 HU（白 = 0、純青 = −範囲、純赤 = +範囲。util/residual_color.py。推論の *_R_color/ も同じ値）"),
     "log.save_epoch_freq":  Key(int,   "--save_epoch_freq", "checkpoint を保存する epoch 間隔"),
     "log.save_latest_freq": Key(int,   "--save_latest_freq", "latest を保存する間隔（画像枚数。junyanz の total_iters 単位）"),
     "log.continue_train":   Key(bool,  "--continue_train", "true で latest から再開（通常は run_train.py --resume が付ける）"),

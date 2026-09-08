@@ -3,7 +3,8 @@
 設計: docs/plans/20260907_inference-plan.md
   1. configs/infer.yaml（方式）と ../configs/machines.yaml（checkpoints_dir・gpu_gen）を configs/schema.py で検証する（既定値なし）
   2. 重みディレクトリ（--weight_dir、infer_stage1.sh の変数）に net_G.pth があることを確認し、そこから run（launch.yaml がある所）を探して
-     **最新の launch（launch_resume_*.yaml があればそれ）の実効設定**から G の構成（netG / ngf / input_nc / output_nc / norm / final_norm_act / hu_*）を取る
+     **最新の launch（launch_resume_*.yaml があればそれ）の実効設定**から G の構成（netG / ngf / input_nc / output_nc / norm / final_norm_act / hu_*）と
+     R のカラー表示の範囲（log.diff_range_hu）を取る
      （学習時と同じ G を組むため。今の train.yaml / mode.yaml は見ない。実効値 = yaml + 学習時の上書き。F-02 / F-10）
   3. デバイスは machines.yaml の gpu_gen から決める（0 → cpu、それ以外 → cuda）
   4. 出力形式（--output_format png | dicom | both）と元 DICOM ルート（--dicom_dir、dicom / both のとき必須）も infer_stage1.sh の変数から受ける
@@ -33,6 +34,7 @@ from util.run_paths import LAUNCH_FILE, find_run_dir, infer_dir, latest_launch  
 G_TRAIN_KEYS = {"network.ngf": "--ngf", "network.input_nc": "--input_nc", "network.output_nc": "--output_nc", "network.norm": "--norm",
                 "data.hu_offset": "--hu_offset", "data.hu_min": "--hu_min", "data.hu_max": "--hu_max"}
 G_MODE_KEYS = {"netG": "--netG"}
+R_COLOR_TRAIN_KEYS = {"log.diff_range_hu": "--diff_range_hu"}  # R のカラー表示の範囲（学習時の TB と同じ値を使う）
 G_MODE_BOOL_KEYS = {"final_norm_act": "--final_norm_act"}
 PATH_FLAGS = ("--weight_dir", "--input_dir", "--output_format", "--dicom_dir")  # sh の変数を --flag で上書きできる（start.sh の引数が最優先）
 OUTPUT_FORMATS = ("png", "dicom", "both")
@@ -69,7 +71,7 @@ def generator_argv(launch):
     if not isinstance(train, dict) or not isinstance(mode, dict):
         raise ConfigError("launch.yaml に train / mode セクションがありません")
     argv, cfg = [], {}
-    for k, flag in G_TRAIN_KEYS.items():
+    for k, flag in {**G_TRAIN_KEYS, **R_COLOR_TRAIN_KEYS}.items():
         if k not in train:
             raise ConfigError(f"launch.yaml の train に {k} がありません（古い run?）")
         argv += [flag, str(train[k])]
