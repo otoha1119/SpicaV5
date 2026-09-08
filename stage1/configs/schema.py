@@ -94,6 +94,7 @@ MACHINE = {
     # Stage 2 用（machines.yaml は Stage 共通ファイル。Stage 1 は使わないが、未知キーで落とさないためにここで宣言する。2026-09-08）
     "pcd1024_dir":         Key(str, None,                "Stage 2 の教師 PCD1024。Stage 1 は使わない"),
     "eidlike1024_dir":     Key(str, None,                "Stage 2 の学習入力（bash start2.sh dataset の出力先）。Stage 1 は使わない"),
+    "stage2_checkpoints_dir": Key(str, None,           "Stage 2 の run の保存先ルート。Stage 1 は使わない"),
 }
 
 # ---------------------------------------------------------------------------

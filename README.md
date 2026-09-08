@@ -158,10 +158,11 @@ BatchNorm は eval（running 統計）。checkpoint 時のフル画像と同じ�
 ```
 SpicaV5/
 ├── start.sh                 Stage 1 の起動スクリプト（ホスト）。ヘッダーが取扱説明
-├── start2.sh                Stage 2 の起動スクリプト（ホスト）。dataset | build | shell | down（§11）
+├── start2.sh                Stage 2 の起動スクリプト（ホスト）。学習 | resume | dataset | tb | build | shell | down（§11）
 ├── train_stage1.sh          学習の入口（コンテナ内）
 ├── infer_stage1.sh          推論の入口（コンテナ内。WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR）
 ├── dataset_stage2.sh        Stage 2 データ作成の入口（コンテナ内。INPUT_DIR。出力先は machines.yaml の eidlike1024_dir）
+├── train_stage2.sh          Stage 2 学習の入口（コンテナ内）
 ├── configs/machines.yaml    マシン定義（Stage 共通）
 ├── docker/                  Dockerfile / compose / requirements（gen30, gen50, cpu）
 ├── stage1/                  junyanz 本家の vendoring + Stage 1 の実装
@@ -175,7 +176,11 @@ SpicaV5/
 ├── stage2/                  Stage 2（U-Net、ILUMENATE 準拠）。junyanz は使わない
 │   ├── configs/             schema.py（Stage 2 設定の唯一の正）, dataset.yaml
 │   ├── make_dataset.py      512 → 1024 補間でデータセットを作る（manifest.yaml 付き）
-│   └── checkpoints/         run の出力（git 管理外。学習は未実装）
+│   ├── run_train.py / train.py   学習の起動器（launch.yaml を書いて exec）と学習ループ（自前）
+│   ├── data/                ct_io.py（PNG 読み書き・正規化・列挙）, pair_dataset.py（ペアローダ・症例分割）
+│   ├── models/              unet.py（ILUMENATE の U-Net）, regression_model.py（損失・Adam・checkpoint・resume）
+│   ├── util/                run_paths.py（run レイアウト）, monitor.py（tqdm / TensorBoard scalar / loss_log）
+│   └── checkpoints/         run の出力（git 管理外）
 ├── docs/
 │   ├── reference/           要件（research_requirements.md）、論文照合チェックリスト、実装レビュー、junyanz 監査
 │   ├── decisions/           方針転換の記録
@@ -208,9 +213,16 @@ Stage 1 推論出力 <run>/infer/<重み>/<入力>/<時刻>/full/<case>/<slice>.
 |---|---|
 | `bash start2.sh [マシン名] dataset [--flag ...]` | `dataset_stage2.sh` の `INPUT_DIR`（変換元。実行ごとに変わるので sh に書く）を `stage2/configs/dataset.yaml`（`scale` 2 / `interp` bicubic / `input_size` 512）で補間し、**`configs/machines.yaml` の `eidlike1024_dir`**（マシンごとのデータ配置。Stage 1 の `pcd_dir` と同じ場所）に書く。`--input_dir`、`--eidlike1024_dir` / `--pcd1024_dir`、`DATASET` のフラグだけ上書き可。出力先は `container_data_root` 配下のサブフォルダで、既にあればエラー（上書きしない）。`<出力先>.tmp` に書いて検算後に rename。コンテナが起動済みなら up を呼ばず exec だけ（Stage 1 の学習中でも可） |
 | `bash start2.sh build` / `shell` / `down` | start.sh と同じ（コンテナは Stage 1 と共用） |
-| `bash start2.sh` / `train` / `infer` | 未実装（エラーで止まる） |
+| `bash start2.sh [マシン名] [--flag ...]` | **学習**。`stage2/configs/train.yaml`（数値と症例分割 `train_cases` / `val_cases` / `test_cases`）と `mode.yaml`（arch / base_ch / n_pool / init_type / loss / final_act / residual）を `stage2/configs/schema.py` で検証し、実効値を `<stage2_checkpoints_dir>/<run>/launch.yaml` に保存して `stage2/train.py` に渡す（junyanz は使わない）。run 名は `yyyy_mmdd_HHMM`。その run の `tb/` で TensorBoard を起動しブラウザを開く。上書きは schema のフラグだけ（list は `--val_cases PCD-017,PCD-018`） |
+| `bash start2.sh resume <run> [latest\|best\|<epoch>]` | 続きから学習（`net_G.pth` + `state.pth` = optimizer / RNG / 進捗を復元。run の最新 launch の実効値を使い、`--n_epochs` 等の上書き可） |
+| `bash start2.sh tb` | Stage 2 の全 run を並べた TensorBoard |
+| `bash start2.sh infer` | 未実装（別フェーズ） |
 
 - 値の規約は Stage 1 と同じ（uint16 1ch、stored = HU + 1400）。補間は float32 → 四捨五入 → clip。cv2.resize の half-pixel 規約は 512 / 1024 の再構成格子の対応と一致する（実ペアで NCC のシフト探索が (0, 0)。計画書 §2.3）
 - `manifest.yaml` に時刻・マシン・入出力・方式・症例ごとの枚数・上書き・隣の `infer.yaml`（Stage 1 の由来）を残す
+- **学習の中身**（論文どおり。仕様 §4）: U-Net = Conv3×3(zero pad)+ReLU ×2 を 3 段（128 / 256 / 512 ch）、max pool 2 回、up-conv（ConvTranspose 2×2 s2）2 回、skip concat、BN なし、最終 Conv3×3 → 1ch（活性化なし。`final_act: tanh` で変種）、約 9.8M パラメータ。損失 MSE（正規化空間 `[−1,1]`、Stage 1 と同じ HU 窓）、Adam lr 0.001 β (0.9, 0.999) 一定、100 epoch、batch 16、1024 グリッド上の対応位置 128² patch を症例一様 → スライス一様 → 位置一様で 1 epoch 64,000 サンプル、augmentation なし
+- **症例分割**: `train_cases`（PCD-001〜014）/ `val_cases`（015, 016。epoch 末の指標だけ）/ `test_cases`（017〜020。**一切読まない**）。ディスク上の症例は必ずどれかのリストに入っていること（未割当は起動前にエラー）。ペアはファイル名で対応させ、症例ごとに両方にある名前だけ使う（PCD-006 / 011 / 015 の末尾差はここで吸収。枚数は `<run>/dataset_info.yaml`）
+- **監視**: tqdm バー、TensorBoard scalar（`loss/mse`、`train/rmse_HU`、`val/rmse_HU` と参照線 `val/rmse_input_HU` = 入力 − 教師、`time/*`、`train/lr`）、`loss_log.txt`。画像・preview パネルは別フェーズ
+- **run ディレクトリ**（正は `stage2/util/run_paths.py`）: `launch.yaml`（+ `launch_resume_*.yaml`）、`dataset_info.yaml`、`loss_log.txt`、`latest/` `best/` `weights/epoch_NNN/`（各 `net_G.pth` + `state.pth`、`.tmp` → rename で原子的）、`tb/`
 - Stage 2 の設定の正は `stage2/configs/schema.py`。`configs/machines.yaml` は Stage 共通で、Stage 2 は使うキー（gpu_gen / host_data_root / container_data_root / num_threads / tb_port / pcd1024_dir / eidlike1024_dir）だけ検査する。Stage 1 の schema は未知キーを拒むので、`pcd1024_dir` / `eidlike1024_dir` は `stage1/configs/schema.py` の MACHINE にも宣言してある（Stage 1 は使わない）
 

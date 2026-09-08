@@ -1,0 +1,31 @@
+# stage2/configs/train.yaml — Stage 2 学習パラメータ（数値・症例リスト）。唯一の正は configs/schema.py の TRAIN（キーの欠落・未知・型違いはエラー）。既定値は無い。
+# 論文 = ILUMENATE（Koons et al., Med Phys 2025;52(7):e17874）。書き方: 小数は必ず点を付ける。真偽値は true / false。リストは [a, b]。
+# 実験名 (run) はここに書かない。run_train.py が起動時刻 yyyy_mmdd_HHMM から生成する（レイアウトは util/run_paths.py）。
+# 設計: docs/plans/20260908_stage2-unet-implementation-spec.md §4
+
+optim:
+  lr: 0.001             # 論文 "Adam optimizer with a learning rate of 0.001"。減衰なし（一定）
+  beta1: 0.9            # 論文は Keras の Adam を lr 以外既定で使用 → Keras 既定 (0.9, 0.999)。Stage 1 の 0.5 は GAN 慣行なので採らない
+  beta2: 0.999
+  batch_size: 16        # 論文未記載。ユーザー決定 2026-09-08: まず 16、様子を見て変える
+  n_epochs: 100         # 論文 "Training consisted of 100 epochs"
+  seed: 0               # python / numpy / torch の乱数 seed（再現条件）
+
+data:
+  patch_size: 128       # 論文 "Patches of size 128 × 128 pixels"（1024 グリッド上）。ユーザー決定 128
+  samples_per_epoch: 64000   # 1 epoch のサンプル数（random sampling）。論文の 1 epoch ≈ 61,101 組に合わせる。batch 16 → 4,000 step/epoch
+  patch_seed: 0         # serial_batches=true のときの決定的サンプリング用
+  hu_offset: 1400       # stored = HU + 1400（Stage 1 と同じ）
+  hu_min: -1400         # 正規化窓 [−1400, 4096] → [−1, 1]（Stage 1 と同じ。final_act=tanh でも同じ範囲）
+  hu_max: 4096
+  # 症例分割（ユーザー決定 2026-09-08）。ディスク上の症例は必ずどれかのリストに入っていること（未割当があれば起動時にエラー）。
+  # 後で train 1〜16 / val 17, 18 / test 19, 20 に変えるときはここを書き換える（実効値は run の launch.yaml に残る）
+  train_cases: [PCD-001, PCD-002, PCD-003, PCD-004, PCD-005, PCD-006, PCD-007, PCD-008, PCD-009, PCD-010, PCD-011, PCD-012, PCD-013, PCD-014]
+  val_cases: [PCD-015, PCD-016]          # epoch 末の指標だけに使う（学習には使わない）
+  test_cases: [PCD-017, PCD-018, PCD-019, PCD-020]   # 最終評価用。学習・検証で一切読まない（ディスクに無くてもよい）
+
+log:
+  print_freq: 100                # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）
+  save_epoch_freq: 1             # 毎 epoch 重み（weights/epoch_NNN/）を保存し、後から最良 epoch を選べるようにする（100 epoch で約 3 GB）
+  save_latest_freq: 6400         # latest/ の保存間隔（画像枚数。batch 16 なら 400 step ごと）
+  val_max_slices_per_case: 100   # epoch 末の検証で val 症例ごとに使うフル 1024 スライスの上限（等間隔に間引く。0 で全部 ≈ 1,000 枚/症例）
