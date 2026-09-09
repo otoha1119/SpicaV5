@@ -109,7 +109,11 @@ INFER = {
     "patch.blend":      Key(str,  "--patch_blend",      "重なりの合成: uniform（単純平均）| hann（2D Hann 重み）"),
     "patch.batch_size": Key(int,  "--patch_batch_size", "patch を G に通す枚数（VRAM に合わせる）"),
     "max_slices":       Key(int,  "--max_slices",       "推論するスライス数の上限。0 で全部（動作確認用に絞る）"),
-    "save_residual":    Key(bool, "--save_residual",    "true で残差 R（0 HU = 32768）も <mode>_R/ に保存"),
+    "save_residual":    Key(bool, "--save_residual",    "true で残差 R（0 HU = 32768）と表示用カラーも <mode>_R/ <mode>_R_color/ に保存（Stage 2 用のデータ生成では不要なので既定 false。--save_residual true で一時的に有効）"),
+    # 速度（2026-09-09）: GPU は数 ms で終わるので、読み・計算・書きを同時に動かす
+    "full.batch_size":  Key(int,  "--full_batch_size",  "full 方式で 512 をまとめて G に通す枚数（BN は eval なので結果は 1 枚ずつと同じ。VRAM に合わせる。3070 8GB で 8。CPU では 1 が最速）"),
+    "io.read_workers":  Key(int,  "--read_workers",     "PNG の読み込み・デコードを先読みするスレッド数（0 = 直列）"),
+    "io.write_workers": Key(int,  "--write_workers",    "PNG の書き込みを非同期にするスレッド数（0 = 直列）"),
     # DICOM 出力（OUTPUT_FORMAT = dicom | both のとき）。stored = (HU − intercept) / slope。参照 DICOM のタグと一致しなければエラー
     "dicom.rescale_slope":     Key(float, "--rescale_slope",     "元 DICOM の RescaleSlope。PCD（Siemens NAEOTOM Alpha）= 1"),
     "dicom.rescale_intercept": Key(float, "--rescale_intercept", "元 DICOM の RescaleIntercept。PCD（Siemens NAEOTOM Alpha）= −8192（格納値は符号なし 16bit）"),
@@ -355,6 +359,8 @@ def check_infer_values(infer):
     if infer["patch.blend"] not in BLENDS: P.append(f"patch.blend は {BLENDS}")
     if infer["patch.batch_size"] < 1: P.append("patch.batch_size ≥ 1")
     if infer["max_slices"] < 0: P.append("max_slices ≥ 0（0 で全部）")
+    if infer["full.batch_size"] < 1: P.append("full.batch_size ≥ 1")
+    if infer["io.read_workers"] < 0 or infer["io.write_workers"] < 0: P.append("io.read_workers / write_workers ≥ 0（0 = 直列）")
     if infer["dicom.rescale_slope"] == 0: P.append("dicom.rescale_slope ≠ 0")
     _problems_to_error("infer values", P)
 

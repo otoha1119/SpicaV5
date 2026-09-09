@@ -4,7 +4,7 @@
   2. 重みディレクトリ（--weight_dir、crop_stage1.sh の変数）から run を探し、最新の launch の実効設定から G の構成・HU 正規化を取る。
      表示設定（display_hu_min/max、preview_bits、diff_range_hu）は**現在の configs/train.yaml**（--train）から取る（表示は重みに紐づかないので古い run でも今の見た目）
   3. '--' の後の上書き（--weight_dir、CROP のフラグ --device / --patch / --panel_scale）を反映する
-  4. 出力先 <run>/infer/<重みディレクトリ名>/crop/<実行時刻>/ を作り、実効設定を crop.yaml に保存して crop_patches.py を exec する
+  4. 出力先 <repo>/output/<run>_<重みディレクトリ名>_crop_<実行時刻>/ を作り、実効設定を crop.yaml に保存して crop_patches.py を exec する
 学習中に走らせてよい（start.sh は起動済みコンテナに exec するだけ。device cpu なら VRAM を使わない。出力は学習の書き込み先と別）。
 
 使い方（通常は ../crop_stage1.sh 経由）:
@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import CROP, MACHINE, TRAIN, ConfigError, apply_overrides, check_crop_cases, check_crop_values, to_argv, validate  # noqa: E402
 from run_infer import display_argv, generator_argv, load_yaml  # noqa: E402
-from util.run_paths import LAUNCH_FILE, crop_dir, find_run_dir, latest_launch  # noqa: E402
+from util.run_paths import LAUNCH_FILE, crop_output_dir, find_run_dir, latest_launch  # noqa: E402
 
 # 表示の設定は「現在の configs/train.yaml の log」から取る（run の launch.yaml ではない。古い run でも今の見た目にする）
 DISPLAY_TRAIN_KEYS = {"log.display_hu_min": "--display_hu_min", "log.display_hu_max": "--display_hu_max", "log.preview_bits": "--preview_bits", "log.diff_range_hu": "--diff_range_hu"}
@@ -52,6 +52,7 @@ def main():
     p.add_argument("--train", required=True, help="学習設定 YAML（configs/train.yaml）。表示の設定（log.display_hu_*, preview_bits, diff_range_hu）だけ使う")
     p.add_argument("--machines", required=True, help="マシン定義 YAML")
     p.add_argument("--weight_dir", required=True, help="重みディレクトリ（net_G.pth がある所）")
+    p.add_argument("--out_root", default=None, help="出力の根。省略時はリポジトリ直下の output/（通常は省略。scratch 実行用）")
     p.add_argument("overrides", nargs=argparse.REMAINDER, help="'--' の後に crop_patches.py の上書き（--weight_dir、CROP schema のフラグ）")
     a = p.parse_args()
     overrides = a.overrides[1:] if a.overrides and a.overrides[0] == "--" else a.overrides
@@ -89,7 +90,7 @@ def main():
 
     jst = datetime.timezone(datetime.timedelta(hours=9), name="JST")
     now = datetime.datetime.now(jst)
-    out_dir = crop_dir(run_dir, weight_dir, now)
+    out_dir = crop_output_dir(run_dir, weight_dir, now, root=a.out_root)  # <repo>/output/<run>_<重み>_crop_<時刻>/（2026-09-09）
     if out_dir.exists():
         print(f"[run_crop] 設定エラー: 出力先が既に存在します（同一秒の再実行）: {out_dir}", file=sys.stderr)
         sys.exit(2)

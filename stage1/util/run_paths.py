@@ -17,11 +17,14 @@ checkpoint は「重みディレクトリ」単位で扱う（G と D と optimi
       epoch_NNN_panel.png                                    上を並べた [EID | EID-like | PCD | R + ゲージ]、各列の下にラベル（util/panel.py。TB の images/full/fixed と同じ絵）
   output_images/preview_random/epoch_NNN_<slice>.png         epoch ごとに別のランダムスライス（log.n_full_random 枚）の同じパネル（パネルだけ。RGB 3ch）
   （学習中の 128 patch グリッドは TensorBoard だけ）
-  infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   bash start.sh infer の出力（inference_dir.py。uint16 PNG / DICOM）。実行ごとに別ディレクトリ
-      {full,patch}/, {full,patch}_dicom/, {full,patch}_R/（16bit、0 HU = 32768）, {full,patch}_R_color/（同じ R の表示用カラー 8bit RGB）, R_colorbar_pm<range>HU.png（凡例）
-  infer/<重みディレクトリ名>/crop/<実行時刻>/case<N>_<pcd>_<eid>/   bash start.sh crop の出力（crop_patches.py。表示用のみ、16bit 生データは無し）
-      1_EID_<eid>_x<X>_y<Y>.png, 2_EID-like_<pcd>_x_y.png, 3_PCD_<pcd>_x_y.png（グレー 1ch、patch 四方、等倍）, 4_R_color_<pcd>_x_y.png（RGB）, panel.png（[EID | EID-like | PCD | R + ゲージ] を panel_scale 倍）
   tb/                         TensorBoard
+
+推論とパッチ切り出しの出力は run の下ではなく **リポジトリ直下の output/**（2026-09-09 ユーザー指示。run の下は 6 階層で探しにくい。.gitignore 済み、コンテナでは /workspace/output/）:
+<repo>/output/
+  <run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/   bash start.sh infer の出力（inference_dir.py。uint16 PNG / DICOM）。実行ごとに別ディレクトリ
+      {full,patch}/<case>/<slice>.png, {full,patch}_dicom/, {full,patch}_R/（16bit、0 HU = 32768）, {full,patch}_R_color/（表示用カラー 8bit RGB）, R_colorbar_pm<range>HU.png, diff_stats.txt, infer.yaml
+  <run>_<重みディレクトリ名>_crop_<実行時刻>/case<N>_<pcd>_<eid>/   bash start.sh crop の出力（crop_patches.py。表示用のみ、16bit 生データは無し）
+      1_EID_<eid>_x<X>_y<Y>.png, 2_EID-like_<pcd>_x_y.png, 3_PCD_<pcd>_x_y.png（グレー 1ch、patch 四方、等倍）, 4_R_color_<pcd>_x_y.png（RGB）, panel.png（[EID | EID-like | PCD | R + ゲージ] を panel_scale 倍）
 """
 
 import re
@@ -32,7 +35,7 @@ RUN_NAME_RE = re.compile(r"^\d{4}_\d{4}_\d{4}$")  # 2026_0907_1742
 TOP_TAGS = ("latest", "best")                    # run 直下に置く重みディレクトリ。それ以外（epoch 番号、iter_N）は weights/
 WEIGHTS_DIR = "weights"
 OUTPUT_IMAGES_DIR = "output_images"
-INFER_DIR = "infer"
+OUTPUT_DIRNAME = "output"  # 推論・crop の出力の根（<repo>/output/。.gitignore 済み）
 BEST_NOTE = "best.txt"
 LAUNCH_FILE = "launch.yaml"
 CKPT_KINDS = ("net_G.pth", "net_D.pth", "state.pth")  # 重みディレクトリの中身
@@ -107,12 +110,22 @@ def preview_dir(run_dir, name):
 INFER_STAMP_FORMAT = "%Y_%m%d_%H%M%S"
 
 
-def crop_dir(run_dir, weight_dir, now):
-    """パッチ切り出し（bash start.sh crop）の出力先: <run>/infer/<重みディレクトリ名>/crop/<yyyy_mmdd_HHMMSS>/。推論と同じ木の下、入力フォルダ名の代わりに crop。"""
-    return Path(run_dir) / INFER_DIR / Path(weight_dir).name / "crop" / now.strftime(INFER_STAMP_FORMAT)
+def repo_root():
+    """リポジトリ直下（このファイルは <repo>/stage1/util/run_paths.py）。コンテナでは /workspace。"""
+    return Path(__file__).resolve().parents[2]
 
 
-def infer_dir(run_dir, weight_dir, input_dir, now):
-    """推論の出力先: <run>/infer/<重みディレクトリ名>/<入力フォルダ名>/<yyyy_mmdd_HHMMSS>/。
-    実行時刻を付けるので、latest / best の中身が変わった後の再実行や --max_slices の部分実行が同じ場所に混ざらない（F-13）。"""
-    return Path(run_dir) / INFER_DIR / Path(weight_dir).name / Path(input_dir).name / now.strftime(INFER_STAMP_FORMAT)
+def output_root(root=None):
+    """推論・crop の出力の根。省略時は <repo>/output/。scratch 実行のときだけ root で差し替える。"""
+    return Path(root) if root else repo_root() / OUTPUT_DIRNAME
+
+
+def infer_output_dir(run_dir, weight_dir, input_dir, now, root=None):
+    """推論の出力先: <repo>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<yyyy_mmdd_HHMMSS>/（2026-09-09、run の下の深い階層から移動）。
+    名前に run・重み・入力・時刻を全部入れるので、階層を掘らずに何の出力か分かる。実行時刻付きなので再実行が混ざらない（F-13）。"""
+    return output_root(root) / f"{Path(run_dir).name}_{Path(weight_dir).name}_{Path(input_dir).name}_{now.strftime(INFER_STAMP_FORMAT)}"
+
+
+def crop_output_dir(run_dir, weight_dir, now, root=None):
+    """パッチ切り出し（bash start.sh crop）の出力先: <repo>/output/<run>_<重みディレクトリ名>_crop_<yyyy_mmdd_HHMMSS>/。"""
+    return output_root(root) / f"{Path(run_dir).name}_{Path(weight_dir).name}_crop_{now.strftime(INFER_STAMP_FORMAT)}"

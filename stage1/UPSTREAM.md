@@ -214,6 +214,13 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - `util/run_paths.py`: `crop_dir(run_dir, weight_dir, now)` とレイアウト記述
 - 検証（scratch venv + 合成データ）: 2 ケースの出力 10 ファイル、切り出し位置が入力の表示変換と画素一致、パネル列が 4 倍拡大と一致、はみ出し・キー欠落・device=cuda on CPU 機・未知フラグの各エラー（はみ出しは書き出し前に止まり画像を残さない）。fake docker で start.sh の crop を dry-run し、起動済みなら up を呼ばないことを確認
 
+### 推論の出力先を output/ に、既定を Stage 2 用に、読み・計算・書きの並列化（2026-09-09、ユーザー指示）
+- `util/run_paths.py`: `infer_output_dir` / `crop_output_dir` を追加し、出力を run の下（6 階層）から **`<repo>/output/<run>_<重み>_<入力名>_<時刻>/`**（crop は `<run>_<重み>_crop_<時刻>/`）に移動。`repo_root()` はこのファイルの 2 つ上（コンテナでは /workspace）。旧 `infer_dir` / `crop_dir` / `INFER_DIR` は削除。`run_infer.py` / `run_crop.py` に `--out_root`（scratch 実行用。通常は省略）
+- `configs/infer.yaml`: 既定を `mode: full`、`save_residual: false` に（Stage 2 用のデータ生成向け。`mode: both` は 1 枚 2,401 回 G を呼ぶので 1.8 s/枚かかっていた）。`full.batch_size`（8）、`io.read_workers`（4）、`io.write_workers`（2）を追加（schema INFER + check_infer_values）
+- `inference_dir.py`: 読み込み・デコードをスレッドで先読み（順序は deque で保持）、full は `full_batch_size` 枚を 1 回の forward（形が同じときだけまとめる。BN は eval なので 1 枚ずつと同じ）、PNG 書き込みはスレッドで非同期（future を溜めすぎないよう drain、例外は表に出す）。DICOM は主スレッドで直列のまま。終了時に「読み待ち / full / patch / 書き待ち」の内訳を表示
+- 他ブランチ（Stage 2）との衝突を避けるため `start.sh` / `CLAUDE.md` / `machines.yaml` / compose は触っていない。CLAUDE.md の出力先の記述（`<run>/infer/...`）はマージ後に直す
+- 検証（scratch venv + 合成データ、mac CPU）: full の batch 8 と batch 1 の出力 PNG が 8 枚とも完全一致（最大差 0）、mode both / patch も従来どおり（|full − patch| mean 0.11 HU）、出力先の名前、`--save_residual true/false` の上書き、`full.batch_size 0` / `read_workers -1` / 未知フラグのエラー。CPU では batch 1 → 2 → 4 → 8 で 0.22 → 0.26 → 0.45 → 0.86 s/枚と遅くなる（GPU 向けの設定。CPU では 1）
+
 ### 推論・crop の表示設定は現在の train.yaml から（2026-09-08、ユーザー指摘）
 - 問題: `run_infer.py` / `run_crop.py` が `diff_range_hu`（crop は display_hu_* / preview_bits も）を run の launch.yaml から取っていたため、200 / 1600 の時代に起動した run ではカラー範囲 ±200・表示 0〜3000 のまま出ていた
 - 修正: 表示は重みに紐づく値ではないので、**現在の `configs/train.yaml` の log**（`--train`、TRAIN schema で検証）から取る。`run_infer.display_argv`（共通）。G の構成と HU 正規化は従来どおり launch.yaml。`infer_stage1.sh` / `crop_stage1.sh` に `--train configs/train.yaml` を追加。出力の infer.yaml / crop.yaml に `display` として記録

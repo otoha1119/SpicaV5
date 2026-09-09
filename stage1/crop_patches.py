@@ -3,7 +3,7 @@
 指定した PCD スライスを 512 のフル推論にかけ、左上 (x, y) から patch 四方を切り出す。EID は別スライスの指定座標から同じ大きさで切る（PCD と EID はペア）。
 保存は表示用のみ（16bit 生データは無し。2026-09-08 ユーザー指示）。preview_fixed_*/ と同じ流儀（表示範囲 display_hu_min..max で線形、preview_bits の深度、R は util/residual_color のカラー）。
 
-出力（<out_dir> = <run>/infer/<重みディレクトリ名>/crop/<実行時刻>/、run_crop.py が作る）:
+出力（<out_dir> = <repo>/output/<run>_<重みディレクトリ名>_crop_<実行時刻>/、run_crop.py が作る）:
   case<N>_<pcd>_<eid>/
     1_EID_<eid>_x<X>_y<Y>.png       EID の代表パッチ（グレー 1ch、patch 四方、等倍）
     2_EID-like_<pcd>_x<X>_y<Y>.png  G(z) の同じ場所（グレー 1ch）
@@ -35,7 +35,7 @@ def parse_args():
     req("--weight_dir", help="重みディレクトリ（net_G.pth がある所）")
     req("--pcd_dir", help="PCD の根（machines.yaml pcd_dir）。<pcd_dir>/<PCD-nnn>/<PCD-nnn-sss>.png")
     req("--eid_dir", help="EID の根（machines.yaml eid_dir）")
-    req("--out_dir", help="出力先（<run>/infer/<重みディレクトリ名>/crop/<実行時刻>/）")
+    req("--out_dir", help="出力先（<repo>/output/<run>_<重みディレクトリ名>_crop_<実行時刻>/）")
     req("--device", choices=DEVICES)
     # G の構成（run の launch.yaml から）
     req("--netG"); req("--ngf", type=int); req("--input_nc", type=int); req("--output_nc", type=int); req("--norm")

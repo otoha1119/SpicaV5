@@ -24,7 +24,7 @@
 #   bash start.sh infer --mode full --max_slices 4        # 方式の上書き。stage1/configs/schema.py の INFER にあるフラグだけ受け付ける
 #
 # ■ 出力
-#   <run>/infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻 yyyy_mmdd_HHMMSS>/   （実行ごとに別ディレクトリ。混ざらない）
+#   <リポジトリ直下>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻 yyyy_mmdd_HHMMSS>/   （実行ごとに別ディレクトリ。混ざらない。コンテナでは /workspace/output/）
 #     {full,patch}/<case>/<slice>.png         EID-like（16bit PNG、入力と同じ規約）        … png / both
 #     {full,patch}_dicom/<case>/<slice>.dcm   EID-like（DICOM、元ヘッダ継承・UID は新規）  … dicom / both
 #     {full,patch}_R/<case>/<slice>.png       残差（16bit PNG、0 HU = 32768。PNG のみ）      … infer.yaml の save_residual
