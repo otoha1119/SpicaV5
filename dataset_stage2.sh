@@ -29,7 +29,7 @@
 set -euo pipefail
 
 # ===== ここだけ書き換える =====
-INPUT_DIR="/workspace/weight/2026_0908_004/epoch_300"   # 変換元（実機で ls して確認）
+INPUT_DIR="/workspace/DataSet/EIDlike_512v1"
 
 # =============================
 
