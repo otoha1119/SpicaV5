@@ -3,10 +3,10 @@
 # G の構成は run の launch.yaml から取る（学習時と同じ G を組む）。出力は <repo>/output/<run>_<重み>_<入力名>_<実行時刻>/（レイアウトは util/run_paths.py。2026-09-09 に run の下から移動）。
 # 設計: docs/plans/20260907_inference-plan.md
 
-mode: full              # full（512 を一発。Stage 2 用のデータ生成はこれ）| patch（下の patch.* で切って重なり平均）| both（両方保存 + |full − patch| を diff_stats.txt に。1 枚 2,401 回 G を呼ぶので遅い）
+mode: patch              # full（512 を一発。Stage 2 用のデータ生成はこれ）| patch（下の patch.* で切って重なり平均）| both（両方保存 + |full − patch| を diff_stats.txt に。1 枚 2,401 回 G を呼ぶので遅い）
 
 full:
-  batch_size: 8         # 512 をまとめて G に通す枚数（BN は eval なので 1 枚ずつと同じ結果。VRAM に合わせる。3070 8GB で 8）。GPU 向け。CPU（gpu_gen 0）では 1 が最速（mac 実測: 1 → 0.22 s/枚、8 → 0.86 s/枚）
+  batch_size: 64         # 512 をまとめて G に通す枚数（BN は eval なので 1 枚ずつと同じ結果。VRAM に合わせる。3070 8GB で 8）。GPU 向け。CPU（gpu_gen 0）では 1 が最速（mac 実測: 1 → 0.22 s/枚、8 → 0.86 s/枚）
 
 patch:
   size: 128             # 論文の学習 patch と同じ。8 の倍数

@@ -145,7 +145,7 @@ exec_it() {  # 対話 exec（学習 / 推論 / shell / best）。Windows では 
 }
 
 # ===== ここだけマシンごとに書き換える =====
-MACHINE="PC1"          # configs/machines.yaml のエントリ名（PC1 / mac / ...）
+MACHINE="PC3"          # configs/machines.yaml のエントリ名（PC1 / mac / ...）
 # =========================================
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"

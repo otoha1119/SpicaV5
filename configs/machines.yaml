@@ -36,6 +36,22 @@ PC2:                                   # 研究室 Windows 機
   tb_port: 6006            # TensorBoard（ホスト:コンテナ 同番号で公開）
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
 
+PC2:                                   # 研究室 Windows 機
+  gpu_gen: 50                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
+  gpu_name: RTX 6000
+  host_data_root: "C:/otoham/DataSet"
+  container_data_root: /workspace/DataSet
+  pcd_dir: /workspace/DataSet/PCD512_v2   # 直下に症例フォルダ。論文の z 側 (A)
+  eid_dir: /workspace/DataSet/EID_v5      # 論文の x 側 (B)
+  pcd1024_dir: /workspace/DataSet/PCD1024_v1         # Stage 2 の教師（PCD512_v2 と同一患者・同一スキャンの 1024 再構成、1ch uint16）。Stage 1 は使わない
+  eidlike1024_dir: /workspace/DataSet/EIDlike1024_v1   # Stage 2 の学習入力 = bash start2.sh dataset の出力先（EID-like512 を ×2 補間）。存在しない状態で dataset を実行する。Stage 1 は使わない
+  stage2_checkpoints_dir: /workspace/stage2/checkpoints   # Stage 2 の run（yyyy_mmdd_HHMM）の保存先。レイアウトは stage2/util/run_paths.py。Stage 1 は使わない
+  align_meta: /workspace/DataSet/align_meta.yaml   # ケース 2 用。sampling=aligned のときだけ存在を検査
+  checkpoints_dir: /workspace/stage1/checkpoints   # この下に run（yyyy_mmdd_HHMM）。レイアウトは stage1/util/run_paths.py
+  num_threads: 12
+  tb_port: 6006            # TensorBoard（ホスト:コンテナ 同番号で公開）
+  stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
+
 mac:                                   # 開発機（Docker、CPU）
   gpu_gen: 0
   gpu_name: Apple M4 (CPU)

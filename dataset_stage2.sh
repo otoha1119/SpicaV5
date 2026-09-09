@@ -29,7 +29,8 @@
 set -euo pipefail
 
 # ===== ここだけ書き換える =====
-INPUT_DIR="/workspace/stage1/checkpoints/2026_0907_2222/infer/epoch_141/PCD512_v2/2026_0908_120000/full"   # 変換元（実機で ls して確認）
+INPUT_DIR="/workspace/weight/2026_0908_004/epoch_300"   # 変換元（実機で ls して確認）
+
 # =============================
 
 cd "$(dirname "$0")/stage2"
