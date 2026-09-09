@@ -22,7 +22,7 @@ data:
   # 後で train 1〜16 / val 17, 18 / test 19, 20 に変えるときはここを書き換える（実効値は run の launch.yaml に残る）
   train_cases: [PCD-003, PCD-004, PCD-005, PCD-006, PCD-007, PCD-008, PCD-009, PCD-010, PCD-011, PCD-012, PCD-013, PCD-014, PCD-015, PCD-016]   # 学習に使う症例。ディスク上に無くてもよい（学習中に読み込まない）
   val_cases: [PCD-017, PCD-018]          # epoch 末の指標だけに使う（学習には使わない）
-  test_cases: [PCD-001, PCD-002, PCD-019, PCD-020]   # 最終評価用。学習・検証で一切読まない（ディスクに無くてもよい）
+  test_cases: [PCD-001, PCD-002, PCD-019, PCD-020]   # 最終評価用。学習・検証で一切読まない（ディスクに無くてもよい）。例外は log.full_slice の 1 枚（目視用。ユーザー決定 2026-09-09）
 
 log:
   print_freq: 100                # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）
@@ -32,9 +32,10 @@ log:
   save_latest_freq: 6400         # latest/ の保存間隔（画像枚数。batch 16 なら 400 step ごと）
   val_max_slices_per_case: 100   # epoch 末の検証で val 症例ごとに使うフル 1024 スライスの上限（等間隔に間引く。0 で全部 ≈ 1,000 枚/症例）
   # epoch 末のフル 1024 画像（Stage 1 と同じ 2 系統: output_images/epoch_NNN/ の生 16bit と preview_*/ の表示用。TensorBoard にも同じパネル。ユーザー決定 2026-09-09）
-  full_slice: PCD-002/PCD-002-236.png   # 固定スライス。eidlike1024_dir / pcd1024_dir 両方からの相対パス → epoch_NNN/PCD-002-236_{eidlike,pcd1024,pcdlike}.png, preview_fixed_PCD-002-236/, TB images/full/fixed
+  full_slice: PCD-002/PCD-002-236.png   # 固定スライス（test の症例 PCD-002 = holdout を目視用に毎 epoch 見る。ユーザー決定 2026-09-09。best の選択は val の指標で行い、この絵で選ばない）。
+                                        # eidlike1024_dir / pcd1024_dir 両方からの相対パス → epoch_NNN/PCD-002-236_{eidlike,pcd1024,pcdlike}.png, preview_fixed_PCD-002-236/, TB images/full/fixed と images/fixed の patch
   eid_slice: EID-049/EID-049-079.png    # 実 EID のテストスライス（eid_dir = EID_v5 からの相対パス）。毎 epoch 1 枚だけ 512 → 1024 に補間（eidlike1024_dir/manifest.yaml の方式）して U-Net に通す → 固定パネルの 4 列目
-  n_full_random: 1        # epoch ごとに別のランダムスライス（train ∪ val から。名前と train/val をラベルに出す）→ epoch_NNN/<slice>_{eidlike,pcd1024,pcdlike}.png, preview_random/, TB images/full/random（3 列）
+  n_full_random: 1        # epoch ごとに別のランダムスライス（**val だけ**から。学習に使ったスライスは記憶で良く見えるので汎化の目視にならない。ユーザー決定 2026-09-09）→ epoch_NNN/<slice>_{eidlike,pcd1024,pcdlike}.png, preview_random/, TB images/full/random（3 列）
   preview_bits: 16        # preview_*/ のビット深度。16 = 表示範囲（stored 0〜3500）を 0..65535 に伸ばす（Stage 1 と同じ）| 8
   display_hu_min: -1400   # 表示の線形範囲（Stage 1 と同じ）。stored 0 = HU −1400 を黒
   display_hu_max: 2100    # stored 3500 = HU 2100 を白。窓は掛けない

@@ -61,10 +61,10 @@ TRAIN = {
     "log.save_epoch_freq":         Key(int, "--save_epoch_freq",         "重み（weights/epoch_NNN/）を保存する epoch 間隔。1 = 毎 epoch"),
     "log.save_latest_freq":        Key(int, "--save_latest_freq",        "latest/ を保存する間隔（画像枚数。batch_size の倍数）"),
     "log.val_max_slices_per_case": Key(int, "--val_max_slices_per_case", "epoch 末の検証で val 症例ごとに使うフル 1024 スライスの上限（等間隔に間引く。0 で全部）"),
-    "log.full_slice":              Key(str, "--full_slice",              "epoch 末にフル 1024 で書き出す固定スライス（eidlike1024_dir / pcd1024_dir からの相対パス。PCD-002/PCD-002-236.png、ユーザー決定 2026-09-09）→ output_images/epoch_NNN/ と preview_fixed_<slice>/"),
+    "log.full_slice":              Key(str, "--full_slice",              "epoch 末にフル 1024 で書き出す固定スライス（eidlike1024_dir / pcd1024_dir からの相対パス。症例は train / val / test のどれかに入っていること。test の PCD-002/PCD-002-236.png、ユーザー決定 2026-09-09。best は val の指標で選ぶ）→ output_images/epoch_NNN/ と preview_fixed_<slice>/"),
     "log.eid_slice":               Key(str, "--eid_slice",               "実 EID のテストスライス（eid_dir = EID_v5 からの相対パス。EID-049/EID-049-079.png）。毎 epoch 512 → ×scale 補間（eidlike1024_dir の manifest.yaml の方式）→ U-Net に通し、固定パネルの 4 列目に出す"),
     "log.preview_bits":            Key(int, "--preview_bits",            "output_images/preview_*/（表示用）のビット深度。16 = 表示範囲を 0..65535 に伸ばす（Stage 1 と同じ）| 8"),
-    "log.n_full_random":           Key(int, "--n_full_random",           "epoch 末に TensorBoard へ出すランダムスライスの枚数（epoch ごとに別。train ∪ val から。0 で無し）"),
+    "log.n_full_random":           Key(int, "--n_full_random",           "epoch 末に書き出すランダムスライスの枚数（epoch ごとに別。val の症例だけから。0 で無し）"),
     "log.display_hu_min":          Key(int, "--display_hu_min",          "TensorBoard 画像の線形表示範囲の下限 HU（この値以下を黒）。Stage 1 と同じ −1400"),
     "log.display_hu_max":          Key(int, "--display_hu_max",          "同上の上限 HU（この値以上を白）。Stage 1 と同じ 2100（stored 3500）"),
 }

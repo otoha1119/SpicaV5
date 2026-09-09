@@ -45,9 +45,11 @@ def check_split_on_disk(train, machine):
         missing = [c for c in cases if c not in on_in or c not in on_pcd]
         if missing:
             raise RuntimeError(f"{kind} の症例が入力（{machine['eidlike1024_dir']}）か教師（{machine['pcd1024_dir']}）にありません: {missing}")
-    fixed_case = Path(train["log.full_slice"]).parts[0]  # 固定スライスの症例は train ∪ val に限る（test を毎 epoch 眺めて選ぶと隔離の意味が無くなる。レビュー指摘 2026-09-09）
-    if fixed_case not in set(train_cases) | set(val_cases):
-        raise RuntimeError(f"train.yaml log.full_slice の症例 {fixed_case} が train_cases / val_cases に含まれていません（test の症例は固定プレビューに使えない）: {train['log.full_slice']}")
+    fixed_case = Path(train["log.full_slice"]).parts[0]  # 固定スライスの症例はどれかのリストに入っていること。test も可（ユーザー決定 2026-09-09: 目視用に holdout の症例を毎 epoch 見る。
+    if fixed_case not in set(train_cases) | set(val_cases) | set(test_cases):  # best の選択は val の指標で行い、この絵で選ばない。それ以前は train ∪ val に限っていた）
+        raise RuntimeError(f"train.yaml log.full_slice の症例 {fixed_case} が train_cases / val_cases / test_cases のどれにも含まれていません: {train['log.full_slice']}")
+    if fixed_case in test_cases:
+        print(f"[PairDataset] 注意: 固定スライス {train['log.full_slice']} は test の症例（学習・検証には使わず、この 1 枚だけ毎 epoch 目視用に読む。best は val の指標で選ぶこと）")
     for root in (machine["eidlike1024_dir"], machine["pcd1024_dir"]):  # 固定スライス（毎 epoch 書き出す）も起動前に検査する
         if not (Path(root) / train["log.full_slice"]).is_file():
             raise RuntimeError(f"train.yaml log.full_slice がありません: {Path(root) / train['log.full_slice']}（eidlike1024_dir / pcd1024_dir からの相対パス）")
@@ -185,9 +187,10 @@ class PairDataset(Dataset):
         return out
 
     def full_slices(self, epoch):
-        """epoch 末に TB へ出すフル 1024 のペア: 固定 1 組 + epoch ごとに別のランダム n_full_random 組（train ∪ val から。patch_seed と epoch から決定的）。
-        戻り値 {"pairs": [(in, pcd), ...], "kinds": ["fixed", "random", ...], "names": ["PCD-002-236", "PCD-015-123 (val)", ...]}"""
-        pool = [(c, a, b, "train") for c in self.train_cases for a, b in self.pairs_train[c]] + [(c, a, b, "val") for c in self.val_cases for a, b in self.pairs_val[c]]
+        """epoch 末に書き出すフル 1024 のペア: 固定 1 組（log.full_slice。train / val / test のどれでも可）+ epoch ごとに別のランダム n_full_random 組（**val だけ**から。patch_seed と epoch から決定的）。
+        ランダムを val に限るのは、学習に使ったスライスは記憶で良く見えるため汎化の目視にならないから（ユーザー決定 2026-09-09。それ以前は train ∪ val）。
+        戻り値 {"pairs": [(in, pcd), ...], "kinds": ["fixed", "random", ...], "names": ["PCD-002-236", "PCD-017-123 (val)", ...]}"""
+        pool = [(c, a, b, "val") for c in self.val_cases for a, b in self.pairs_val[c]]
         pool = [x for x in pool if x[2] != self.fixed_pair[1]]
         rng = random.Random(self.patch_seed * 1_000_003 + int(epoch))
         picks = rng.sample(pool, min(self.n_full_random, len(pool)))
