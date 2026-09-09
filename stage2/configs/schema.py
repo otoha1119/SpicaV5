@@ -64,6 +64,7 @@ TRAIN = {
     "log.full_slice":              Key(str, "--full_slice",              "epoch 末にフル 1024 で書き出す固定スライス（eidlike1024_dir / pcd1024_dir からの相対パス。症例は train / val / test のどれかに入っていること。test の PCD-002/PCD-002-236.png、ユーザー決定 2026-09-09。best は val の指標で選ぶ）→ output_images/epoch_NNN/ と preview_fixed_<slice>/"),
     "log.eid_slice":               Key(str, "--eid_slice",               "実 EID のテストスライス（eid_dir = EID_v5 からの相対パス。EID-049/EID-049-079.png）。毎 epoch 512 → ×scale 補間（eidlike1024_dir の manifest.yaml の方式）→ U-Net に通し、固定パネルの 4 列目に出す"),
     "log.preview_bits":            Key(int, "--preview_bits",            "output_images/preview_*/（表示用）のビット深度。16 = 表示範囲を 0..65535 に伸ばす（Stage 1 と同じ）| 8"),
+    "log.tb_full_size":            Key(int, "--tb_full_size",            "TensorBoard の images/full/* に出すフル画像の一辺（1024 は大きすぎて拡大が効かないので縮小して出す。512。ディスクの preview_*/ は縮小しない。2026-09-09）"),
     "log.n_full_random":           Key(int, "--n_full_random",           "epoch 末に書き出すランダムスライスの枚数（epoch ごとに別。val の症例だけから。0 で無し）"),
     "log.display_hu_min":          Key(int, "--display_hu_min",          "TensorBoard 画像の線形表示範囲の下限 HU（この値以下を黒）。Stage 1 と同じ −1400"),
     "log.display_hu_max":          Key(int, "--display_hu_max",          "同上の上限 HU（この値以上を白）。Stage 1 と同じ 2100（stored 3500）"),
@@ -316,6 +317,7 @@ def check_train_values(train, mode, machine):
     if not train["log.full_slice"]: P.append("log.full_slice（固定スライスの相対パス）を指定")
     if not train["log.eid_slice"]: P.append("log.eid_slice（実 EID テストスライスの相対パス）を指定")
     if train["log.preview_bits"] not in (8, 16): P.append("log.preview_bits は 8 | 16")
+    if train["log.tb_full_size"] < 64: P.append("log.tb_full_size ≥ 64")
     if train["log.n_full_random"] < 0: P.append("log.n_full_random ≥ 0")
     if train["log.display_hu_min"] >= train["log.display_hu_max"]: P.append("log.display_hu_min < display_hu_max")
     if mode["arch"] not in ARCHS: P.append(f"arch は {ARCHS}")

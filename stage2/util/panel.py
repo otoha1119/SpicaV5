@@ -56,3 +56,8 @@ def full_labels(epoch, name=None, eid_name=None):
     if eid_name:
         labels.append(f"{eid_name} -> PCD-like1024   (real EID test)")
     return labels
+
+
+def eid_labels(epoch, eid_name, scale, interp):
+    """TB images/full/EID（実 EID テストだけの 2 列 [EID1024 | PCD-like1024]。ユーザー指示 2026-09-09）のラベル。"""
+    return [f"{eid_name}  (real EID, x{scale} {interp})", f"PCD-like1024  (output)   epoch {int(epoch)}"]
