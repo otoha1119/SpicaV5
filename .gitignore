@@ -37,7 +37,7 @@ venv/
 .claude/settings.local.json
 .claude/
 docs
-weight-
+weight/
 
 # TensorBoard のサーバログ（start.sh がコンテナ内 /workspace に書く）
 /tb_server.log
