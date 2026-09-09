@@ -36,7 +36,7 @@ PC2:                                   # 研究室 Windows 機
   tb_port: 6006            # TensorBoard（ホスト:コンテナ 同番号で公開）
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
 
-PC2:                                   # 研究室 Windows 機
+PC3:                                   # 研究室 Windows 機
   gpu_gen: 50                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
   gpu_name: RTX 6000
   host_data_root: "C:/otoham/DataSet"
