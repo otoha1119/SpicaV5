@@ -41,7 +41,7 @@
 set -euo pipefail
 
 # ===== ここだけ書き換える =====
-WEIGHT_DIR="/workspace/stage1/checkpoints/2026_0907_1742/best"   # 重みディレクトリ（net_G.pth がある所）
+WEIGHT_DIR="/workspace/weight/2026_0908_0041/epoch_300"   # 重みディレクトリ（net_G.pth がある所）
 INPUT_DIR="/workspace/DataSet/PCD512_v2"                          # 処理する PNG 群のフォルダ
 OUTPUT_FORMAT="png"                                               # png | dicom | both
 DICOM_DIR="/workspace/DataSet/photonCT/PhotonCT512_original"      # 元 DICOM のルート（dicom / both のときだけ使う）。SpicaV3 convert_pcd.py の変換元と同じ配置。実機で ls して確認
