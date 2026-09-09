@@ -3,14 +3,14 @@
 Stage 1 の util/monitor.py に相当する。画像は学習中の 128 patch グリッド（image_freq step ごと。2026-09-09 追加）と、epoch 末のフル 1024（固定 + ランダム + 実 EID テスト）。
 保存先は Stage 1 と同じ 2 系統（util/run_paths.py）: output_images/epoch_NNN/ の生 16bit と preview_*/ の表示用。TensorBoard にも同じパネル（2026-09-09 ユーザー確定）。
 
-  ターミナル : 1 epoch = 1 本の tqdm バー（単位 = 画像枚数）。末尾に loss（正規化空間）と RMSE [HU]。epoch 末に 1 行の要約（tqdm.write）
+  ターミナル : 1 epoch = 1 本の tqdm バー（単位 = 画像枚数）。末尾に loss、rmse（正規化空間、0 へ）、ssim（1 へ）。epoch 末に 1 行の要約（tqdm.write）
   TensorBoard: <run>/tb/  global_step = total_iters（画像枚数。resume で復元されるので曲線がつながる）
      loss/<mse|l1>          学習の損失（正規化空間 [−1,1]。print_freq step ごと、直近 print_freq step の平均）
-     train/rmse_HU, train/mae_HU   同じ区間の HU 換算
+     train/rmse, train/ssim  同じ区間の RMSE（正規化空間。0 へ。HU は × 2748）と SSIM（1 へ）。出力 vs 教師、128 patch。指標は util/metrics.py（2026-09-09: HU 表示と MAE を廃止）
      time/sec_per_step, time/data_sec_per_step
      train/lr（epoch ごと）
-     val/rmse_HU, val/mae_HU       epoch 末、val 症例のフル 1024（出力 − 教師）
-     val/rmse_input_HU, val/mae_input_HU   参照線: 入力 − 教師（何もしない場合）。出力がこれを下回らなければ学習の意味が無い
+     val/rmse, val/ssim, val/psnr   epoch 末、val 症例のフル 1024（出力 vs 教師）。rmse は正規化空間（0 へ）、ssim は 1 へ、psnr は dB（大きいほど良い）
+     val/rmse_input, val/ssim_input, val/psnr_input   参照線: 入力そのまま vs 教師（何もしない場合）。出力がこれを超えなければ学習の意味が無い
      images/current                 image_freq step ごと: いま学習中のバッチ先頭 n_images 枚の 128 patch。各行 [EID-like1024 (input) | PCD-like1024 (output) | PCD1024 (teacher)]
      images/fixed                   同じ間隔: 固定スライス（log.full_slice）から patch_seed で決めた位置の n_images 枚（同じ patch で推移を追う。eval で通す）
      images/full/fixed              epoch 末（save_epoch_freq ごと）: 固定スライス（train.yaml log.full_slice、PCD-002-236）の 4 列パネル
@@ -58,7 +58,7 @@ class TrainMonitor:
         self._reset_window()
 
     def _reset_window(self):
-        self.win = {"loss": 0.0, "rmse_hu": 0.0, "mae_hu": 0.0, "t_comp": 0.0, "t_data": 0.0, "n": 0}
+        self.win = {"loss": 0.0, "mse": 0.0, "ssim": 0.0, "t_comp": 0.0, "t_data": 0.0, "n": 0}
 
     def epoch_bar(self, loader, epoch, total_epochs):
         self.bar = tqdm(loader, total=len(loader), unit="img", unit_scale=self.batch_size, dynamic_ncols=True, mininterval=0.5,
@@ -72,7 +72,7 @@ class TrainMonitor:
 
     def accumulate(self, losses, t_comp, t_data):
         w = self.win
-        w["loss"] += losses["loss"]; w["rmse_hu"] += losses["rmse_hu"]; w["mae_hu"] += losses["mae_hu"]
+        w["loss"] += losses["loss"]; w["mse"] += losses["mse"]; w["ssim"] += losses["ssim"]
         w["t_comp"] += t_comp; w["t_data"] += t_data; w["n"] += 1
 
     def step(self, epoch, total_iters):
@@ -81,28 +81,28 @@ class TrainMonitor:
         if w["n"] == 0:
             return
         n = w["n"]
-        loss, rmse, mae = w["loss"] / n, w["rmse_hu"] / n, w["mae_hu"] / n
+        loss, rmse, sim = w["loss"] / n, (w["mse"] / n) ** 0.5, w["ssim"] / n
         self.tb.add_scalar(f"loss/{self.loss_name}", loss, total_iters)
-        self.tb.add_scalar("train/rmse_HU", rmse, total_iters)
-        self.tb.add_scalar("train/mae_HU", mae, total_iters)
+        self.tb.add_scalar("train/rmse", rmse, total_iters)
+        self.tb.add_scalar("train/ssim", sim, total_iters)
         self.tb.add_scalar("time/sec_per_step", w["t_comp"] / n, total_iters)
         self.tb.add_scalar("time/data_sec_per_step", w["t_data"] / n, total_iters)
         if self.bar is not None:
-            self.bar.set_postfix_str(f"{self.loss_name} {loss:.5f} | rmse {rmse:.1f} HU | data {w['t_data'] / n * 1000:.0f} ms", refresh=False)
-        self.log.write(f"(epoch: {epoch}, iters: {total_iters}, time: {w['t_comp'] / n:.3f}, data: {w['t_data'] / n:.3f}) {self.loss_name}: {loss:.6f} rmse_HU: {rmse:.2f} mae_HU: {mae:.2f}\n")
+            self.bar.set_postfix_str(f"{self.loss_name} {loss:.5f} | rmse {rmse:.4f} | ssim {sim:.4f} | data {w['t_data'] / n * 1000:.0f} ms", refresh=False)
+        self.log.write(f"(epoch: {epoch}, iters: {total_iters}, time: {w['t_comp'] / n:.3f}, data: {w['t_data'] / n:.3f}) {self.loss_name}: {loss:.6f} rmse: {rmse:.5f} ssim: {sim:.4f}\n")
         self.log.flush()
         self._reset_window()
 
     def log_val(self, val, total_iters):
         for k, v in val.items():
             if k != "n":
-                self.tb.add_scalar(f"val/{k.replace('_hu', '_HU')}", v, total_iters)
+                self.tb.add_scalar(f"val/{k}", v, total_iters)
 
     def end_epoch(self, epoch, total_epochs, total_iters, lr, elapsed, val):
         self.tb.add_scalar("train/lr", lr, total_iters)
         self.tb.flush()
         msg = (f"[epoch {epoch}/{total_epochs}] {elapsed:.0f}s, iters {total_iters}, lr {lr:.6f} | "
-               f"val rmse {val['rmse_hu']:.1f} HU (input {val['rmse_input_hu']:.1f}) mae {val['mae_hu']:.1f} HU (input {val['mae_input_hu']:.1f}) on {val['n']} slices")
+               f"val rmse {val['rmse']:.5f} (input {val['rmse_input']:.5f}) ssim {val['ssim']:.4f} (input {val['ssim_input']:.4f}) psnr {val['psnr']:.2f} dB (input {val['psnr_input']:.2f}) on {val['n']} slices")
         self.write(msg)
 
     # ------------------------------------------------------------------ 128 patch グリッド（image_freq step ごと。TB だけ）

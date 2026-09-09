@@ -17,7 +17,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from data.ct_io import hu_per_unit
+from util.metrics import mse, psnr, ssim
 from models.unet import build_net
 from util.run_paths import ckpt_dir
 
@@ -34,7 +34,6 @@ class RegressionModel:
         self.device = device
         self.config = {"train": dict(train), "mode": dict(mode), "machine": dict(machine)}  # この重みに対応する実効設定（state.pth に入れる。再開の基準）
         self.residual = mode["residual"]
-        self.hu_unit = hu_per_unit(train["data.hu_min"], train["data.hu_max"])
         self.net = build_net(mode).to(device)
         if mode["loss"] == "mse":
             self.criterion = nn.MSELoss()
@@ -55,7 +54,7 @@ class RegressionModel:
         return x + y if self.residual else y
 
     def optimize(self, batch):
-        """1 step。戻り値は表示用の dict（loss は正規化空間、rmse_hu / mae_hu は HU 換算）。"""
+        """1 step。戻り値は表示用の dict: loss（正規化空間の損失）、mse（出力 vs 教師。monitor が √ を取って train/rmse に。0 へ）、ssim（1 へ）。"""
         x = batch["input"].to(self.device, non_blocking=True)
         t = batch["target"].to(self.device, non_blocking=True)
         self.net.train()
@@ -66,8 +65,7 @@ class RegressionModel:
         self.optimizer.step()
         with torch.no_grad():
             self.last = (x.detach(), pred.detach(), t.detach())  # TB の images/current 用（util/monitor.py log_images）
-            d = pred - t
-            return {"loss": float(loss), "rmse_hu": float(d.pow(2).mean().sqrt()) * self.hu_unit, "mae_hu": float(d.abs().mean()) * self.hu_unit}
+            return {"loss": float(loss), "mse": mse(pred, t), "ssim": ssim(pred, t)}
 
     @torch.no_grad()
     def predict(self, x):
@@ -77,21 +75,22 @@ class RegressionModel:
 
     @torch.no_grad()
     def evaluate(self, dataset, slices):
-        """val のフル画像で RMSE / MAE [HU] を出す。入力そのまま（何もしない場合）の値も参照線として返す。"""
+        """val のフル画像で rmse（正規化空間。0 へ）/ ssim（1 へ）/ psnr（大きいほど良い）をスライス平均で出す。入力そのまま（何もしない場合）の値も *_input として返す（参照線）。"""
         self.net.eval()
-        se, ae, se_in, ae_in, n = 0.0, 0.0, 0.0, 0.0, 0
+        acc = {"mse": 0.0, "ssim": 0.0, "psnr": 0.0, "mse_input": 0.0, "ssim_input": 0.0, "psnr_input": 0.0}
+        n = 0
         for _case, in_path, pcd_path in slices:
             x = dataset.load_full(in_path).to(self.device)
             t = dataset.load_full(pcd_path).to(self.device)
-            d = self.forward(x) - t
-            d_in = x - t
-            se += float(d.pow(2).mean()); ae += float(d.abs().mean())
-            se_in += float(d_in.pow(2).mean()); ae_in += float(d_in.abs().mean())
+            y = self.forward(x)
+            for name, pred in (("", y), ("_input", x)):
+                acc["mse" + name] += mse(pred, t); acc["ssim" + name] += ssim(pred, t); acc["psnr" + name] += psnr(pred, t)
             n += 1
         if n == 0:
             raise RuntimeError("検証スライスがありません")
-        u = self.hu_unit
-        return {"rmse_hu": (se / n) ** 0.5 * u, "mae_hu": ae / n * u, "rmse_input_hu": (se_in / n) ** 0.5 * u, "mae_input_hu": ae_in / n * u, "n": n}
+        out = {k: v / n for k, v in acc.items()}
+        out = {"rmse": out["mse"] ** 0.5, "ssim": out["ssim"], "psnr": out["psnr"], "rmse_input": out["mse_input"] ** 0.5, "ssim_input": out["ssim_input"], "psnr_input": out["psnr_input"], "n": n}
+        return out
 
     # --- checkpoint ---
     def _state(self):
