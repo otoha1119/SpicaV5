@@ -19,7 +19,9 @@ import torch.nn as nn
 
 from util.metrics import mse, psnr, ssim
 from models.unet import build_net
-from util.run_paths import ckpt_dir
+from util.run_paths import ckpt_dir, write_best_note
+
+BETTER = {"rmse": lambda new, old: new < old, "ssim": lambda new, old: new > old, "psnr": lambda new, old: new > old}  # log.best_metric ごとの「更新」の向き
 
 
 def _to_tuple(x):
@@ -45,6 +47,7 @@ class RegressionModel:
         self.lr, self.betas = train["optim.lr"], (train["optim.beta1"], train["optim.beta2"])
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=self.lr, betas=self.betas)
         self.cur_epoch, self.epoch_done, self.total_iters = 0, False, 0
+        self.best = None  # best/ の記録 {"metric", "value", "epoch", "total_iters"}。state.pth に入れて resume で引き継ぐ（無ければ None = 次の val が必ず best）
         self.last = None  # 直近の学習バッチ (input, pred, target)。optimize が更新
         self.n_params = sum(p.numel() for p in self.net.parameters())
 
@@ -92,11 +95,23 @@ class RegressionModel:
         out = {"rmse": out["mse"] ** 0.5, "ssim": out["ssim"], "psnr": out["psnr"], "rmse_input": out["mse_input"] ** 0.5, "ssim_input": out["ssim_input"], "psnr_input": out["psnr_input"], "n": n}
         return out
 
+    def update_best(self, run_dir, metric, val, epoch, total_iters):
+        """epoch 末の val で log.best_metric が最良を更新したら best/ に保存し best.txt を書く。戻り値: 更新したか。
+        self.best を先に更新してから保存するので、best/state.pth の best には自分自身の記録が入る。"""
+        value = float(val[metric])
+        if self.best is not None and self.best.get("metric") == metric and not BETTER[metric](value, float(self.best["value"])):
+            return False
+        self.best = {"metric": metric, "value": value, "epoch": int(epoch), "total_iters": int(total_iters)}
+        self.save(run_dir, "best")
+        write_best_note(run_dir, epoch, "auto", metric=metric, value=value, total_iters=total_iters, source=f"val on {val['n']} slices")
+        return True
+
     # --- checkpoint ---
     def _state(self):
         np_state = np.random.get_state()
         return {
             "epoch": int(self.cur_epoch), "epoch_done": bool(self.epoch_done), "total_iters": int(self.total_iters),
+            "best": self.best,  # best/ の記録（自動更新の比較対象。resume で引き継ぐ）
             "optimizer": self.optimizer.state_dict(),
             "lr": float(self.optimizer.param_groups[0]["lr"]),
             "config": self.config,  # 保存時の実効設定（train / mode / machine、平坦キー）。resume はこれを基準にする（失敗した起動の launch を引き継がない。レビュー指摘 2026-09-09）
@@ -140,5 +155,7 @@ class RegressionModel:
         kind, keys, pos, has_gauss, cached = rng["numpy"]
         np.random.set_state((kind, keys.cpu().numpy().astype(np.uint32), pos, has_gauss, cached))
         self.total_iters = int(state["total_iters"])
-        print(f"[resume] {state_path}: epoch {state['epoch']} (done={state['epoch_done']}), total_iters {state['total_iters']}, lr {self.optimizer.param_groups[0]['lr']:.7f}")
+        self.best = state.get("best")  # 古い state（best 実装前）には無い → None（次の val が best になる。best/ が既にあれば上書きされる）
+        best_msg = f"best {self.best['metric']} {self.best['value']:.6f} @ epoch {self.best['epoch']}" if self.best else "best 記録なし"
+        print(f"[resume] {state_path}: epoch {state['epoch']} (done={state['epoch_done']}), total_iters {state['total_iters']}, lr {self.optimizer.param_groups[0]['lr']:.7f}, {best_msg}")
         return state

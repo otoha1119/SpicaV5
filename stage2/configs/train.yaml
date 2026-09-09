@@ -31,6 +31,8 @@ log:
   save_epoch_freq: 1             # 毎 epoch 重み（weights/epoch_NNN/）を保存し、後から最良 epoch を選べるようにする（net_G.pth 約 39 MB + state.pth 約 78 MB → 100 epoch で約 12 GB）
   save_latest_freq: 6400         # latest/ の保存間隔（画像枚数。batch 16 なら 400 step ごと）
   val_max_slices_per_case: 100   # epoch 末の検証で val 症例ごとに使うフル 1024 スライスの上限（等間隔に間引く。0 で全部 ≈ 1,000 枚/症例）
+  best_metric: rmse              # best/ を自動更新する val の指標（rmse = 最小更新 | ssim | psnr = 最大更新）。毎 epoch の val の後に判定して best/ と best.txt を書く（2026-09-09）。
+                                 # 手動で選び直すときは bash start2.sh best <run> <epoch>（weights/epoch_NNN/ → best/。以後の自動更新はその run を resume したときだけ）
   # epoch 末のフル 1024 画像（Stage 1 と同じ 2 系統: output_images/epoch_NNN/ の生 16bit と preview_*/ の表示用。TensorBoard にも同じパネル。ユーザー決定 2026-09-09）
   full_slice: PCD-002/PCD-002-236.png   # 固定スライス（test の症例 PCD-002 = holdout を目視用に毎 epoch 見る。ユーザー決定 2026-09-09。best の選択は val の指標で行い、この絵で選ばない）。
                                         # eidlike1024_dir / pcd1024_dir 両方からの相対パス → epoch_NNN/PCD-002-236_{eidlike,pcd1024,pcdlike}.png, preview_fixed_PCD-002-236/, TB images/full/fixed と images/fixed の patch

@@ -10,6 +10,7 @@ Stage 1 の util/monitor.py に相当する。画像は学習中の 128 patch �
      time/sec_per_step, time/data_sec_per_step
      train/lr（epoch ごと）
      val/rmse, val/ssim, val/psnr   epoch 末、val 症例のフル 1024（出力 vs 教師）。rmse は正規化空間（0 へ）、ssim は 1 へ、psnr は dB（大きいほど良い）
+     val/best_<metric>, val/best_epoch   best/ の記録（train.yaml log.best_metric。更新した epoch は loss_log.txt に [best] 行）
      val/rmse_input, val/ssim_input, val/psnr_input   参照線: 入力そのまま vs 教師（何もしない場合）。出力がこれを超えなければ学習の意味が無い
      images/current                 image_freq step ごと: いま学習中のバッチ先頭 n_images 枚の 128 patch。各行 [EID-like1024 (input) | PCD-like1024 (output) | PCD1024 (teacher)]
      images/fixed                   同じ間隔: 固定スライス（log.full_slice）から patch_seed で決めた位置の n_images 枚（同じ patch で推移を追う。eval で通す）
@@ -100,6 +101,15 @@ class TrainMonitor:
         for k, v in val.items():
             if k != "n":
                 self.tb.add_scalar(f"val/{k}", v, total_iters)
+
+    def log_best(self, best, improved, epoch, total_iters):
+        """epoch 末: best の記録を TB（val/best_<metric> と val/best_epoch）に出し、更新した epoch は 1 行書く。"""
+        if best is None:
+            return
+        self.tb.add_scalar(f"val/best_{best['metric']}", best["value"], total_iters)
+        self.tb.add_scalar("val/best_epoch", best["epoch"], total_iters)
+        if improved:
+            self.write(f"[best] epoch {epoch}: val/{best['metric']} {best['value']:.6f} が最良 → best/ を更新")
 
     def end_epoch(self, epoch, total_epochs, total_iters, lr, elapsed, val):
         self.tb.add_scalar("train/lr", lr, total_iters)

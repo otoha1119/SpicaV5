@@ -12,8 +12,8 @@
 #   3. サブコマンドに応じてコンテナ内のスクリプトを exec する
 #
 # ■ 引数の規則
-#   bash start2.sh [マシン名] [dataset|build|shell|down|tb] [resume <run> [tag]] [--flag value ...]
-#   ・--flag より前の単語を読む。順不同。dataset / build / shell / down / tb / resume / infer はサブコマンド、それ以外の単語は「マシン名」とみなし、
+#   bash start2.sh [マシン名] [dataset|build|shell|down|tb] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
+#   ・--flag より前の単語を読む。順不同。dataset / build / shell / down / tb / resume / best / infer はサブコマンド、それ以外の単語は「マシン名」とみなし、
 #     sh 内の MACHINE より優先する。マシン名を 2 つ渡すとエラー。configs/machines.yaml に無い名前もエラー（候補を表示）。
 #   ・サブコマンド無し = 学習（train_stage2.sh → stage2/run_train.py → train.py）。設定は stage2/configs/train.yaml（数値・症例分割）と mode.yaml（方式）、
 #     保存先は machines.yaml の stage2_checkpoints_dir/<run>（run = 起動時刻 yyyy_mmdd_HHMM、同一分の衝突はエラー）。--flag で上書き（schema のフラグだけ。
@@ -21,6 +21,8 @@
 #     学習開始時に起動器がその run の tb/ だけを logdir に TensorBoard を起動し、ホストのブラウザを開く（machines.yaml の **stage2_tb_port**。Stage 1 の tb_port とは別ポートで、
 #     起動・停止は自分のポートのものだけ。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）。
 #   ・resume <run> [latest|best|<epoch>] : その run の checkpoint から続きを学習（optimizer / RNG / 進捗を復元。run 起動時の設定を使う。--n_epochs 等の上書き可）。
+#   ・best <run> <epoch> : weights/epoch_NNN/ を best/ にコピーして best.txt に記録する（手動の上書き）。通常は学習中に val の train.yaml log.best_metric
+#               （rmse 最小 | ssim / psnr 最大）が更新されるたびに best/ が自動で書かれるので、目視で別の epoch にしたいときだけ使う（stage2/mark_best.py）。
 #   ・tb : Stage 2 の全 run を並べた TensorBoard を起動してブラウザを開く（logdir = stage2_checkpoints_dir）。
 #   ・dataset : Stage 2 の学習データ作成。INPUT_DIR の <case>/<slice>.png（uint16、一辺 input_size = 512）を scale 倍（2 → 1024）に補間し、
 #               machines.yaml の eidlike1024_dir に同じ <case>/<slice>.png で書く（値の規約 stored = HU + 1400 はそのまま）。dataset_stage2.sh → stage2/make_dataset.py。
@@ -40,6 +42,7 @@
 #   bash start2.sh --val_cases PCD-017,PCD-018 --test_cases PCD-019,PCD-020 --train_cases PCD-001,PCD-002,...   # 分割の一時変更（恒久的には train.yaml）
 #   bash start2.sh resume 2026_0908_2130          # その run の latest から再開
 #   bash start2.sh resume 2026_0908_2130 30 --n_epochs 200   # epoch 30 の checkpoint から、epoch 数を延ばして再開
+#   bash start2.sh best 2026_0908_2130 30         # epoch 30 を best にする（手動。自動更新は学習中に val で行われる）
 #   bash start2.sh tb                             # Stage 2 の全 run を並べた TensorBoard（stage2_tb_port）
 #   bash start2.sh dataset                        # dataset_stage2.sh の INPUT_DIR → machines.yaml の eidlike1024_dir、stage2/configs/dataset.yaml の方式
 #   bash start2.sh PC1 dataset                    # マシン名を指定（sh 内の MACHINE より優先）
@@ -59,7 +62,7 @@
 #
 # ■ run ディレクトリ（正は stage2/util/run_paths.py）
 #   <stage2_checkpoints_dir>/<run>/  launch.yaml（実効設定。再開で launch_resume_*.yaml が増える）, dataset_info.yaml（症例分割とペア枚数）, loss_log.txt,
-#     latest/ best/（net_G.pth + state.pth）, weights/epoch_NNN/（save_epoch_freq ごと）, tb/。画像・preview は別フェーズ
+#     latest/ best/（net_G.pth + state.pth。best は val の log.best_metric 更新で自動、bash start2.sh best で手動）, best.txt, weights/epoch_NNN/（save_epoch_freq ごと）, output_images/, tb/
 #
 # ■ ホスト要件・Windows・WSL・改行コード: start.sh と同じ（docker compose v2、python3 + pyyaml。MSYS のパス変換停止、winpty、wslpath 変換、LF 固定）
 # =============================================================================
@@ -90,7 +93,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 MACHINES="$ROOT/configs/machines.yaml"
 
 # --- 引数: --flag より前の単語を読む。dataset / build / shell / down / train / infer はサブコマンド、それ以外の単語はマシン名 ---
-ACTION=train; BUILD=""; MACHINE_ARG=""; RESUME=""; RESUME_TAG="latest"
+ACTION=train; BUILD=""; MACHINE_ARG=""; RESUME=""; RESUME_TAG="latest"; BEST_RUN=""; BEST_EPOCH=""
 while [ $# -gt 0 ]; do
   case "$1" in
     dataset) ACTION=dataset; shift ;;
@@ -105,6 +108,10 @@ while [ $# -gt 0 ]; do
       [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start2] resume には run 名が必要です: bash start2.sh resume yyyy_mmdd_HHMM [latest|best|<epoch>]" >&2; exit 2; }
       RESUME="$1"; shift
       if [ $# -gt 0 ] && [[ "$1" =~ ^([0-9]+|latest|best)$ ]]; then RESUME_TAG="$1"; shift; fi ;;
+    best)
+      shift
+      [ $# -ge 2 ] && [[ "$1" != --* ]] && [[ "$2" =~ ^[0-9]+$ ]] || { echo "[start2] best には run 名と epoch 番号が必要です: bash start2.sh best yyyy_mmdd_HHMM <epoch>" >&2; exit 2; }
+      ACTION=best; BEST_RUN="$1"; BEST_EPOCH="$2"; shift 2 ;;
     --*)     break ;;
     *)
       if [ -n "$MACHINE_ARG" ]; then echo "[start2] マシン名が 2 つ指定されています: $MACHINE_ARG, $1" >&2; exit 2; fi
@@ -119,7 +126,7 @@ if [ "$ACTION" = infer ]; then
   echo "[start2] Stage 2 の infer は未実装です（別フェーズ）。今使えるのは: bash start2.sh [train] | resume | dataset | tb | build | shell | down" >&2; exit 2
 fi
 case "$ACTION" in
-  build|shell|down|tb)
+  build|shell|down|tb|best)
     if [ $# -gt 0 ]; then echo "[start2] $ACTION に --flag は付けられません: $*" >&2; exit 2; fi ;;
 esac
 
@@ -261,6 +268,7 @@ case "$ACTION" in
   tb)      start_tensorboard ;;
   shell)   exec_it spicav5 bash ;;
   dataset) exec_it spicav5 bash dataset_stage2.sh "$@" ;;
+  best)    exec_it spicav5 python stage2/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
   train)
     tb_kill
     if command -v curl >/dev/null 2>&1; then open_when_ready & fi

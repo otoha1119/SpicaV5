@@ -61,6 +61,7 @@ TRAIN = {
     "log.save_epoch_freq":         Key(int, "--save_epoch_freq",         "重み（weights/epoch_NNN/）を保存する epoch 間隔。1 = 毎 epoch"),
     "log.save_latest_freq":        Key(int, "--save_latest_freq",        "latest/ を保存する間隔（画像枚数。batch_size の倍数）"),
     "log.val_max_slices_per_case": Key(int, "--val_max_slices_per_case", "epoch 末の検証で val 症例ごとに使うフル 1024 スライスの上限（等間隔に間引く。0 で全部）"),
+    "log.best_metric":             Key(str, "--best_metric",             "best/ を自動更新する val の指標: rmse（最小を更新したら）| ssim | psnr（最大を更新したら）。毎 epoch の val の後に判定し、best/ と best.txt を書く。手動は bash start2.sh best <run> <epoch>（2026-09-09）"),
     "log.full_slice":              Key(str, "--full_slice",              "epoch 末にフル 1024 で書き出す固定スライス（eidlike1024_dir / pcd1024_dir からの相対パス。症例は train / val / test のどれかに入っていること。test の PCD-002/PCD-002-236.png、ユーザー決定 2026-09-09。best は val の指標で選ぶ）→ output_images/epoch_NNN/ と preview_fixed_<slice>/"),
     "log.eid_slice":               Key(str, "--eid_slice",               "実 EID のテストスライス（eid_dir = EID_v5 からの相対パス。EID-049/EID-049-079.png）。毎 epoch 512 → ×scale 補間（eidlike1024_dir の manifest.yaml の方式）→ U-Net に通し、固定パネルの 4 列目に出す"),
     "log.preview_bits":            Key(int, "--preview_bits",            "output_images/preview_*/（表示用）のビット深度。16 = 表示範囲を 0..65535 に伸ばす（Stage 1 と同じ）| 8"),
@@ -100,6 +101,7 @@ MACHINE = {
 }
 
 INTERPS = ("nearest", "bilinear", "bicubic", "area", "lanczos")
+BEST_METRICS = ("rmse", "ssim", "psnr")   # log.best_metric。rmse は小さいほど良い、ssim / psnr は大きいほど良い
 GPU_GENS = (0, 30, 40, 50)
 ARCHS = ("unet_ilumenate",)
 INIT_TYPES = ("xavier_uniform", "torch")
@@ -314,6 +316,7 @@ def check_train_values(train, mode, machine):
     slf = train["log.save_latest_freq"]
     if slf < bs or slf % bs: P.append(f"log.save_latest_freq ({slf}) は optim.batch_size ({bs}) の倍数（画像枚数単位。倍数でないと latest が保存されない）")
     if train["log.val_max_slices_per_case"] < 0: P.append("log.val_max_slices_per_case ≥ 0（0 で全部）")
+    if train["log.best_metric"] not in BEST_METRICS: P.append(f"log.best_metric は {BEST_METRICS}")
     if not train["log.full_slice"]: P.append("log.full_slice（固定スライスの相対パス）を指定")
     if not train["log.eid_slice"]: P.append("log.eid_slice（実 EID テストスライスの相対パス）を指定")
     if train["log.preview_bits"] not in (8, 16): P.append("log.preview_bits は 8 | 16")

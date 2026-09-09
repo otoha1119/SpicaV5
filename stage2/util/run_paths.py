@@ -9,7 +9,8 @@ checkpoint は「重みディレクトリ」単位で扱う（net_G.pth と stat
   dataset_info.yaml           train.py が起動時に書く: 症例分割の実効リスト、症例ごとの入力 / 教師 / ペア枚数（切り捨て）
   loss_log.txt
   latest/net_G.pth, state.pth            直下に置く重みディレクトリは latest と best だけ
-  best/net_G.pth,   state.pth            （best の指定は別フェーズ）
+  best/net_G.pth,   state.pth            自動: 毎 epoch の val で train.yaml log.best_metric が最良を更新したとき（state.pth の best に指標と epoch が入る）
+  best.txt                               手動: bash start2.sh best <run> <epoch>（weights/epoch_NNN/ をコピー）。どちらも best.txt に epoch・指標・時刻を書く（2026-09-09）
   weights/epoch_NNN/net_G.pth, state.pth save_epoch_freq ごとの checkpoint（保存は <dir>.tmp → rename で原子的。.tmp / .old が残っていたら中断の痕跡）
   output_images/epoch_NNN/                       生 16bit（stored = HU + 1400、HU が読める）。固定 + ランダム + 実 EID テスト（2026-09-09 ユーザー確定）
       <slice>_eidlike.png, _pcd1024.png, _pcdlike.png      固定（train.yaml log.full_slice）とランダム（log.n_full_random 枚、epoch ごとに別）: 入力 / 教師 / 出力
@@ -36,6 +37,23 @@ LOSS_LOG_FILE = "loss_log.txt"
 TB_DIR = "tb"
 OUTPUT_IMAGES_DIR = "output_images"
 CKPT_KINDS = ("net_G.pth", "state.pth")          # 重みディレクトリの中身
+BEST_NOTE = "best.txt"                           # run 直下。best/ の由来（epoch、指標、auto | manual、時刻）
+
+
+def write_best_note(run_dir, epoch, how, metric=None, value=None, total_iters=None, source=None):
+    """best.txt を書く（auto: 学習中の自動更新 / manual: mark_best.py）。上書き。"""
+    import datetime
+    jst = datetime.timezone(datetime.timedelta(hours=9), name="JST")
+    lines = [f"epoch: {int(epoch)}", f"how: {how}"]
+    if metric is not None:
+        lines.append(f"metric: val/{metric} = {value:.6f}")
+    if total_iters is not None:
+        lines.append(f"total_iters: {int(total_iters)}")
+    if source is not None:
+        lines.append(f"source: {source}")
+    lines.append(f"written_at: {datetime.datetime.now(jst).isoformat(timespec='minutes')}")
+    with open(Path(run_dir) / BEST_NOTE, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 def run_name(now):
