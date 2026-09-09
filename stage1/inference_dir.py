@@ -9,7 +9,7 @@ mode
           (H − p) が stride で割り切れれば普通の格子と一致）、patch_batch_size 枚ずつ G に通し、重なりを窓 patch_blend で重み付き平均する
   both  : 両方を保存し、スライスごとの |full − patch| の mean / max [HU] を diff_stats.txt に記録する（Q-I1 の実測用）
 
-出力（out_dir = <run>/infer/<重みディレクトリ名>/<入力フォルダ名>/）。入力ディレクトリからの相対パスをそのまま保つので、出力は学習データと同じ <症例>/<slice>.png 構造になる
+出力（out_dir = <repo>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/。2026-09-09 に run の下から移動）。入力ディレクトリからの相対パスをそのまま保つので、出力は学習データと同じ <症例>/<slice>.png 構造になる
   output_format（infer_stage1.sh の OUTPUT_FORMAT）
     png   : 16bit PNG（入力と同じ規約 stored = HU + hu_offset）
     dicom : 前処理を戻して DICOM（util/dicom_io.py。元 DICOM ルート --dicom_dir の参照ヘッダを継承し、HU を参照の RescaleSlope/Intercept で格納値に）
@@ -23,13 +23,17 @@ mode
   <out_dir>/diff_stats.txt                 mode = both のとき
 
 BN は eval（running 統計）。学習の checkpoint 時のフル画像（util/monitor.py save_full_images）と同じ。
+速度（2026-09-09）: 読み込み・デコードは --read_workers 本のスレッドで先読み、full は --full_batch_size 枚まとめて 1 回の forward（BN は eval なので 1 枚ずつと同じ結果）、
+PNG の書き込みは --write_workers 本のスレッドで非同期。GPU は数 ms で終わるので、律速は PNG の読み書き（HDD + WSL 越しだと 1 枚 0.1〜0.3 s）。終了時に内訳（読み待ち / full / patch / 書き待ち）を表示する。
 デバイスは --device cuda | cpu で明示（run_infer.py が machines.yaml の gpu_gen から決める）。cuda 指定で使えなければエラー。
 """
 
 import argparse
+import collections
 import math
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -81,6 +85,9 @@ def parse_args():
     req("--patch_batch_size", type=int)
     req("--max_slices", type=int)
     p.add_argument("--save_residual", action="store_true")
+    req("--full_batch_size", type=int, help="full 方式で 512 をまとめて G に通す枚数")
+    req("--read_workers", type=int, help="PNG の読み込み・デコードを先読みするスレッド数（0 = 直列）")
+    req("--write_workers", type=int, help="PNG の書き込みを非同期にするスレッド数（0 = 直列）")
     # 出力形式（infer_stage1.sh の OUTPUT_FORMAT / DICOM_DIR）
     req("--output_format", choices=OUTPUT_FORMATS, help="png | dicom | both")
     req("--dicom_dir", help="元 DICOM ルート（dicom / both のとき参照ヘッダに使う。png のときは使わない）")
@@ -209,44 +216,124 @@ def main():
             raise ValueError(f"--diff_range_hu は正: {a.diff_range_hu}")
         out_dir.mkdir(parents=True, exist_ok=True)
         write_png(out_dir / colorbar_filename(a.diff_range_hu), rgb_to_bgr((colorbar_rgb01(a.diff_range_hu, 512) * 255.0).round().astype(np.uint8)))
+    # --- パイプライン（2026-09-09）: 読み込みはスレッドで先読み → full は full_batch_size 枚まとめて forward → PNG 書き込みはスレッドで非同期 ---
+    #     GPU は数 ms で終わるので、律速は PNG の読み書き（PC2 は HDD + WSL 越しで 1 枚 0.1〜0.3 s）。読み・計算・書きを同時に動かして読み書きの上限まで詰める。
+    #     順序は保つ（先読みは deque に submit 順で積み、先頭から取る）。DICOM の照合・書き出しは pydicom なので主スレッドで直列のまま。
+    reader = ThreadPoolExecutor(max_workers=a.read_workers) if a.read_workers > 0 else None
+    writer = ThreadPoolExecutor(max_workers=a.write_workers) if a.write_workers > 0 else None
+    pending = []  # 書き込みの future（例外は drain で表に出す。黙って失敗させない）
+    tm = {"read": 0.0, "full": 0.0, "patch": 0.0, "write": 0.0}
+
+    def load(p):
+        stored = read_stored(p)
+        return stored, normalize(stored, *hu)
+
+    def drain(limit):
+        t = time.time()
+        while len(pending) > limit:
+            pending.pop(0).result()
+        tm["write"] += time.time() - t
+
+    def put(path, arr):
+        if writer is None:
+            write_png(path, arr)
+        else:
+            pending.append(writer.submit(write_png, path, arr))
+            drain(4 * a.write_workers + 16)  # 溜めすぎない（メモリ）
+
+    batch_n = a.full_batch_size if "full" in modes else 1
+    prefetch = 2 * batch_n + (a.read_workers if reader is not None else 0)
+    queue = collections.deque()
+    it = iter(paths)
+
+    def take(n):
+        """次の n 枚を順序どおり [(path, stored, x_np)] で返す（末尾は n 未満）。"""
+        items = []
+        for _ in range(n):
+            if reader is None:
+                p = next(it, None)
+                if p is None:
+                    break
+                t = time.time()
+                stored, x_np = load(p)
+                tm["read"] += time.time() - t
+            else:
+                while len(queue) < prefetch:
+                    p = next(it, None)
+                    if p is None:
+                        break
+                    queue.append((p, reader.submit(load, p)))
+                if not queue:
+                    break
+                p, fut = queue.popleft()
+                t = time.time()
+                stored, x_np = fut.result()
+                tm["read"] += time.time() - t
+            items.append((p, stored, x_np))
+        return items
+
     diff_lines = []
     t0 = time.time()
-    for p in tqdm(paths, unit="slice", dynamic_ncols=True):
-        rel = Path(p).relative_to(input_dir)
-        stored = read_stored(p)
-        x_np = normalize(stored, *hu)
-        x = torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0).to(device)
-        outs = {}
-        with torch.no_grad():
+    bar = tqdm(total=len(paths), unit="slice", dynamic_ncols=True)
+    try:
+        while True:
+            items = take(batch_n)
+            if not items:
+                break
+            outs_full = None
             if "full" in modes:
-                outs["full"] = infer_full(net, x)
-            if "patch" in modes:
-                if n_patches is None:
-                    n_patches = len(grid_positions(x.shape[-2], a.patch_size, a.patch_stride)) * len(grid_positions(x.shape[-1], a.patch_size, a.patch_stride))
-                    tqdm.write(f"[infer] patch: {a.patch_size}px stride {a.patch_stride} → {n_patches} patch/枚, blend={a.patch_blend}, batch={a.patch_batch_size}")
-                outs["patch"] = infer_patch(net, x, a.patch_size, a.patch_stride, window, a.patch_batch_size)
-        pcd16 = denormalize(x_np, *hu)  # 正規化窓でクリップした入力（R の基準）
-        ref_ds = None
-        if write_dcm:  # F-18a: このスライスの参照 DICOM が本当に入力 PNG の元か、画素で照合（違えばここで止まる）
-            ref_ds = check_pixels(dicom_index.reference_for(rel.stem), stored, a.hu_offset, str(rel))
-        for m, y in outs.items():
-            eid16 = denormalize(y[0, 0].cpu().numpy(), *hu)
-            if write_png_out:
-                write_png(out_dir / m / rel, eid16)
-            if write_dcm:
-                key = (m, rel.parent)
-                if key not in series_uid:
-                    series_uid[key] = generate_uid()
-                write_like_reference(dicom_index.reference_for(rel.stem), eid16.astype(np.float64) - a.hu_offset,
-                                     out_dir / f"{m}_dicom" / rel.with_suffix(".dcm"), series_uid[key],
-                                     f"SpicaV5 EID-like {run_name}/{Path(a.weight_dir).name} {m}", a.rescale_slope, a.rescale_intercept, ds=ref_ds)
-            if a.save_residual:
-                write_png(out_dir / f"{m}_R" / rel, residual_stored(pcd16, eid16))
-                delta_hu = eid16.astype(np.int32) - pcd16.astype(np.int32)  # = R_stored − 32768（保存した 16bit と同じ差）
-                write_png(out_dir / f"{m}_R_color" / rel, rgb_to_bgr(residual_rgb8(delta_hu, a.diff_range_hu)))
-        if a.mode == "both":
-            d = (outs["full"] - outs["patch"]).abs() * hu_per_unit
-            diff_lines.append((str(rel), float(d.mean()), float(d.max())))
+                xs = [torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0) for _, _, x_np in items]
+                t = time.time()
+                with torch.no_grad():
+                    if all(x.shape == xs[0].shape for x in xs):
+                        outs_full = list(infer_full(net, torch.cat(xs).to(device)).split(1))  # まとめて 1 回（形が同じときだけ）
+                    else:
+                        outs_full = [infer_full(net, x.to(device)) for x in xs]
+                tm["full"] += time.time() - t
+            for k, (p, stored, x_np) in enumerate(items):
+                rel = Path(p).relative_to(input_dir)
+                outs = {}
+                if outs_full is not None:
+                    outs["full"] = outs_full[k]
+                if "patch" in modes:
+                    x = torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0).to(device)
+                    if n_patches is None:
+                        n_patches = len(grid_positions(x.shape[-2], a.patch_size, a.patch_stride)) * len(grid_positions(x.shape[-1], a.patch_size, a.patch_stride))
+                        tqdm.write(f"[infer] patch: {a.patch_size}px stride {a.patch_stride} → {n_patches} patch/枚, blend={a.patch_blend}, batch={a.patch_batch_size}")
+                    t = time.time()
+                    with torch.no_grad():
+                        outs["patch"] = infer_patch(net, x, a.patch_size, a.patch_stride, window, a.patch_batch_size)
+                    tm["patch"] += time.time() - t
+                pcd16 = denormalize(x_np, *hu)  # 正規化窓でクリップした入力（R の基準）
+                ref_ds = None
+                if write_dcm:  # F-18a: このスライスの参照 DICOM が本当に入力 PNG の元か、画素で照合（違えばここで止まる）
+                    ref_ds = check_pixels(dicom_index.reference_for(rel.stem), stored, a.hu_offset, str(rel))
+                for m, y in outs.items():
+                    eid16 = denormalize(y[0, 0].cpu().numpy(), *hu)
+                    if write_png_out:
+                        put(out_dir / m / rel, eid16)
+                    if write_dcm:
+                        key = (m, rel.parent)
+                        if key not in series_uid:
+                            series_uid[key] = generate_uid()
+                        write_like_reference(dicom_index.reference_for(rel.stem), eid16.astype(np.float64) - a.hu_offset,
+                                             out_dir / f"{m}_dicom" / rel.with_suffix(".dcm"), series_uid[key],
+                                             f"SpicaV5 EID-like {run_name}/{Path(a.weight_dir).name} {m}", a.rescale_slope, a.rescale_intercept, ds=ref_ds)
+                    if a.save_residual:
+                        put(out_dir / f"{m}_R" / rel, residual_stored(pcd16, eid16))
+                        delta_hu = eid16.astype(np.int32) - pcd16.astype(np.int32)  # = R_stored − 32768（保存した 16bit と同じ差）
+                        put(out_dir / f"{m}_R_color" / rel, rgb_to_bgr(residual_rgb8(delta_hu, a.diff_range_hu)))
+                if a.mode == "both":
+                    d = (outs["full"] - outs["patch"]).abs() * hu_per_unit
+                    diff_lines.append((str(rel), float(d.mean()), float(d.max())))
+                bar.update(1)
+        drain(0)  # 書き込みを全部待つ（失敗があればここで例外）
+    finally:
+        bar.close()
+        if reader is not None:
+            reader.shutdown(wait=False, cancel_futures=True)
+        if writer is not None:
+            writer.shutdown(wait=True)
 
     elapsed = time.time() - t0
     if a.mode == "both":
@@ -259,6 +346,7 @@ def main():
                 f.write(f"# ALL\tmean_of_means={np.mean([m for _, m, _ in diff_lines]):.3f}\tmax={max(x for _, _, x in diff_lines):.3f}\n")
         if diff_lines:
             print(f"[infer] |full − patch|: mean {np.mean([m for _, m, _ in diff_lines]):.3f} HU, max {max(x for _, _, x in diff_lines):.3f} HU -> {out_dir / 'diff_stats.txt'}")
+    print(f"[infer] time: 読み待ち {tm['read']:.1f}s | full {tm['full']:.1f}s | patch {tm['patch']:.1f}s | 書き待ち {tm['write']:.1f}s（先読み {a.read_workers} / full_batch {a.full_batch_size} / 書き {a.write_workers}）")
     print(f"[infer] done: {len(paths)} slices, {elapsed:.1f}s ({elapsed / max(len(paths), 1):.2f} s/slice) -> {out_dir}")
 
 

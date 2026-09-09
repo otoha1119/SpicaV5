@@ -1,9 +1,12 @@
 # stage1/configs/infer.yaml — 推論（bash start.sh infer）の方式。唯一の正は configs/schema.py の INFER。既定値は無い。
 # 重みディレクトリ・入力フォルダ・出力形式（png | dicom | both）・元 DICOM ルートは infer_stage1.sh の変数で指定する。デバイスは machines.yaml の gpu_gen（0 → cpu）。
-# G の構成は run の launch.yaml から取る（学習時と同じ G を組む）。出力は <run>/infer/<重みディレクトリ名>/<入力フォルダ名>/（レイアウトは util/run_paths.py）。
+# G の構成は run の launch.yaml から取る（学習時と同じ G を組む）。出力は <repo>/output/<run>_<重み>_<入力名>_<実行時刻>/（レイアウトは util/run_paths.py。2026-09-09 に run の下から移動）。
 # 設計: docs/plans/20260907_inference-plan.md
 
-mode: both              # full（512 を一発）| patch（下の patch.* で切って重なり平均）| both（両方保存 + |full − patch| を diff_stats.txt に）
+mode: full              # full（512 を一発。Stage 2 用のデータ生成はこれ）| patch（下の patch.* で切って重なり平均）| both（両方保存 + |full − patch| を diff_stats.txt に。1 枚 2,401 回 G を呼ぶので遅い）
+
+full:
+  batch_size: 8         # 512 をまとめて G に通す枚数（BN は eval なので 1 枚ずつと同じ結果。VRAM に合わせる。3070 8GB で 8）。GPU 向け。CPU（gpu_gen 0）では 1 が最速（mac 実測: 1 → 0.22 s/枚、8 → 0.86 s/枚）
 
 patch:
   size: 128             # 論文の学習 patch と同じ。8 の倍数
@@ -12,7 +15,11 @@ patch:
   batch_size: 64        # patch を G に通す枚数（VRAM に合わせる）
 
 max_slices: 0           # 0 で全スライス。動作確認は 4 など
-save_residual: true     # 残差 R（0 HU = 32768）も <mode>_R/ に保存
+save_residual: false    # 残差 R（0 HU = 32768）と表示用カラーも書くか。Stage 2 用のデータ生成では不要（既定 false）。確認したいときは bash start.sh infer --save_residual true
+
+io:                     # 読み・計算・書きを同時に動かす（GPU は数 ms、PNG の読み書きが律速。特に HDD + WSL 越し）
+  read_workers: 4       # PNG の読み込み・デコードを先読みするスレッド数（0 = 直列）
+  write_workers: 2      # PNG の書き込みを非同期にするスレッド数（0 = 直列）
 
 dicom:                  # OUTPUT_FORMAT = dicom | both のとき。stored = (HU − rescale_intercept) / rescale_slope
   rescale_slope: 1.0          # 元 DICOM の RescaleSlope

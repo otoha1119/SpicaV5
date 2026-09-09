@@ -28,7 +28,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import INFER, MACHINE, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate  # noqa: E402
-from util.run_paths import LAUNCH_FILE, find_run_dir, infer_dir, latest_launch  # noqa: E402
+from util.run_paths import LAUNCH_FILE, find_run_dir, infer_output_dir, latest_launch  # noqa: E402
 
 # launch.yaml の train / mode セクション（平坦キー）→ inference_dir.py のフラグ
 G_TRAIN_KEYS = {"network.ngf": "--ngf", "network.input_nc": "--input_nc", "network.output_nc": "--output_nc", "network.norm": "--norm",
@@ -110,6 +110,7 @@ def main():
     p.add_argument("--input_dir", required=True, help="処理する PNG 群のフォルダ")
     p.add_argument("--output_format", required=True, help="png | dicom | both（infer_stage1.sh の OUTPUT_FORMAT）")
     p.add_argument("--dicom_dir", required=True, help="元 DICOM ルート（dicom / both のとき必須。png のときは空文字でよい）")
+    p.add_argument("--out_root", default=None, help="出力の根。省略時はリポジトリ直下の output/（通常は省略。scratch 実行用）")
     p.add_argument("overrides", nargs=argparse.REMAINDER, help="'--' の後に inference_dir.py の引数（INFER schema のフラグ、--weight_dir / --input_dir / --output_format / --dicom_dir）")
     a = p.parse_args()
     overrides = a.overrides[1:] if a.overrides and a.overrides[0] == "--" else a.overrides
@@ -150,7 +151,7 @@ def main():
 
     jst = datetime.timezone(datetime.timedelta(hours=9), name="JST")
     now = datetime.datetime.now(jst)
-    out_dir = infer_dir(run_dir, weight_dir, input_dir, now)  # 実行時刻つき（F-13）
+    out_dir = infer_output_dir(run_dir, weight_dir, input_dir, now, root=a.out_root)  # <repo>/output/<run>_<重み>_<入力名>_<時刻>/（F-13、2026-09-09）
     if out_dir.exists():
         print(f"[run_infer] 設定エラー: 出力先が既に存在します（同一秒の再実行）: {out_dir}", file=sys.stderr)
         sys.exit(2)

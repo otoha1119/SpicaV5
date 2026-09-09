@@ -115,7 +115,7 @@ git reset --hard
     epoch_NNN_panel.png                               上を並べた [EID | EID-like | PCD | R + ゲージ]、各列の下にラベル。epoch 順に並べて見比べる
   output_images/preview_random/epoch_NNN_<slice>.png  epoch ごとに別のランダムスライス（log.n_full_random 枚）の同じパネル（パネルだけ）
   （学習中の 128 patch グリッドは TensorBoard だけ）
-  infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   推論の出力（§8。実行ごとに別ディレクトリ）
+  （推論と crop の出力は run の下ではなく、リポジトリ直下の output/。§8）
   tb/                         TensorBoard
 ```
 
@@ -147,9 +147,11 @@ DICOM_DIR="/workspace/DataSet/PhotonCT512_original"               # 元 DICOM �
 | mode `both` | 両方を保存し、スライスごとの \|full − patch\| の mean / max [HU] を `diff_stats.txt` に記録 |
 | 出力 PNG | `{full,patch}/<症例>/<slice>.png`（16bit、入力と同じ規約。そのまま次段の学習データになる）、`{full,patch}_R/`（残差、0 HU = 32768）、`{full,patch}_R_color/`（同じ残差の表示用カラー 8bit RGB、512×512 のまま。範囲は現在の `train.yaml` の `log.diff_range_hu`）、`R_colorbar_pm300HU.png`（凡例 1 枚） |
 
-パッチ切り出し `bash start.sh crop`: ケース（PCD / EID のスライス名と左上座標のペア。既定 2 ケース）・`patch`（72）・`panel_scale`（パネルだけ最近傍で拡大、既定 4）・`device`（既定 cpu。学習中に VRAM を取り合わない）は `stage1/configs/crop.yaml`、重みディレクトリは `crop_stage1.sh` の `WEIGHT_DIR`（`--weight_dir` で上書き可）。表示（格納値 0〜3500 を線形、`preview_bits`、R の範囲）は現在の `train.yaml` の `log` から（run の `launch.yaml` ではないので、古い run でも今の見た目）。出力は `<run>/infer/<重みディレクトリ名>/crop/<実行時刻>/case<N>_<pcd>_<eid>/` に `1_EID` / `2_EID-like` / `3_PCD` / `4_R_color`（72×72、等倍）と `panel.png`（`[EID | EID-like | PCD | R + ゲージ]`）。16bit の生データは書かない。`shell` / `infer` / `crop` / `best` / `tb` はコンテナが起動済みなら `up` を呼ばず `exec` だけなので、学習中に打ってもコンテナは作り直されない。
+パッチ切り出し `bash start.sh crop`: ケース（PCD / EID のスライス名と左上座標のペア。既定 2 ケース）・`patch`（72）・`panel_scale`（パネルだけ最近傍で拡大、既定 4）・`device`（既定 cpu。学習中に VRAM を取り合わない）は `stage1/configs/crop.yaml`、重みディレクトリは `crop_stage1.sh` の `WEIGHT_DIR`（`--weight_dir` で上書き可）。表示（格納値 0〜3500 を線形、`preview_bits`、R の範囲）は現在の `train.yaml` の `log` から（run の `launch.yaml` ではないので、古い run でも今の見た目）。出力は `output/<run>_<重みディレクトリ名>_crop_<実行時刻>/case<N>_<pcd>_<eid>/` に `1_EID` / `2_EID-like` / `3_PCD` / `4_R_color`（72×72、等倍）と `panel.png`（`[EID | EID-like | PCD | R + ゲージ]`）。16bit の生データは書かない。`shell` / `infer` / `crop` / `best` / `tb` はコンテナが起動済みなら `up` を呼ばず `exec` だけなので、学習中に打ってもコンテナは作り直されない。
 | 出力 DICOM | `{full,patch}_dicom/<症例>/<slice>.dcm`。元 DICOM のヘッダを継承し画素だけ置換。HU → 格納値は `infer.yaml` の `dicom.rescale_slope / rescale_intercept`（参照 DICOM のタグと全枚照合、違えばエラー）。書く直前に「参照 DICOM から再現した stored 値 == 入力 PNG」を全画素で照合し、症例内の Series が 1 種であることも検査する（単一 Series・単一フレーム CT のみ）。`ImageType` は `DERIVED\SECONDARY`、`SeriesNumber` は元 + 1000、SOP / Series UID は新規、SeriesDescription に由来を記す |
-| 出力先 | `<run>/infer/<重みディレクトリ名>/<入力フォルダ名>/<yyyy_mmdd_HHMMSS>/`。実行ごとに別ディレクトリなので、重みや `--max_slices` を変えた再実行が混ざらない。解決済み設定は `infer.yaml` |
+| 出力先 | **リポジトリ直下の `output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<yyyy_mmdd_HHMMSS>/`**（2026-09-09 に run の下の 6 階層から移動。コンテナでは `/workspace/output/`、`.gitignore` 済み）。名前に run・重み・入力・時刻が全部入るので探しやすく、実行ごとに別ディレクトリなので再実行が混ざらない。解決済み設定は `infer.yaml`。Stage 2 のデータ作成はこの下の `full/` を指す |
+| 既定 | `mode: full`、`save_residual: false`（Stage 2 用のデータ生成向け）。品質確認は `bash start.sh infer --mode both --save_residual true --max_slices 4` のように一時的に上書き |
+| 速度 | 読み込み・デコードを `io.read_workers` 本で先読み、full は `full.batch_size` 枚まとめて 1 回の forward（BN は eval なので 1 枚ずつと同じ結果）、PNG 書き込みは `io.write_workers` 本で非同期。GPU は数 ms なので律速は PNG の読み書き（HDD + WSL 越しは特に）。終了時に「読み待ち / full / patch / 書き待ち」の内訳を表示するので、どこが律速か分かる。CPU 実行（mac）では `--full_batch_size 1` が最速（まとめるほど遅い） |
 
 BatchNorm は eval（running 統計）。checkpoint 時のフル画像と同じ経路なので、同じ重み・同じスライスなら結果は一致する。
 
