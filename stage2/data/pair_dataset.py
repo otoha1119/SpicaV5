@@ -195,6 +195,14 @@ class PairDataset(Dataset):
                 "kinds": ["fixed"] + ["random"] * len(picks),
                 "names": [Path(self.fixed_pair[1]).stem] + [f"{Path(b).stem} ({kind})" for _, _, b, kind in picks]}
 
+    def fixed_patches(self, n):
+        """TB の images/fixed 用: 固定スライス（log.full_slice）のペアから、patch_seed で決まる位置の patch を n 組。学習の乱数列は消費しない、resume 後も同じ。
+        戻り値 {"input": (n,1,p,p), "target": (n,1,p,p), "pos": [(y, x), ...]}"""
+        h, w = self.img_hw
+        in_path, pcd_path = self.fixed_pair
+        pos = [(random.Random(self.patch_seed * 1_000_003 + i).randrange(h - self.patch + 1), random.Random(self.patch_seed * 1_000_003 + i + 7_919).randrange(w - self.patch + 1)) for i in range(n)]
+        return {"input": torch.stack([self._patch(in_path, p) for p in pos]), "target": torch.stack([self._patch(pcd_path, p) for p in pos]), "pos": pos}
+
     def load_full(self, path):
         """フル画像を (1,1,H,W) の正規化 tensor で返す（検証用）。"""
         return torch.from_numpy(load_normalized(path, *self.hu)).unsqueeze(0).unsqueeze(0)

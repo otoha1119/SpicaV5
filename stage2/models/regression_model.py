@@ -46,6 +46,7 @@ class RegressionModel:
         self.lr, self.betas = train["optim.lr"], (train["optim.beta1"], train["optim.beta2"])
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=self.lr, betas=self.betas)
         self.cur_epoch, self.epoch_done, self.total_iters = 0, False, 0
+        self.last = None  # 直近の学習バッチ (input, pred, target)。optimize が更新
         self.n_params = sum(p.numel() for p in self.net.parameters())
 
     # --- 前向き ---
@@ -64,6 +65,7 @@ class RegressionModel:
         loss.backward()
         self.optimizer.step()
         with torch.no_grad():
+            self.last = (x.detach(), pred.detach(), t.detach())  # TB の images/current 用（util/monitor.py log_images）
             d = pred - t
             return {"loss": float(loss), "rmse_hu": float(d.pow(2).mean().sqrt()) * self.hu_unit, "mae_hu": float(d.abs().mean()) * self.hu_unit}
 

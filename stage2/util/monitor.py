@@ -1,6 +1,6 @@
 """stage2/util/monitor.py — Stage 2 学習の表示: ターミナル進捗バー（tqdm）+ TensorBoard（scalar のみ）+ loss_log.txt。
 
-Stage 1 の util/monitor.py に相当する。画像は epoch 末のフル 1024（固定 + ランダム + 実 EID テスト）だけで、128 patch のグリッドは出さない。
+Stage 1 の util/monitor.py に相当する。画像は学習中の 128 patch グリッド（image_freq step ごと。2026-09-09 追加）と、epoch 末のフル 1024（固定 + ランダム + 実 EID テスト）。
 保存先は Stage 1 と同じ 2 系統（util/run_paths.py）: output_images/epoch_NNN/ の生 16bit と preview_*/ の表示用。TensorBoard にも同じパネル（2026-09-09 ユーザー確定）。
 
   ターミナル : 1 epoch = 1 本の tqdm バー（単位 = 画像枚数）。末尾に loss（正規化空間）と RMSE [HU]。epoch 末に 1 行の要約（tqdm.write）
@@ -11,6 +11,8 @@ Stage 1 の util/monitor.py に相当する。画像は epoch 末のフル 1024�
      train/lr（epoch ごと）
      val/rmse_HU, val/mae_HU       epoch 末、val 症例のフル 1024（出力 − 教師）
      val/rmse_input_HU, val/mae_input_HU   参照線: 入力 − 教師（何もしない場合）。出力がこれを下回らなければ学習の意味が無い
+     images/current                 image_freq step ごと: いま学習中のバッチ先頭 n_images 枚の 128 patch。各行 [EID-like1024 (input) | PCD-like1024 (output) | PCD1024 (teacher)]
+     images/fixed                   同じ間隔: 固定スライス（log.full_slice）から patch_seed で決めた位置の n_images 枚（同じ patch で推移を追う。eval で通す）
      images/full/fixed              epoch 末（save_epoch_freq ごと）: 固定スライス（train.yaml log.full_slice、PCD-002-236）の 4 列パネル
                                     [EID-like1024 (input) | PCD1024 (teacher) | PCD-like1024 (output) | 実 EID（log.eid_slice）→ PCD-like1024]（util/panel.py。8bit、HU を display_hu_min..max で線形）
      images/full/random（複数なら random0, random1, ...）  epoch ごとに別のランダムスライス（train ∪ val。ラベルに名前と train/val）の 3 列パネル
@@ -23,12 +25,16 @@ Stage 1 の util/monitor.py に相当する。画像は epoch 末のフル 1024�
 import time
 from pathlib import Path
 
+import cv2
 import numpy as np
+import torch
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from data.ct_io import denormalize, to_display, write_png
-from util.panel import build_panel, full_labels
+from torchvision.utils import make_grid
+
+from util.panel import build_panel, full_labels, label_strip
 from util.run_paths import LOSS_LOG_FILE, TB_DIR, epoch_images_dir, preview_dir
 
 to_u8 = lambda x01: (np.clip(x01, 0.0, 1.0) * 255.0).round().astype(np.uint8)  # noqa: E731
@@ -98,6 +104,38 @@ class TrainMonitor:
         msg = (f"[epoch {epoch}/{total_epochs}] {elapsed:.0f}s, iters {total_iters}, lr {lr:.6f} | "
                f"val rmse {val['rmse_hu']:.1f} HU (input {val['rmse_input_hu']:.1f}) mae {val['mae_hu']:.1f} HU (input {val['mae_input_hu']:.1f}) on {val['n']} slices")
         self.write(msg)
+
+    # ------------------------------------------------------------------ 128 patch グリッド（image_freq step ごと。TB だけ）
+    PATCH_LABELS = ("EID-like (input)", "PCD-like (output)", "PCD1024 (teacher)")
+
+    def _patch_grid(self, x, y, t):
+        """(n,1,p,p) 正規化 tensor ×3 → 各行 [input | output | teacher] のグリッド (H,W,3) uint8。上に列ラベル。表示は HU を display_hu_min..max で線形。"""
+        rows = []
+        for i in range(x.shape[0]):
+            for tsr in (x, y, t):
+                g = self._lin01(self._stored(tsr[i : i + 1]))  # (p,p,3)
+                rows.append(torch.from_numpy(g).permute(2, 0, 1))
+        pad = 2
+        grid = make_grid(torch.stack(rows), nrow=3, padding=pad, pad_value=0.5).permute(1, 2, 0).numpy()  # (H, 3p+4*pad, 3)
+        p = x.shape[-1]
+        scale = 0.45
+        while scale > 0.25 and max(cv2.getTextSize(s, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)[0][0] for s in self.PATCH_LABELS) > p - 4:
+            scale -= 0.05  # 列幅（patch_size）に収まるまで文字を小さく
+        blank = np.ones((22, pad, 3), np.float32)
+        header = [blank]
+        for s in self.PATCH_LABELS:
+            header += [label_strip(p, s, height=22, scale=scale), blank]
+        return to_u8(np.concatenate([np.concatenate(header, axis=1), grid], axis=0))
+
+    def log_images(self, model, fixed, total_iters):
+        """image_freq step ごと: images/current（直近バッチ先頭 n_images 枚）と images/fixed（固定スライスの固定 patch を eval で通す）を TB へ。ディスクには書かない。"""
+        n = fixed["input"].shape[0]
+        if model.last is not None:
+            x, y, t = (a[:n].cpu() for a in model.last)
+            self.tb.add_image("images/current", self._patch_grid(x, y, t), total_iters, dataformats="HWC")
+        y_f = model.predict(fixed["input"])  # eval で通す（BN は無いが学習の勾配を汚さない）
+        model.net.train()
+        self.tb.add_image("images/fixed", self._patch_grid(fixed["input"], y_f, fixed["target"]), total_iters, dataformats="HWC")
 
     # ------------------------------------------------------------------ フル画像（epoch 末。生 16bit / preview / TB）
     def _stored(self, t):

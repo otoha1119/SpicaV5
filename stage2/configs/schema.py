@@ -56,6 +56,8 @@ TRAIN = {
     "data.test_cases":        Key(list, "--test_cases",        "最終評価用に**最初から避けておく**症例名（PCD-017〜020）。学習・検証で一切読まない。ディスクに無くてもよい"),
     # log
     "log.print_freq":              Key(int, "--print_freq",              "バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）"),
+    "log.image_freq":              Key(int, "--image_freq",              "TensorBoard に学習中の 128 patch グリッド（images/current, images/fixed）を出す間隔（step）。Stage 1 と同じ仕組み（2026-09-09）"),
+    "log.n_images":                Key(int, "--n_images",                "その patch グリッドの行数（current = いまのバッチ先頭 n 枚、fixed = log.full_slice から切った固定 n 枚）"),
     "log.save_epoch_freq":         Key(int, "--save_epoch_freq",         "重み（weights/epoch_NNN/）を保存する epoch 間隔。1 = 毎 epoch"),
     "log.save_latest_freq":        Key(int, "--save_latest_freq",        "latest/ を保存する間隔（画像枚数。batch_size の倍数）"),
     "log.val_max_slices_per_case": Key(int, "--val_max_slices_per_case", "epoch 末の検証で val 症例ごとに使うフル 1024 スライスの上限（等間隔に間引く。0 で全部）"),
@@ -305,6 +307,8 @@ def check_train_values(train, mode, machine):
             both = sorted(set(lists[names[i]]) & set(lists[names[j]]))
             if both: P.append(f"{names[i]} と {names[j]} に同じ症例があります: {both}")
     if train["log.print_freq"] < 1: P.append("log.print_freq ≥ 1（step）")
+    if train["log.image_freq"] < 1: P.append("log.image_freq ≥ 1（step）")
+    if train["log.n_images"] < 1: P.append("log.n_images ≥ 1")
     if train["log.save_epoch_freq"] < 1: P.append("log.save_epoch_freq ≥ 1")
     slf = train["log.save_latest_freq"]
     if slf < bs or slf % bs: P.append(f"log.save_latest_freq ({slf}) は optim.batch_size ({bs}) の倍数（画像枚数単位。倍数でないと latest が保存されない）")

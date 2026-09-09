@@ -4,7 +4,7 @@
   1. run_train.py が書いた launch.yaml（実効値）を読み、schema で再検証する（既定値なし）
   2. seed → device（machines.yaml の gpu_gen ≠ 0 なら CUDA 必須。黙って CPU に落ちない）→ PairDataset → DataLoader → RegressionModel
   3. 再開（--resume_state）なら重みと optimizer / RNG / 進捗を復元する
-  4. epoch ループ: print_freq step ごとに scalar、save_latest_freq 枚ごとに latest/、epoch 末に val 指標 + latest/ + weights/epoch_NNN/ + フル 1024 画像
+  4. epoch ループ: print_freq step ごとに scalar、image_freq step ごとに 128 patch グリッド（TB images/current, images/fixed）、save_latest_freq 枚ごとに latest/、epoch 末に val 指標 + latest/ + weights/epoch_NNN/ + フル 1024 画像
      （固定 = train.yaml log.full_slice、ランダム = n_full_random 枚、実 EID テスト = log.eid_slice。output_images/ の生 16bit と preview、TB のパネル。util/monitor.py）
   5. 最終 epoch は save_epoch_freq の倍数でなくても保存する
 """
@@ -76,8 +76,10 @@ def main():
         model.resume(a.resume_state)
     total_iters = model.total_iters
     val_slices = dataset.val_slices()
+    fixed = dataset.fixed_patches(train["log.n_images"])  # TB images/fixed 用（log.full_slice から。位置は patch_seed で固定）
     monitor = TrainMonitor(run_dir, train, mode["loss"], bs, len(dataset))
     n_epochs, print_freq, save_latest, save_epoch = train["optim.n_epochs"], train["log.print_freq"], train["log.save_latest_freq"], train["log.save_epoch_freq"]
+    image_freq = train["log.image_freq"]
     last_epoch, last_saved_epoch = None, None
 
     for epoch in range(a.epoch_count, n_epochs + 1):
@@ -95,6 +97,8 @@ def main():
             step = total_iters // bs
             if step % print_freq == 0:
                 monitor.step(epoch, total_iters)
+            if step % image_freq == 0:
+                monitor.log_images(model, fixed, total_iters)  # 128 patch グリッド（current / fixed）を TB へ
             if total_iters % save_latest == 0:
                 model.save(run_dir, "latest")
             iter_data_time = time.time()
