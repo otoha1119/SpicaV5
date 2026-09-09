@@ -214,10 +214,17 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - `util/run_paths.py`: `crop_dir(run_dir, weight_dir, now)` とレイアウト記述
 - 検証（scratch venv + 合成データ）: 2 ケースの出力 10 ファイル、切り出し位置が入力の表示変換と画素一致、パネル列が 4 倍拡大と一致、はみ出し・キー欠落・device=cuda on CPU 機・未知フラグの各エラー（はみ出しは書き出し前に止まり画像を残さない）。fake docker で start.sh の crop を dry-run し、起動済みなら up を呼ばないことを確認
 
+### patch 推論の高速化（2026-09-09、ユーザー報告: PC3 で batch 256 にしても 2 枚/秒、VRAM 2.6/95.5 GB・CPU 14%・SSD 0%）
+- 原因: `inference_dir.infer_patch` が patch ごとに Python で `out[...] += o[k] * window` と `wsum[...] += window` を発行していた（2,401 patch で約 5,000 回の小さな GPU 演算/枚）。GPU も CPU も遊んだまま 1 本のスレッドの発行が律速で、`patch.batch_size` を上げても回数は減らない
+- 修正: 切り出しは平坦 index の gather 1 回（`flat[idx]`）、合成は `index_add_`（重なりは加算）で、バッチ 1 回につき G の呼び出し + 数カーネル。不均等格子（`grid_positions` の linspace）もそのまま扱える。`cudnn.benchmark = True`（cuda のとき。形が固定）、`no_grad` → `inference_mode`
+- 数値: `index_add_` の重なりの加算順は CUDA では不定なので float の下位桁が変わりうる（uint16 化後に 1 違うことがある程度）。合成データで旧実装と max|old−new| < 1e-5（0.05 HU 未満）を確認（uniform / hann、512 の均等格子、504×504 stride 24 の不均等格子）
+- さらに（ユーザー指摘: patch.batch_size は 1 枚の中の束ね方で、スライスをまたいでいなかった）`batch_slices` 枚のスライスの patch を全部まとめて 1 つの列にし、`patch.batch_size` ずつ G に通す（`infer_patch` は (K,1,H,W) を受ける。スライス k の index は k·H·W だけずらす）。スライス末尾の半端なバッチと GPU 同期が K 枚に 1 回になる
+- CPU（mac）は 2,401 patch の畳み込み計算そのものが律速なので速度は変わらない（旧 42 s → 新 42 s/枚）。速度の効果は PC3（GPU）で測る。計算量は full の 150 倍あるので、GPU 使用率（タスクマネージャーは Cuda / Compute を見る）が高ければ計算律速で、その先は patch.stride 8 → 16（patch 数 1/4。full との差は diff_stats.txt で確認）か bf16（数値が変わるので要判断）。`patch.batch_size` は 96 GB なら 512〜1024 でよい
+
 ### 推論の出力先を output/ に、既定を Stage 2 用に、読み・計算・書きの並列化（2026-09-09、ユーザー指示）
 - `util/run_paths.py`: `infer_output_dir` / `crop_output_dir` を追加し、出力を run の下（6 階層）から **`<repo>/output/<run>_<重み>_<入力名>_<時刻>/`**（crop は `<run>_<重み>_crop_<時刻>/`）に移動。`repo_root()` はこのファイルの 2 つ上（コンテナでは /workspace）。旧 `infer_dir` / `crop_dir` / `INFER_DIR` は削除。`run_infer.py` / `run_crop.py` に `--out_root`（scratch 実行用。通常は省略）
-- `configs/infer.yaml`: 既定を `mode: full`、`save_residual: false` に（Stage 2 用のデータ生成向け。`mode: both` は 1 枚 2,401 回 G を呼ぶので 1.8 s/枚かかっていた）。`full.batch_size`（8）、`io.read_workers`（4）、`io.write_workers`（2）を追加（schema INFER + check_infer_values）
-- `inference_dir.py`: 読み込み・デコードをスレッドで先読み（順序は deque で保持）、full は `full_batch_size` 枚を 1 回の forward（形が同じときだけまとめる。BN は eval なので 1 枚ずつと同じ）、PNG 書き込みはスレッドで非同期（future を溜めすぎないよう drain、例外は表に出す）。DICOM は主スレッドで直列のまま。終了時に「読み待ち / full / patch / 書き待ち」の内訳を表示
+- `configs/infer.yaml`: 既定を `mode: full`、`save_residual: false` に（Stage 2 用のデータ生成向け。`mode: both` は 1 枚 2,401 回 G を呼ぶので 1.8 s/枚かかっていた）。`batch_slices`（8。当初 `full.batch_size` で入れ、同日に patch も束ねるよう改名）、`io.read_workers`（4）、`io.write_workers`（2）を追加（schema INFER + check_infer_values）
+- `inference_dir.py`: 読み込み・デコードをスレッドで先読み（順序は deque で保持）、`batch_slices` 枚を 1 回の forward（形が同じときだけまとめる。BN は eval なので 1 枚ずつと同じ）、PNG 書き込みはスレッドで非同期（future を溜めすぎないよう drain、例外は表に出す）。DICOM は主スレッドで直列のまま。終了時に「読み待ち / full / patch / 書き待ち」の内訳を表示
 - 他ブランチ（Stage 2）との衝突を避けるため `start.sh` / `CLAUDE.md` / `machines.yaml` / compose は触っていない。CLAUDE.md の出力先の記述（`<run>/infer/...`）はマージ後に直す
 - 検証（scratch venv + 合成データ、mac CPU）: full の batch 8 と batch 1 の出力 PNG が 8 枚とも完全一致（最大差 0）、mode both / patch も従来どおり（|full − patch| mean 0.11 HU）、出力先の名前、`--save_residual true/false` の上書き、`full.batch_size 0` / `read_workers -1` / 未知フラグのエラー。CPU では batch 1 → 2 → 4 → 8 で 0.22 → 0.26 → 0.45 → 0.86 s/枚と遅くなる（GPU 向けの設定。CPU では 1）
 

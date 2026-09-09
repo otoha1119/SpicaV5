@@ -151,7 +151,7 @@ DICOM_DIR="/workspace/DataSet/PhotonCT512_original"               # 元 DICOM �
 | 出力 DICOM | `{full,patch}_dicom/<症例>/<slice>.dcm`。元 DICOM のヘッダを継承し画素だけ置換。HU → 格納値は `infer.yaml` の `dicom.rescale_slope / rescale_intercept`（参照 DICOM のタグと全枚照合、違えばエラー）。書く直前に「参照 DICOM から再現した stored 値 == 入力 PNG」を全画素で照合し、症例内の Series が 1 種であることも検査する（単一 Series・単一フレーム CT のみ）。`ImageType` は `DERIVED\SECONDARY`、`SeriesNumber` は元 + 1000、SOP / Series UID は新規、SeriesDescription に由来を記す |
 | 出力先 | **リポジトリ直下の `output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<yyyy_mmdd_HHMMSS>/`**（2026-09-09 に run の下の 6 階層から移動。コンテナでは `/workspace/output/`、`.gitignore` 済み）。名前に run・重み・入力・時刻が全部入るので探しやすく、実行ごとに別ディレクトリなので再実行が混ざらない。解決済み設定は `infer.yaml`。Stage 2 のデータ作成はこの下の `full/` を指す |
 | 既定 | `mode: full`、`save_residual: false`（Stage 2 用のデータ生成向け）。品質確認は `bash start.sh infer --mode both --save_residual true --max_slices 4` のように一時的に上書き |
-| 速度 | 読み込み・デコードを `io.read_workers` 本で先読み、full は `full.batch_size` 枚まとめて 1 回の forward（BN は eval なので 1 枚ずつと同じ結果）、PNG 書き込みは `io.write_workers` 本で非同期。GPU は数 ms なので律速は PNG の読み書き（HDD + WSL 越しは特に）。終了時に「読み待ち / full / patch / 書き待ち」の内訳を表示するので、どこが律速か分かる。CPU 実行（mac）では `--full_batch_size 1` が最速（まとめるほど遅い） |
+| 速度 | 読み込み・デコードを `io.read_workers` 本で先読み、`batch_slices` 枚のスライスをまとめて G に通す（full はそのまま 1 回の forward、patch は全スライスの patch を束ねて `patch.batch_size` ずつ。BN は eval なので 1 枚ずつと同じ結果）、PNG 書き込みは `io.write_workers` 本で非同期。GPU は数 ms なので律速は PNG の読み書き（HDD + WSL 越しは特に）。終了時に「読み待ち / full / patch / 書き待ち」の内訳を表示するので、どこが律速か分かる。CPU 実行（mac）では `--batch_slices 1` が最速（まとめるほど遅い）。patch 方式は 2026-09-09 に patch ごとの Python ループを廃止（gather + `index_add_`）。それ以前は `patch.batch_size` を上げても速くならなかった（GPU も CPU も遊んだまま 1 本のスレッドが 1 patch ずつ発行していたため） |
 
 BatchNorm は eval（running 統計）。checkpoint 時のフル画像と同じ経路なので、同じ重み・同じスライスなら結果は一致する。
 
