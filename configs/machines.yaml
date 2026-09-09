@@ -23,7 +23,7 @@ PC1:                                   # 研究室 Windows 機
 PC2:                                   # 研究室 Windows 機
   gpu_gen: 30                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
   gpu_name: RTX 3070
-  host_data_root: "D:/DataSet/DataSet"
+  host_data_root: "C:/DataSet"
   container_data_root: /workspace/DataSet
   pcd_dir: /workspace/DataSet/PCD512_v2   # 直下に症例フォルダ。論文の z 側 (A)
   eid_dir: /workspace/DataSet/EID_v5      # 論文の x 側 (B)

@@ -83,7 +83,7 @@ exec_it() {  # 対話 exec。Windows では winpty か -T を付ける。引数�
 }
 
 # ===== ここだけマシンごとに書き換える =====
-MACHINE="PC1"          # configs/machines.yaml のエントリ名（PC1 / PC2 / mac / ...）
+MACHINE="PC2"          # configs/machines.yaml のエントリ名（PC1 / PC2 / mac / ...）
 # =========================================
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
