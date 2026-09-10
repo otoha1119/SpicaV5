@@ -16,6 +16,7 @@ patch:
 
 max_slices: 0           # 0 で全スライス。動作確認は 4 など
 save_residual: false    # 残差 R（0 HU = 32768）と表示用カラーも書くか。Stage 2 用のデータ生成では不要（既定 false）。確認したいときは bash start.sh infer --save_residual true
+save_panel: false       # 表示用パネル [EID-like | PCD | R + ゲージ]（学習の output_images/preview_* と同じ正規化表示。util/panel.py）も <mode>_panel/ に書くか。学習中の目視確認用。既定 false（確認したいときは bash start.sh infer --save_panel true --max_slices 1）
 
 io:                     # 読み・計算・書きを同時に動かす（GPU は数 ms、PNG の読み書きが律速。特に HDD + WSL 越し）
   read_workers: 4       # PNG の読み込み・デコードを先読みするスレッド数（0 = 直列）
