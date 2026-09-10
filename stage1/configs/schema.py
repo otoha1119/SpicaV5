@@ -110,6 +110,7 @@ INFER = {
     "patch.batch_size": Key(int,  "--patch_batch_size", "patch を G に通す枚数（VRAM に合わせる）"),
     "max_slices":       Key(int,  "--max_slices",       "推論するスライス数の上限。0 で全部（動作確認用に絞る）"),
     "save_residual":    Key(bool, "--save_residual",    "true で残差 R（0 HU = 32768）と表示用カラーも <mode>_R/ <mode>_R_color/ に保存（Stage 2 用のデータ生成では不要なので既定 false。--save_residual true で一時的に有効）"),
+    "save_panel":       Key(bool, "--save_panel",       "true で表示用パネル [EID-like | PCD | R + ゲージ]（学習の output_images/preview_* と同じ正規化表示、util/panel.py）も <mode>_panel/ に保存。学習中の目視確認用。既定 false"),
     # 速度（2026-09-09）: GPU は数 ms で終わるので、読み・計算・書きを同時に動かす
     "batch_slices":     Key(int,  "--batch_slices",     "同時に G に通すスライス数（full はそのまま 1 回の forward、patch は全スライスの patch を束ねて patch.batch_size ずつ。BN は eval なので結果は 1 枚ずつと同じ。3070 8GB で 8。CPU では 1 が最速）"),
     "io.read_workers":  Key(int,  "--read_workers",     "PNG の読み込み・デコードを先読みするスレッド数（0 = 直列）"),

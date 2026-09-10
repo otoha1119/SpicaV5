@@ -22,12 +22,15 @@
 #   bash start.sh infer --weight_dir /workspace/stage1/checkpoints/2026_0907_1742/best --input_dir /workspace/DataSet/PCD512_v2
 #   bash start.sh infer --output_format both --dicom_dir /workspace/DataSet/photonCT/PhotonCT512_original
 #   bash start.sh infer --mode full --max_slices 4        # 方式の上書き。stage1/configs/schema.py の INFER にあるフラグだけ受け付ける
+#   bash start.sh infer --save_panel true --max_slices 1  # 学習中の目視確認用: 指定した重みで 1 枚だけパネル画像を出す（学習を止めない。input_dir は 1 枚だけのフォルダにするとさらに速い）
 #
 # ■ 出力
 #   <リポジトリ直下>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻 yyyy_mmdd_HHMMSS>/   （実行ごとに別ディレクトリ。混ざらない。コンテナでは /workspace/output/）
 #     {full,patch}/<case>/<slice>.png         EID-like（16bit PNG、入力と同じ規約）        … png / both
 #     {full,patch}_dicom/<case>/<slice>.dcm   EID-like（DICOM、元ヘッダ継承・UID は新規）  … dicom / both
 #     {full,patch}_R/<case>/<slice>.png       残差（16bit PNG、0 HU = 32768。PNG のみ）      … infer.yaml の save_residual
+#     {full,patch}_R_color/<case>/<slice>.png 残差の表示用カラー（8bit RGB）                … infer.yaml の save_residual
+#     {full,patch}_panel/<case>/<slice>.png   表示用パネル [EID-like | PCD | R + ゲージ]（学習の preview と同じ正規化表示） … infer.yaml の save_panel
 #     diff_stats.txt（mode = both のとき）、infer.yaml（解決済み設定）
 #
 # ■ デバイス
