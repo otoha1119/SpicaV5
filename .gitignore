@@ -38,6 +38,7 @@ venv/
 .claude/
 docs
 weight/
+outputs
 
 # TensorBoard のサーバログ（start.sh がコンテナ内 /workspace に書く）
 /tb_server.log
