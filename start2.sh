@@ -34,7 +34,7 @@
 #   ・shell / down : コンテナに入る / 停止・削除（start.sh と同じ。コンテナは Stage 1 と共用なので down は Stage 1 も止める）。
 #   ・infer : 推論（2026-09-10）。学習済みの重みで PNG フォルダを丸ごと PCD-like1024 に変換する。infer_stage2.sh → stage2/run_infer.py → inference_dir.py。
 #               重みディレクトリ・入力フォルダは infer_stage2.sh の WEIGHT_DIR / INPUT_DIR（--weight_dir / --input_dir で上書き可）、方式は stage2/configs/infer.yaml
-#               （max_slices / batch_slices / teacher / save_input1024 / save_panel / io.*。schema の INFER / MACHINE にあるフラグだけ上書き可）。
+#               （input eidlike|eid / max_slices / batch_slices / teacher / save_input1024 / save_panel / eid_slice / pcd_slice / io.*。schema の INFER / MACHINE にあるフラグだけ上書き可）。
 #               入力は 1024（EID-like1024）でも 512（実 EID_v5、Stage 1 の推論出力 full/）でもよく、512 は run の dataset_info.yaml の方式（学習と同じ scale / interp）で 1024 にしてから通す。
 #               teacher=true なら pcd1024_dir の同名スライスを教師に rmse / ssim / psnr を metrics.txt へ（PCD のテスト症例向け。実 EID は --teacher false）。
 #               U-Net の構成は run の launch.yaml から。出力 <repo>/output/<run>_<重み>_<入力名>_<時刻>/（Stage 1 と同じ根）。学習中に同じコンテナで打ってよい（exec だけ。VRAM は取り合う）。
@@ -57,7 +57,7 @@
 #   bash start2.sh infer                          # 推論。infer_stage2.sh の WEIGHT_DIR / INPUT_DIR、stage2/configs/infer.yaml の方式
 #   bash start2.sh infer --max_slices 1 --save_panel true                                   # 1 枚だけ試してパネルも出す
 #   bash start2.sh infer --weight_dir /workspace/stage2/checkpoints/2026_0909_1200/best --input_dir /workspace/DataSet/EIDlike1024_v1   # PCD のテスト症例（教師あり → metrics.txt）
-#   bash start2.sh infer --input_dir /workspace/DataSet/EID_v5 --teacher false            # 実 EID512（補間してから通す。教師なし）
+#   bash start2.sh infer --input_dir /workspace/DataSet/EID_v5 --input eid --teacher false   # 実 EID512（補間してから通す。教師なし。パネルは右 2 列に入り左 3 列は pcd_slice の参照）
 #   bash start2.sh PC1 build                     # イメージをビルド（本番機の初回。start.sh build と同じ）
 #   bash start2.sh shell                          # コンテナに入る（手動: bash dataset_stage2.sh [--flag ...]）
 #

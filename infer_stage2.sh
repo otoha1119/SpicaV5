@@ -14,14 +14,16 @@
 #
 # ■ コマンドで上書き（最優先）
 #   bash start2.sh infer --weight_dir /workspace/stage2/checkpoints/2026_0909_1200/best --input_dir /workspace/DataSet/EIDlike1024_v1
-#   bash start2.sh infer --max_slices 1 --save_panel true                       # 1 枚だけ試す（stage2/configs/schema.py の INFER / MACHINE にあるフラグだけ受け付ける）
-#   bash start2.sh infer --input_dir /workspace/DataSet/EID_v5 --teacher false   # 実 EID512（補間してから通す。教師なし）
+#   bash start2.sh infer --max_slices 1 --save_panel true                                   # 1 枚だけ試す（stage2/configs/schema.py の INFER / MACHINE にあるフラグだけ受け付ける）
+#   bash start2.sh infer --input_dir /workspace/DataSet/EID_v5 --input eid --teacher false   # 実 EID512（補間してから通す。教師なし。パネルは 4・5 列目に入り 1〜3 列目は pcd_slice）
 #
 # ■ 出力
 #   <リポジトリ直下>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻 yyyy_mmdd_HHMMSS>/   （実行ごとに別ディレクトリ。コンテナでは /workspace/output/。Stage 1 と同じ根）
 #     full/<case>/<slice>.png            PCD-like1024（16bit PNG、入力と同じ規約）
 #     full_input1024/<case>/<slice>.png  512 を補間した 1024 入力（16bit）              … 512 入力 かつ infer.yaml の save_input1024
-#     full_panel/<case>/<slice>.png      表示用パネル [入力1024 | PCD-like1024 | 教師]   … infer.yaml の save_panel
+#     full_panel/<case>/<slice>.png      表示用パネル。学習の固定パネルと同じ 5 列 [EID-like1024 | PCD-like1024 | PCD1024 | 実 EID → PCD-like1024 | 実 EID1024] … infer.yaml の save_panel
+#                                        input=eidlike なら 1〜3 列目が入力で 4・5 列目は eid_slice、input=eid なら 4・5 列目が入力で 1〜3 列目は pcd_slice（infer.yaml）
+#     eid/ または ref/                   その相方の 16bit（eid_slice の入力・出力 / pcd_slice の入力・出力・教師）
 #     metrics.txt                         出力 vs 教師の rmse / ssim / psnr（+ 入力そのままの参照値）… infer.yaml の teacher
 #     infer.yaml                          解決済み設定
 #

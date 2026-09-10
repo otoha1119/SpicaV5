@@ -27,8 +27,10 @@ checkpoint は「重みディレクトリ」単位で扱う（net_G.pth と stat
 <repo>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/   bash start2.sh infer の出力（inference_dir.py）。実行ごとに別ディレクトリ
     full/<case>/<slice>.png            PCD-like1024（uint16、stored = HU + 1400）
     full_input1024/<case>/<slice>.png  512 入力を補間した 1024 入力（uint16）。512 入力 かつ infer.yaml の save_input1024 のとき
-    full_panel/<case>/<slice>.png      表示用パネル [入力1024 | PCD-like1024 | PCD1024（教師、teacher）| 実 EID → PCD-like1024 | 実 EID1024（infer.yaml eid_slice）]（学習の固定パネルと同じ並び。util/panel.py full_labels）。save_panel のとき
-    eid/<eid_slice>_{eid1024,pcdlike}.png   eid_slice の 1024 入力とその出力（uint16）。save_panel かつ eid_slice のとき
+    full_panel/<case>/<slice>.png      表示用パネル。学習の固定パネルと同じ 5 列 [EID-like1024 | PCD-like1024 | PCD1024 | 実 EID → PCD-like1024 | 実 EID1024]（util/panel.py full_labels）。save_panel のとき
+                                       input=eidlike なら 1〜3 列目が入力（教師は teacher）で 4・5 列目は eid_slice、input=eid なら 4・5 列目が入力で 1〜3 列目は pcd_slice
+    eid/<eid_slice>_{eid1024,pcdlike}.png            input=eidlike: eid_slice の 1024 入力とその出力（uint16）
+    ref/<pcd_slice>_{eidlike,pcdlike,pcd1024}.png    input=eid: pcd_slice の入力・出力・教師（uint16）
     metrics.txt                         出力 vs 教師の rmse / ssim / psnr と入力そのままの参照値（teacher のとき）
     infer.yaml                          解決済み設定（run_infer.py が書く）
 """

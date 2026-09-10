@@ -55,15 +55,16 @@ def full_labels(model_tag, name=None, teacher=True, eid=None, input_name="EID-li
     model_tag : "epoch 12"（学習）| 重みディレクトリ名 "best" / "epoch_030"（推論）
     name      : 入力のスライス名（ランダムのとき、1 列目に添える）
     teacher   : False で 3 列目（教師）を外す（推論で教師の無い入力）
-    eid       : (実 EID のスライス名, scale, interp) で 4・5 列目を付ける。None なら 3 列まで
-    input_name / upsample : 1 列目の表記（推論で実 EID512 を入力にしたとき "EID_v5 (input, x2 bicubic)" のように）"""
+    eid       : (実 EID のスライス名, scale, interp) で 4・5 列目を付ける（scale が None なら補間の表記なし = 1024 で渡された EID）。None なら 3 列まで
+    input_name / upsample : 1 列目の表記（512 の EID-like を補間して入れたとき "EID-like1024 (input, x2 bicubic)" のように）"""
     up = f", x{upsample[0]} {upsample[1]}" if upsample else ""
     labels = [f"{input_name}  (input{up})" + (f"   {name}" if name else ""), f"PCD-like1024  (output)   {model_tag}"]
     if teacher:
         labels.append("PCD1024  (teacher)")
     if eid:
         eid_name, scale, interp = eid
-        labels += [f"{eid_name} -> PCD-like1024   (real EID)", f"{eid_name}  (real EID input, x{scale} {interp})"]
+        up_e = f", x{scale} {interp}" if scale else ""
+        labels += [f"{eid_name} -> PCD-like1024   (real EID)", f"{eid_name}  (real EID input{up_e})"]
     return labels
 
 

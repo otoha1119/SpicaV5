@@ -6,15 +6,19 @@ Stage 1 の inference_dir.py と同じ流儀。通常は run_infer.py（ホス�
   image_size（学習画像 1024）  : そのまま U-Net に通す（EID-like1024 = bash start2.sh dataset の出力。PCD のテスト症例など）
   image_size / scale（512）    : data/ct_io.upsample（データセット作成・学習中の実 EID テストと同じ関数、run と同じ scale / interp）で 1024 にしてから通す
                                  （実 EID512 = EID_v5、Stage 1 の推論出力 full/ など）
+入力の種類（--input。大きさからは区別できないので明示する）:
+  eidlike : PCD 症例の EID-like（1024 / 512）。教師（--teacher）と指標が使える。パネルでは 1〜3 列目（入力 / 出力 / 教師）に入り、4・5 列目は --eid_slice の実 EID
+  eid     : 実 EID512（EID_v5）。教師は無い。パネルでは 4・5 列目（出力 / 入力）に入り、1〜3 列目は --pcd_slice の参照 PCD 症例（EID-like1024 / 出力 / 教師）
 教師（--teacher）: pcd1024_dir/<case>/<slice>.png を名前で読む。全スライスに無ければ開始前にエラー（黙って飛ばさない）。
   指標は util/metrics.py（学習の val と同じ: rmse = √mse は正規化空間 [−1,1]・0 へ、ssim は 1 へ、psnr は dB）+ 入力そのまま vs 教師の参照値 *_input。
 
 出力（out_dir = <repo>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/。入力からの相対パスをそのまま保つので <case>/<slice>.png 構造になる）
   <out_dir>/full/<case>/<slice>.png            PCD-like1024（uint16、stored = HU + hu_offset。学習データと同じ規約）
   <out_dir>/full_input1024/<case>/<slice>.png  512 を補間した 1024 入力（uint16）。--save_input1024 かつ 512 入力のとき
-  <out_dir>/full_panel/<case>/<slice>.png      表示用パネル [入力1024 | PCD-like1024 | PCD1024（教師、--teacher）| 実 EID → PCD-like1024 | 実 EID1024（--eid_slice）]
-                                               （学習の固定パネルと同じ並び。display_hu_min..max で線形、preview_bits の深度。util/panel.py full_labels）。--save_panel のとき
-  <out_dir>/eid/<eid_slice>_{eid1024,pcdlike}.png  --eid_slice（eid_dir からの相対パス。512 なら補間）を 1 回だけ通した 1024 入力と出力（uint16）。全スライスのパネルに同じものを並べる
+  <out_dir>/full_panel/<case>/<slice>.png      表示用パネル。学習の固定パネルと同じ 5 列 [EID-like1024 | PCD-like1024 | PCD1024 | 実 EID → PCD-like1024 | 実 EID1024]
+                                               （display_hu_min..max で線形、preview_bits の深度。util/panel.py full_labels）。--save_panel のとき。無い列（教師なし・参照なし）は詰める
+  <out_dir>/eid/<eid_slice>_{eid1024,pcdlike}.png       input=eidlike: --eid_slice（eid_dir からの相対パス。512 なら補間）を 1 回だけ通した 1024 入力と出力（uint16）
+  <out_dir>/ref/<pcd_slice>_{eidlike,pcdlike,pcd1024}.png  input=eid: --pcd_slice（eidlike1024_dir / pcd1024_dir からの相対パス）を 1 回だけ通した入力・出力・教師（uint16）
   <out_dir>/metrics.txt                       --teacher のとき。スライスごとの rmse / ssim / psnr と *_input、末尾に平均（rmse は mse の平均の √ = 学習の val と同じ）
   <out_dir>/infer.yaml                         解決済み設定（run_infer.py が書く）
 速度: Stage 1 と同じ。読み込み（512 なら補間も）は --read_workers 本のスレッドで先読み、--batch_slices 枚をまとめて 1 回の forward、PNG の書き込みは --write_workers 本で非同期。
@@ -53,7 +57,8 @@ def parse_args():
     req("--device", choices=DEVICES, help="cuda | cpu（machines.yaml の gpu_gen から。cuda が使えなければエラー）")
     req("--index_cache_dir", help="入力フォルダの列挙結果キャッシュ（<stage2_checkpoints_dir>/.case_index。学習と共通）")
     req("--pcd1024_dir", help="教師 PCD1024 の根（machines.yaml）。--teacher のときだけ読む")
-    req("--eid_dir", help="実 EID512 の根（machines.yaml の eid_dir）。--save_panel かつ --eid_slice のときだけ読む")
+    req("--eid_dir", help="実 EID512 の根（machines.yaml の eid_dir）。--save_panel かつ input=eidlike かつ --eid_slice のときだけ読む")
+    req("--eidlike1024_dir", help="EID-like1024 の根（machines.yaml）。--save_panel かつ input=eid かつ --pcd_slice のときだけ読む（参照の 1 列目）")
     # U-Net の構成（run の launch.yaml の mode。学習時と同じネットを組む）
     req("--arch")
     req("--base_ch", type=int)
@@ -72,12 +77,14 @@ def parse_args():
     req("--display_hu_max", type=int, help="表示用の線形範囲の上限 HU。--save_panel にだけ使う")
     req("--preview_bits", type=int, choices=(8, 16), help="パネルのビット深度。--save_panel にだけ使う")
     # 方式（configs/infer.yaml）
+    req("--input", choices=("eidlike", "eid"), help="入力の種類: eidlike（PCD 症例の EID-like）| eid（実 EID512）")
     req("--max_slices", type=int)
     req("--batch_slices", type=int, help="同時に U-Net に通すスライス数")
     p.add_argument("--teacher", action="store_true")
     p.add_argument("--save_input1024", action="store_true")
     p.add_argument("--save_panel", action="store_true")
-    req("--eid_slice", help="パネルの 4・5 列目に並べる実 EID（eid_dir からの相対パス）。空文字で無し")
+    req("--eid_slice", help="input=eidlike のとき、パネルの 4・5 列目に並べる実 EID（eid_dir からの相対パス）。空文字で無し")
+    req("--pcd_slice", help="input=eid のとき、パネルの 1〜3 列目に並べる参照 PCD 症例（eidlike1024_dir / pcd1024_dir からの相対パス）。空文字で無し")
     req("--read_workers", type=int, help="PNG の読み込み・デコード（と補間）を先読みするスレッド数（0 = 直列）")
     req("--write_workers", type=int, help="PNG の書き込みを非同期にするスレッド数（0 = 直列）")
     return p.parse_args()
@@ -152,7 +159,7 @@ def main():
     in_shape = first
     print(f"[infer] device={device} net={a.arch} base_ch {a.base_ch} n_pool {a.n_pool} final_act {a.final_act} residual {a.residual} weights={weight_path}")
     print(f"[infer] input={input_dir} ({idx.n_cases} cases, {idx.n_slices} slices, 推論 {len(paths)} 枚) size {first[0]}"
-          + (f" → x{a.scale} {a.interp} → {a.image_size}" if up else "（そのまま）") + f" teacher={a.teacher} batch_slices={a.batch_slices} -> {out_dir}")
+          + (f" → x{a.scale} {a.interp} → {a.image_size}" if up else "（そのまま）") + f" input={a.input} teacher={a.teacher} batch_slices={a.batch_slices} -> {out_dir}")
 
     teacher_of = {}
     if a.teacher:  # 先に全スライスの教師の存在を確認してから回す（途中で止まらないように。Stage 1 の DICOM 照合と同じ流儀）
@@ -176,22 +183,47 @@ def main():
         else (lambda x01: (np.clip(x01, 0, 1) * 255.0).round().astype(np.uint8))
     )
     bgr = lambda rgb: np.ascontiguousarray(rgb[..., ::-1])  # noqa: E731  cv2.imwrite は BGR
-    eid_cols, eid_info = [], None
-    if a.save_panel and a.eid_slice:  # 4・5 列目: 実 EID を 1 回だけ通し、全スライスのパネルに同じものを並べる（学習の固定パネルの右 2 列と同じ）
-        e_path = Path(a.eid_dir) / a.eid_slice
-        e16 = read_stored(e_path)
-        if e16.shape == (small, small):
-            e16 = upsample(e16, a.scale, a.interp)
-        elif e16.shape != (a.image_size, a.image_size):
-            raise ValueError(f"--eid_slice の大きさ {e16.shape} が {a.image_size} でも {small} でもありません: {e_path}")
+    def load_1024(path, what):
+        """参照スライスを読む。512 なら run の方式で補間、1024 ならそのまま。戻り値 (stored 1024, 補間したか)。"""
+        s = read_stored(path)
+        if s.shape == (small, small):
+            return upsample(s, a.scale, a.interp), True
+        if s.shape != (a.image_size, a.image_size):
+            raise ValueError(f"{what} の大きさ {s.shape} が {a.image_size} でも {small} でもありません: {path}")
+        return s, False
+
+    def forward16(stored):
         with torch.inference_mode():
-            e_out16 = denormalize(forward(torch.from_numpy(normalize(e16, *hu))[None, None].to(device))[0, 0].cpu().numpy(), *hu)
+            return denormalize(forward(torch.from_numpy(normalize(stored, *hu))[None, None].to(device))[0, 0].cpu().numpy(), *hu)
+
+    # パネルの相方（学習の固定パネルと同じ 5 列にする。1 回だけ通して全スライスに同じものを並べる）
+    ref_right, eid_info = [], None      # input=eidlike: 4・5 列目 = --eid_slice の実 EID（出力 | 入力）
+    ref_left, ref_stem = [], None       # input=eid    : 1〜3 列目 = --pcd_slice の参照 PCD 症例（EID-like1024 | 出力 | 教師）
+    weight_name = Path(a.weight_dir).name
+    if a.save_panel and a.input == "eidlike" and a.eid_slice:
+        e_path = Path(a.eid_dir) / a.eid_slice
+        e16, e_up = load_1024(e_path, "--eid_slice")
+        e_out16 = forward16(e16)
         write_png(out_dir / "eid" / f"{e_path.stem}_eid1024.png", e16)
         write_png(out_dir / "eid" / f"{e_path.stem}_pcdlike.png", e_out16)
-        eid_info = (e_path.stem, a.scale, a.interp)
-        eid_cols = [lin01(e_out16), lin01(e16)]
-        print(f"[infer] panel: 実 EID {e_path}（{a.scale}x {a.interp}）→ 4・5 列目、eid/ に 16bit")
-    panel_labels = full_labels(Path(a.weight_dir).name, None, a.teacher, eid_info, input_name=input_dir.name, upsample=(a.scale, a.interp) if up else None)
+        eid_info = (e_path.stem, a.scale if e_up else None, a.interp if e_up else None)
+        ref_right = [lin01(e_out16), lin01(e16)]
+        print(f"[infer] panel: 4・5 列目 = 実 EID {e_path}" + (f"（x{a.scale} {a.interp}）" if e_up else "") + " → eid/ に 16bit")
+    if a.save_panel and a.input == "eid" and a.pcd_slice:
+        r_in_path, r_t_path = Path(a.eidlike1024_dir) / a.pcd_slice, Path(a.pcd1024_dir) / a.pcd_slice
+        r16, _ = load_1024(r_in_path, "--pcd_slice")
+        rt16 = read_stored(r_t_path)
+        if rt16.shape != r16.shape:
+            raise ValueError(f"--pcd_slice の教師の大きさが入力と違います: {rt16.shape} != {r16.shape}: {r_t_path}")
+        r_out16 = forward16(r16)
+        ref_stem = r_in_path.stem
+        write_png(out_dir / "ref" / f"{ref_stem}_eidlike.png", r16)
+        write_png(out_dir / "ref" / f"{ref_stem}_pcdlike.png", r_out16)
+        write_png(out_dir / "ref" / f"{ref_stem}_pcd1024.png", rt16)
+        ref_left = [lin01(r16), lin01(r_out16), lin01(rt16)]
+        print(f"[infer] panel: 1〜3 列目 = 参照 PCD 症例 {r_in_path}（教師 {r_t_path}）→ ref/ に 16bit")
+    # input=eidlike のラベルは全スライス共通。input=eid は 4・5 列目の名前がスライスごとに変わるのでループ内で作る
+    panel_labels = full_labels(weight_name, None, a.teacher, eid_info, upsample=(a.scale, a.interp) if up else None) if a.input == "eidlike" else None
 
     # --- パイプライン（Stage 1 と同じ）: 読み込み（+ 補間 + 教師）はスレッドで先読み → batch_slices 枚をまとめて forward → PNG 書き込みはスレッドで非同期。順序は保つ ---
     reader = ThreadPoolExecutor(max_workers=a.read_workers) if a.read_workers > 0 else None
@@ -284,8 +316,14 @@ def main():
                     row["rmse"], row["rmse_input"] = row["mse"] ** 0.5, row["mse_input"] ** 0.5
                     metric_rows.append((str(rel), row))
                 if a.save_panel:
-                    cols = [lin01(in16), lin01(y16)] + ([lin01(t16)] if t16 is not None else []) + eid_cols
-                    put(out_dir / "full_panel" / rel, bgr(quant(build_panel(cols, panel_labels))))
+                    if a.input == "eidlike":
+                        cols, labels = [lin01(in16), lin01(y16)] + ([lin01(t16)] if t16 is not None else []) + ref_right, panel_labels
+                    else:  # eid: [参照 EID-like1024 | 参照 PCD-like | 参照 PCD1024 | この EID → PCD-like | この EID]
+                        cols = ref_left + [lin01(y16), lin01(in16)]
+                        labels = full_labels(weight_name, ref_stem, True, (rel.stem, a.scale if up else None, a.interp if up else None))
+                        if not ref_left:
+                            labels = labels[3:]
+                    put(out_dir / "full_panel" / rel, bgr(quant(build_panel(cols, labels))))
                 bar.update(1)
         drain(0)  # 書き込みを全部待つ（失敗があればここで例外）
     finally:

@@ -106,17 +106,20 @@ MACHINE = {
 # 512 入力の補間方式は run の dataset_info.yaml（train.py が eidlike1024_dir/manifest.yaml から写したもの）から取る
 # ---------------------------------------------------------------------------
 INFER = {
+    "input":            Key(str,  "--input",          "入力の種類: eidlike（PCD 症例の EID-like。1024 か 512。パネルの 1〜3 列目 = 入力 / 出力 / 教師）| eid（実 EID512 = EID_v5。パネルの 4・5 列目 = 出力 / 入力。教師は無いので teacher は false）"),
     "max_slices":       Key(int,  "--max_slices",     "推論するスライス数の上限。0 で全部（1 枚だけ試すなら 1）"),
     "batch_slices":     Key(int,  "--batch_slices",   "同時に U-Net に通すスライス数（1024² × 128ch の活性化は 1 枚で数 GB。学習と GPU を共有する 3070 8GB は 1、96GB なら 4〜8）"),
     "teacher":          Key(bool, "--teacher",        "true で machines.yaml の pcd1024_dir から同じ <case>/<slice>.png を教師として読み、指標（rmse / ssim / psnr、学習の val と同じ）を metrics.txt に書き、パネルの 3 列目に並べる。全スライスに教師が無ければ開始前にエラー。実 EID など教師の無い入力は false"),
     "save_input1024":   Key(bool, "--save_input1024", "512 入力を補間したとき、その 1024 入力も full_input1024/ に 16bit で残すか（1024 入力のときは何もしない）"),
-    "save_panel":       Key(bool, "--save_panel",     "true で表示用パネル [入力1024 | PCD-like1024 (出力) | PCD1024 (教師、teacher=true のとき) | 実 EID → PCD-like1024 | 実 EID1024 (eid_slice のとき)] を full_panel/ に保存（学習の固定パネルと同じ並び・正規化表示。util/panel.py）"),
-    "eid_slice":        Key(str,  "--eid_slice",      "パネルの 4・5 列目に並べる実 EID のスライス（machines.yaml の eid_dir からの相対パス。train.yaml log.eid_slice と同じ形。512 なら run の方式で補間して 1 回だけ通し、全スライスのパネルに同じものを並べる）。空文字で無し。save_panel のときだけ読む"),
+    "save_panel":       Key(bool, "--save_panel",     "true で表示用パネル [EID-like1024 | PCD-like1024 | PCD1024 | 実 EID → PCD-like1024 | 実 EID1024]（学習の固定パネルと同じ 5 列・正規化表示。util/panel.py）を full_panel/ に保存。input=eidlike なら 1〜3 列目が入力（教師は teacher）で 4・5 列目は eid_slice、input=eid なら 4・5 列目が入力で 1〜3 列目は pcd_slice"),
+    "eid_slice":        Key(str,  "--eid_slice",      "input=eidlike のとき、パネルの 4・5 列目に並べる実 EID のスライス（machines.yaml の eid_dir からの相対パス。train.yaml log.eid_slice と同じ形。512 なら run の方式で補間して 1 回だけ通し、全スライスに同じものを並べる）。空文字で無し。save_panel のときだけ読む"),
+    "pcd_slice":        Key(str,  "--pcd_slice",      "input=eid のとき、パネルの 1〜3 列目に並べる参照の PCD 症例スライス（eidlike1024_dir と pcd1024_dir からの相対パス。train.yaml log.full_slice と同じ形。1 回だけ通し、全スライスに同じものを並べる）。空文字で無し。save_panel のときだけ読む"),
     "io.read_workers":  Key(int,  "--read_workers",   "PNG の読み込み・デコード（512 なら補間も）を先読みするスレッド数（0 = 直列）"),
     "io.write_workers": Key(int,  "--write_workers",  "PNG の書き込みを非同期にするスレッド数（0 = 直列）"),
 }
 
 INTERPS = ("nearest", "bilinear", "bicubic", "area", "lanczos")
+INFER_INPUTS = ("eidlike", "eid")
 BEST_METRICS = ("rmse", "ssim", "psnr")   # log.best_metric。rmse は小さいほど良い、ssim / psnr は大きいほど良い
 GPU_GENS = (0, 30, 40, 50)
 ARCHS = ("unet_ilumenate",)
@@ -317,6 +320,8 @@ def check_dataset_values(dataset, machine):
 
 def check_infer_values(infer, machine):
     P = []
+    if infer["input"] not in INFER_INPUTS: P.append(f"input は {INFER_INPUTS}")
+    if infer["input"] == "eid" and infer["teacher"]: P.append("input=eid（実 EID）に教師は無いので teacher は false にする（--teacher false）")
     if infer["max_slices"] < 0: P.append("max_slices ≥ 0（0 で全部）")
     if infer["batch_slices"] < 1: P.append("batch_slices ≥ 1")
     if infer["io.read_workers"] < 0 or infer["io.write_workers"] < 0: P.append("io.read_workers / write_workers ≥ 0（0 = 直列）")
