@@ -74,8 +74,12 @@ MODE = {
     "netG":           Key(str,  "--netG",           "wavelet（論文 Fig.3）| unet_128 | unet_256 | resnet_6blocks | resnet_9blocks（ablation）"),
     "netD":           Key(str,  "--netD",           "paper（論文 Fig.3、受容野 22）| basic（70×70 PatchGAN）| n_layers | pixel"),
     "final_norm_act": Key(bool, "--final_norm_act", "G 最終 conv に bnorm+LReLU を付ける（確定: false。ablation 用）"),
+    "residual":       Key(bool, "--residual",       "true で G を residual 化: G(z) = z + F(z)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変。false = 論文どおり G(z) を直接出力（段階 5-1、2026-09-11）"),
     "serial_batches": Key(bool, "--serial_batches", "true で sampler を index 決定的に（再現用）"),
 }
+# 導入前の run の launch.yaml / state.pth に無い mode のキー。無い = その機構なしで学習された重みなので、推論・crop・resume では false として扱う
+# （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の true で補うと旧 run の重みの意味が変わる。2026-09-11）
+LEGACY_FALSE_MODE_KEYS = ("residual",)
 
 # ---------------------------------------------------------------------------
 # configs/machines.yaml（リポジトリ直上、Stage 共通）— 選択したマシンのエントリに対して検証

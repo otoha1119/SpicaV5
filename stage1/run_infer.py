@@ -27,7 +27,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import INFER, MACHINE, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate  # noqa: E402
+from configs.schema import INFER, LEGACY_FALSE_MODE_KEYS, MACHINE, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate  # noqa: E402
 from util.run_paths import LAUNCH_FILE, find_run_dir, infer_output_dir, latest_launch  # noqa: E402
 
 # launch.yaml の train / mode セクション（平坦キー）→ inference_dir.py のフラグ
@@ -37,7 +37,7 @@ G_MODE_KEYS = {"netG": "--netG"}
 # 表示の設定は「現在の configs/train.yaml の log」から取る（run の launch.yaml ではない）。表示は重みに紐づく値ではないので、古い run でも今の見た目にする（2026-09-08）。
 # display_hu_min/max・preview_bits は --save_panel のパネル生成にだけ使う（run_crop.py と同じキー）
 DISPLAY_TRAIN_KEYS = {"log.display_hu_min": "--display_hu_min", "log.display_hu_max": "--display_hu_max", "log.preview_bits": "--preview_bits", "log.diff_range_hu": "--diff_range_hu"}
-G_MODE_BOOL_KEYS = {"final_norm_act": "--final_norm_act"}
+G_MODE_BOOL_KEYS = {"final_norm_act": "--final_norm_act", "residual": "--residual"}
 PATH_FLAGS = ("--weight_dir", "--input_dir", "--output_format", "--dicom_dir")  # sh の変数を --flag で上書きできる（start.sh の引数が最優先）
 OUTPUT_FORMATS = ("png", "dicom", "both")
 
@@ -85,7 +85,10 @@ def generator_argv(launch):
         cfg[k] = mode[k]
     for k, flag in G_MODE_BOOL_KEYS.items():
         if k not in mode:
-            raise ConfigError(f"launch.yaml の mode に {k} がありません（古い run?）")
+            if k not in LEGACY_FALSE_MODE_KEYS:
+                raise ConfigError(f"launch.yaml の mode に {k} がありません（古い run?）")
+            print(f"注意: run の launch の mode に {k} が無い（{k} 導入前の run）。{k}=false として G を組む")
+            mode[k] = False
         if mode[k]:
             argv.append(flag)
         cfg[k] = mode[k]

@@ -17,6 +17,21 @@ class Identity(nn.Module):
         return x
 
 
+class ResidualGenerator(nn.Module):
+    """[SpicaV5] Residual 化（段階 5-1、2026-09-11）: G(z) = z + F(z)。F は包んだ generator（線形出力）で、その生出力が残差 R。
+    損失は変えない（fidelity ‖G(z) − z‖² = ‖F(z)‖²）。入出力のチャネル数が同じときだけ使える。state_dict のキーには inner. が付く
+    （非 residual の重みを residual 構成に strict load すると明示的に落ちる）。mode.yaml の residual で切替、false なら包まない。"""
+
+    def __init__(self, inner, input_nc, output_nc):
+        super().__init__()
+        if input_nc != output_nc:
+            raise ValueError(f"residual は input_nc == output_nc が必要です: {input_nc} != {output_nc}")
+        self.inner = inner
+
+    def forward(self, x):
+        return x + self.inner(x)
+
+
 def get_norm_layer(norm_type="instance"):
     """Return a normalization layer
 
@@ -131,7 +146,7 @@ def init_net(net, init_type="normal", init_gain=0.02):
     return net
 
 
-def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, init_type="normal", init_gain=0.02, final_norm_act=False):
+def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, init_type="normal", init_gain=0.02, final_norm_act=False, residual=False):
     """Create a generator
 
     Parameters:
@@ -161,6 +176,8 @@ def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, in
         net = WaveletGenerator(input_nc, output_nc, ngf=ngf, final_norm_act=final_norm_act)
     else:
         raise NotImplementedError("Generator model name [%s] is not recognized" % netG)
+    if residual:  # [SpicaV5] 段階 5-1: G(z) = z + F(z)（mode.yaml residual）
+        net = ResidualGenerator(net, input_nc, output_nc)
     return net
 
 

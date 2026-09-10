@@ -40,6 +40,7 @@ def parse_args():
     # G の構成（run の launch.yaml から）
     req("--netG"); req("--ngf", type=int); req("--input_nc", type=int); req("--output_nc", type=int); req("--norm")
     p.add_argument("--final_norm_act", action="store_true")
+    p.add_argument("--residual", action="store_true")
     req("--hu_offset", type=int); req("--hu_min", type=int); req("--hu_max", type=int)
     # 表示（run の launch.yaml の log.*）
     req("--display_hu_min", type=int); req("--display_hu_max", type=int); req("--preview_bits", type=int, choices=(8, 16)); req("--diff_range_hu", type=int)
