@@ -206,9 +206,14 @@ Stage 1 が作った EID-like512 を **前処理で ×2 補間して 1024 のフ
 Stage 1 推論出力 <run>/infer/<重み>/<入力>/<時刻>/full/<case>/<slice>.png   （EID-like512）
    │  bash start2.sh dataset        ×2 補間（bicubic）→ 同じ <case>/<slice>.png + manifest.yaml
    ▼
-<DataSet>/EIDlike1024_v1/           学習入力 = machines.yaml の eidlike1024_dir（実 EID の推論用は EID_v5 から同じ道具で EID1024_v1 を作る）
+<DataSet>/EIDlike1024_v1/           学習入力 = machines.yaml の eidlike1024_dir（実 EID の推論は EID_v5 の 512 をそのまま bash start2.sh infer に渡せば同じ方式で補間される）
 <DataSet>/PCD1024_v1/               教師 = machines.yaml の pcd1024_dir（ユーザー作業で変換済み。512 と先頭から 1 対 1、3 症例は末尾の枚数が違うので min まで使う）
-   │  bash start2.sh                学習（未実装）
+   │  bash start2.sh                学習
+   ▼
+<stage2_checkpoints_dir>/<run>/     latest/ best/ weights/epoch_NNN/ …
+   │  bash start2.sh infer          推論（1024 または 512 の PNG フォルダ → PCD-like1024。教師があれば metrics.txt）
+   ▼
+<repo>/output/<run>_<重み>_<入力名>_<時刻>/full/<case>/<slice>.png
 ```
 
 | コマンド | 動き |
@@ -219,7 +224,7 @@ Stage 1 推論出力 <run>/infer/<重み>/<入力>/<時刻>/full/<case>/<slice>.
 | `bash start2.sh resume <run> [latest\|best\|<epoch>]` | 続きから学習（`net_G.pth` + `state.pth` = optimizer / RNG / 進捗を復元。**基準はその checkpoint の `state.pth` に入っている実効設定**。`--n_epochs` 等の上書き可。重みの形が実効設定と合わなければ launch を書く前に止める）。途中保存の `latest/` から再開するとその epoch を頭からやり直す（残り batch だけの厳密な再開ではない）ので、再現性を重視するなら `weights/epoch_NNN/` から |
 | `bash start2.sh best <run> <epoch>` | `weights/epoch_NNN/` を `best/` にコピーし `best.txt` に記録（**手動の上書き**）。通常は学習中に val の `log.best_metric`（`rmse` 最小 \| `ssim` / `psnr` 最大）が更新されるたびに `best/` が自動で書かれる（`state.pth` に記録が入り resume で引き継ぐ。TB `val/best_<metric>` / `val/best_epoch`、`loss_log.txt` に `[best]` 行）ので、目視で別の epoch にしたいときだけ使う（`stage2/mark_best.py`） |
 | `bash start2.sh tb` | Stage 2 の全 run を並べた TensorBoard（`stage2_tb_port`） |
-| `bash start2.sh infer` | 未実装（別フェーズ） |
+| `bash start2.sh [マシン名] infer [--flag ...]` | **推論**（2026-09-10）。`infer_stage2.sh` の `WEIGHT_DIR` / `INPUT_DIR`（`--weight_dir` / `--input_dir` で上書き）を `stage2/configs/infer.yaml`（`max_slices` / `batch_slices` / `teacher` / `save_input1024` / `save_panel` / `io.*`）の方式で。U-Net の構成と HU 正規化は run の `launch.yaml`、512 の補間方式は run の `dataset_info.yaml`（学習と同じ）。入力は 1 枚目の大きさで判定: **1024**（`EIDlike1024_v1` など）はそのまま、**512**（実 `EID_v5`、Stage 1 推論の `full/`）は `data/ct_io.upsample` で 1024 にしてから通す（混在はエラー）。`teacher: true` なら `pcd1024_dir` の同名スライスを教師に rmse / ssim / psnr（+ 入力そのままの参照値）を `metrics.txt` へ（PCD のテスト症例向け。全スライスに無ければ開始前にエラー。実 EID は `--teacher false`）。出力 `<repo>/output/<run>_<重み>_<入力名>_<時刻>/`: `full/`（PCD-like1024、16bit）、`full_input1024/`、`full_panel/`（[入力1024 \| PCD-like1024 \| 教師]）、`metrics.txt`、`infer.yaml`。1 枚だけは `--max_slices 1`。学習中でも打てる（exec だけ。`batch_slices` 1 で VRAM 数 GB） |
 
 - 値の規約は Stage 1 と同じ（uint16 1ch、stored = HU + 1400）。補間は float32 → 四捨五入 → clip。cv2.resize の half-pixel 規約は 512 / 1024 の再構成格子の対応と一致する（実ペアで NCC のシフト探索が (0, 0)。計画書 §2.3）
 - `manifest.yaml` に時刻・マシン・入出力・方式・症例ごとの枚数・上書き・隣の `infer.yaml`（Stage 1 の由来）を残す

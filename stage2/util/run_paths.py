@@ -22,6 +22,14 @@ checkpoint は「重みディレクトリ」単位で扱う（net_G.pth と stat
   output_images/preview_random/epoch_NNN_<slice>.png   ランダムスライスの 3 列パネル [EID-like1024 | PCD1024 | PCD-like1024] だけ（TB の images/full/random と同じ絵）
   tb/                         TensorBoard（scalar と images/full/fixed|random）
   tensorboard.log
+
+推論の出力は run の下ではなく **リポジトリ直下の output/**（Stage 1 と同じ根。.gitignore 済み、コンテナでは /workspace/output/。2026-09-10）:
+<repo>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/   bash start2.sh infer の出力（inference_dir.py）。実行ごとに別ディレクトリ
+    full/<case>/<slice>.png            PCD-like1024（uint16、stored = HU + 1400）
+    full_input1024/<case>/<slice>.png  512 入力を補間した 1024 入力（uint16）。512 入力 かつ infer.yaml の save_input1024 のとき
+    full_panel/<case>/<slice>.png      表示用パネル [入力1024 | PCD-like1024 | PCD1024（教師）]（util/panel.py infer_labels）。save_panel のとき
+    metrics.txt                         出力 vs 教師の rmse / ssim / psnr と入力そのままの参照値（teacher のとき）
+    infer.yaml                          解決済み設定（run_infer.py が書く）
 """
 
 import re
@@ -119,3 +127,23 @@ def find_run_dir(weight_dir):
         if (p / LAUNCH_FILE).is_file():
             return p
     return None
+
+
+# --- 推論の出力（Stage 1 の run_paths.py と同じ規約。根は <repo>/output/ で両 Stage 共用） ---
+OUTPUT_DIRNAME = "output"
+INFER_STAMP_FORMAT = "%Y_%m%d_%H%M%S"
+
+
+def repo_root():
+    """リポジトリ直下（このファイルは <repo>/stage2/util/run_paths.py）。コンテナでは /workspace。"""
+    return Path(__file__).resolve().parents[2]
+
+
+def output_root(root=None):
+    """推論の出力の根。省略時は <repo>/output/。scratch 実行のときだけ root で差し替える。"""
+    return Path(root) if root else repo_root() / OUTPUT_DIRNAME
+
+
+def infer_output_dir(run_dir, weight_dir, input_dir, now, root=None):
+    """推論の出力先: <repo>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<yyyy_mmdd_HHMMSS>/。名前に run・重み・入力・時刻を全部入れる（実行ごとに別）。"""
+    return output_root(root) / f"{Path(run_dir).name}_{Path(weight_dir).name}_{Path(input_dir).name}_{now.strftime(INFER_STAMP_FORMAT)}"

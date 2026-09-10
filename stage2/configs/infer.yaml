@@ -1,0 +1,15 @@
+# stage2/configs/infer.yaml — Stage 2 推論（bash start2.sh infer）の方式。唯一の正は configs/schema.py の INFER。既定値は無い。
+# 重みディレクトリ・入力フォルダは infer_stage2.sh の WEIGHT_DIR / INPUT_DIR（--weight_dir / --input_dir で上書き可）。デバイスは machines.yaml の gpu_gen（0 → cpu）。
+# U-Net の構成（mode）と HU 正規化（train.data.hu_*）は run の launch.yaml、512 入力の補間方式（scale / interp）は run の dataset_info.yaml から取る（学習と同じ）。
+# 入力の大きさは 1 枚目で判定: 1024（学習画像と同じ）ならそのまま、512（1024 / scale）なら補間してから通す。混在・他の大きさはエラー。
+# 出力は <repo>/output/<run>_<重み>_<入力名>_<実行時刻>/（Stage 1 と同じ根。レイアウトは util/run_paths.py）。
+
+max_slices: 0            # 0 で全スライス。1 枚だけ試すなら 1（または 1 枚だけ入れたフォルダを INPUT_DIR に）
+batch_slices: 1          # 同時に U-Net に通すスライス数。1024² × 128ch の活性化は 1 枚で数 GB なので、学習と GPU を共有する 3070 8GB では 1。96GB なら 4〜8
+teacher: true            # pcd1024_dir に同じ <case>/<slice>.png がある入力（PCD のテスト症例の EID-like）向け: 指標を metrics.txt に、パネルに教師列。実 EID（EID_v5）は教師が無いので --teacher false
+save_input1024: true     # 512 入力を補間したとき、その 1024 入力も full_input1024/ に残す（1024 入力なら何もしない）
+save_panel: false        # 表示用パネル [入力1024 | PCD-like1024 | 教師] を full_panel/ に書くか（学習の preview と同じ正規化表示）。確認したいときは bash start2.sh infer --save_panel true --max_slices 1
+
+io:                      # 読み・計算・書きを同時に動かす（Stage 1 と同じ。1024 の PNG は 2 MB なので読み書きが律速になりやすい）
+  read_workers: 4        # PNG の読み込み・デコード（512 なら補間も）を先読みするスレッド数（0 = 直列）
+  write_workers: 2       # PNG の書き込みを非同期にするスレッド数（0 = 直列）

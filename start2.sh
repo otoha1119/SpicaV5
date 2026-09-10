@@ -4,7 +4,7 @@
 #   Stage 2（EID-like1024 → PCD1024 の教師あり U-Net、ILUMENATE = Koons et al., Med Phys 2025 準拠）の発火点。
 #   Stage 1 の start.sh と同じ流儀・同じ Docker コンテナ（spicav5、docker/compose.*.yaml）を使う。Stage 1 の学習中に打ってもコンテナを作り直さない。
 #   OS 共通。mac / Linux はターミナル、Windows は Git Bash か WSL。リポジトリ直下（このファイルがある場所）でホストのシェルから実行する。
-#   コンテナ内では動かない（/.dockerenv があれば即エラー）。コンテナ内で使うのは dataset_stage2.sh の方。
+#   コンテナ内では動かない（/.dockerenv があれば即エラー）。コンテナ内で使うのは train_stage2.sh / dataset_stage2.sh / infer_stage2.sh の方。
 #
 # ■ 何をするか
 #   1. configs/machines.yaml からマシン定義（GPU 世代・データのパス）を読む（start.sh と同じ）
@@ -12,7 +12,7 @@
 #   3. サブコマンドに応じてコンテナ内のスクリプトを exec する
 #
 # ■ 引数の規則
-#   bash start2.sh [マシン名] [dataset|build|shell|down|tb] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
+#   bash start2.sh [マシン名] [dataset|infer|build|shell|down|tb] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
 #   ・--flag より前の単語を読む。順不同。dataset / build / shell / down / tb / resume / best / infer はサブコマンド、それ以外の単語は「マシン名」とみなし、
 #     sh 内の MACHINE より優先する。マシン名を 2 つ渡すとエラー。configs/machines.yaml に無い名前もエラー（候補を表示）。
 #   ・サブコマンド無し = 学習（train_stage2.sh → stage2/run_train.py → train.py）。設定は stage2/configs/train.yaml（数値・症例分割）と mode.yaml（方式）、
@@ -32,7 +32,12 @@
 #               出力先は container_data_root（DataSet のマウント）配下であること。既にあればエラー（上書きしない）。
 #   ・build   : イメージを（再）ビルドしてコンテナ起動・torch/cuda 確認まで。学習はしない（start.sh build と同じ）。
 #   ・shell / down : コンテナに入る / 停止・削除（start.sh と同じ。コンテナは Stage 1 と共用なので down は Stage 1 も止める）。
-#   ・infer : 未実装（別フェーズ）。
+#   ・infer : 推論（2026-09-10）。学習済みの重みで PNG フォルダを丸ごと PCD-like1024 に変換する。infer_stage2.sh → stage2/run_infer.py → inference_dir.py。
+#               重みディレクトリ・入力フォルダは infer_stage2.sh の WEIGHT_DIR / INPUT_DIR（--weight_dir / --input_dir で上書き可）、方式は stage2/configs/infer.yaml
+#               （max_slices / batch_slices / teacher / save_input1024 / save_panel / io.*。schema の INFER / MACHINE にあるフラグだけ上書き可）。
+#               入力は 1024（EID-like1024）でも 512（実 EID_v5、Stage 1 の推論出力 full/）でもよく、512 は run の dataset_info.yaml の方式（学習と同じ scale / interp）で 1024 にしてから通す。
+#               teacher=true なら pcd1024_dir の同名スライスを教師に rmse / ssim / psnr を metrics.txt へ（PCD のテスト症例向け。実 EID は --teacher false）。
+#               U-Net の構成は run の launch.yaml から。出力 <repo>/output/<run>_<重み>_<入力名>_<時刻>/（Stage 1 と同じ根）。学習中に同じコンテナで打ってよい（exec だけ。VRAM は取り合う）。
 #   ・コンテナが起動済みなら、どのアクションでも up を呼ばず exec だけ行う（Stage 1 の学習中でも安全）。build は起動済みなら拒否。止めるのは down だけ。
 #     compose の設定を変えたときは、中の処理が終わってから down → 起動し直す（起動済みのままだと反映されず、注意が出る）。
 #
@@ -49,13 +54,18 @@
 #   bash start2.sh dataset --input_dir /workspace/stage1/checkpoints/2026_0907_2222/infer/epoch_141/PCD512_v2/2026_0908_120000/full
 #   bash start2.sh dataset --input_dir /workspace/DataSet/EID_v5 --eidlike1024_dir /workspace/DataSet/EID1024_v1     # 実 EID（推論用）も同じ道具で 1024 にする（出力先を一時上書き）
 #   bash start2.sh dataset --interp bilinear      # 方式の上書き
-#   bash start2.sh PC1 build                      # イメージをビルド（本番機の初回。start.sh build と同じ）
+#   bash start2.sh infer                          # 推論。infer_stage2.sh の WEIGHT_DIR / INPUT_DIR、stage2/configs/infer.yaml の方式
+#   bash start2.sh infer --max_slices 1 --save_panel true                                   # 1 枚だけ試してパネルも出す
+#   bash start2.sh infer --weight_dir /workspace/stage2/checkpoints/2026_0909_1200/best --input_dir /workspace/DataSet/EIDlike1024_v1   # PCD のテスト症例（教師あり → metrics.txt）
+#   bash start2.sh infer --input_dir /workspace/DataSet/EID_v5 --teacher false            # 実 EID512（補間してから通す。教師なし）
+#   bash start2.sh PC1 build                     # イメージをビルド（本番機の初回。start.sh build と同じ）
 #   bash start2.sh shell                          # コンテナに入る（手動: bash dataset_stage2.sh [--flag ...]）
 #
 # ■ 設定ファイル（既定値は無い。無いキーはエラー）
 #   stage2/configs/train.yaml     学習パラメータ（optim / data / log。症例分割 train_cases / val_cases / test_cases もここ）
 #   stage2/configs/mode.yaml      方式（arch / base_ch / n_pool / init_type / loss / final_act / residual / serial_batches）
 #   stage2/configs/dataset.yaml   データ作成の方式（scale / interp / input_size）
+#   stage2/configs/infer.yaml     推論の方式（max_slices / batch_slices / teacher / save_input1024 / save_panel / io.*）
 #   stage2/configs/schema.py      Stage 2 の設定ファイルの唯一の正（必須キー・型・フラグ）
 #   configs/machines.yaml         マシン定義（Stage 共通。Stage 2 は gpu_gen / host_data_root / container_data_root / num_threads / pcd1024_dir / eidlike1024_dir / stage2_checkpoints_dir / stage2_tb_port を使う。
 #                                 tb_port は compose が Stage 1 のポートも公開するために読むだけ）
@@ -70,7 +80,7 @@ set -euo pipefail
 
 # --- ホスト専用。コンテナ内で叩かれたら docker が無いので即エラー ---
 if [ -f /.dockerenv ]; then
-  echo "[start2] start2.sh はホスト側で実行するスクリプトです（コンテナ内には docker がありません）。コンテナ内で使うのは bash train_stage2.sh / bash dataset_stage2.sh です" >&2
+  echo "[start2] start2.sh はホスト側で実行するスクリプトです（コンテナ内には docker がありません）。コンテナ内で使うのは bash train_stage2.sh / bash dataset_stage2.sh / bash infer_stage2.sh です" >&2
   exit 2
 fi
 
@@ -121,9 +131,6 @@ done
 if [ -n "$MACHINE_ARG" ]; then
   echo "[start2] マシン名をコマンド引数で上書き: $MACHINE -> $MACHINE_ARG"
   MACHINE="$MACHINE_ARG"
-fi
-if [ "$ACTION" = infer ]; then
-  echo "[start2] Stage 2 の infer は未実装です（別フェーズ）。今使えるのは: bash start2.sh [train] | resume | dataset | tb | build | shell | down" >&2; exit 2
 fi
 case "$ACTION" in
   build|shell|down|tb|best)
@@ -268,6 +275,7 @@ case "$ACTION" in
   tb)      start_tensorboard ;;
   shell)   exec_it spicav5 bash ;;
   dataset) exec_it spicav5 bash dataset_stage2.sh "$@" ;;
+  infer)   exec_it spicav5 bash infer_stage2.sh "$@" ;;
   best)    exec_it spicav5 python stage2/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
   train)
     tb_kill

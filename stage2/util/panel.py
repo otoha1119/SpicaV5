@@ -61,3 +61,13 @@ def full_labels(epoch, name=None, eid_name=None):
 def eid_labels(epoch, eid_name, scale, interp):
     """TB images/full/EID（実 EID テストだけの 2 列 [EID1024 | PCD-like1024]。ユーザー指示 2026-09-09）のラベル。"""
     return [f"{eid_name}  (real EID, x{scale} {interp})", f"PCD-like1024  (output)   epoch {int(epoch)}"]
+
+
+def infer_labels(weight_name, input_name, upsample=None, teacher=False):
+    """推論（inference_dir.py、2026-09-10）のパネル [入力1024 | PCD-like1024 (出力) | PCD1024 (教師)] のラベル。
+    input_name は入力フォルダ名、upsample は 512 を補間したとき (scale, interp)、teacher=True で 3 列目を付ける。"""
+    tail = f"  (input, x{upsample[0]} {upsample[1]})" if upsample else "  (input)"
+    labels = [f"{input_name}{tail}", f"PCD-like1024  (output)   {weight_name}"]
+    if teacher:
+        labels.append("PCD1024  (teacher)")
+    return labels

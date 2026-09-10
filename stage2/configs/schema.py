@@ -1,4 +1,4 @@
-"""stage2/configs/schema.py — Stage 2 の設定ファイル（dataset.yaml / train.yaml / mode.yaml）と、Stage 2 が読む machines.yaml のキーの唯一の正。
+"""stage2/configs/schema.py — Stage 2 の設定ファイル（dataset.yaml / train.yaml / mode.yaml / infer.yaml）と、Stage 2 が読む machines.yaml のキーの唯一の正。
 
 原則は Stage 1（stage1/configs/schema.py）と同じ: 既定値（フォールバック）は無い。ここに宣言したキーは**必ず**設定ファイルに存在しなければならず、
 未知のキー・型違いはエラー。sh からの上書き（--flag value）は schema にあるフラグだけ受け付け、実効値を manifest / launch.yaml に残す。
@@ -100,6 +100,21 @@ MACHINE = {
     "stage2_checkpoints_dir": Key(str, "--stage2_checkpoints_dir", "Stage 2 の run（yyyy_mmdd_HHMM）の保存先ルート。レイアウトは stage2/util/run_paths.py"),
 }
 
+# ---------------------------------------------------------------------------
+# stage2/configs/infer.yaml — 推論の方式（bash start2.sh infer → run_infer.py → inference_dir.py。フラグは inference_dir.py のもの）
+# 重みディレクトリ・入力フォルダは infer_stage2.sh の変数、デバイスは machines.yaml の gpu_gen（0 → cpu）。U-Net の構成と HU 正規化は run の launch.yaml、
+# 512 入力の補間方式は run の dataset_info.yaml（train.py が eidlike1024_dir/manifest.yaml から写したもの）から取る
+# ---------------------------------------------------------------------------
+INFER = {
+    "max_slices":       Key(int,  "--max_slices",     "推論するスライス数の上限。0 で全部（1 枚だけ試すなら 1）"),
+    "batch_slices":     Key(int,  "--batch_slices",   "同時に U-Net に通すスライス数（1024² × 128ch の活性化は 1 枚で数 GB。学習と GPU を共有する 3070 8GB は 1、96GB なら 4〜8）"),
+    "teacher":          Key(bool, "--teacher",        "true で machines.yaml の pcd1024_dir から同じ <case>/<slice>.png を教師として読み、指標（rmse / ssim / psnr、学習の val と同じ）を metrics.txt に書き、パネルの 3 列目に並べる。全スライスに教師が無ければ開始前にエラー。実 EID など教師の無い入力は false"),
+    "save_input1024":   Key(bool, "--save_input1024", "512 入力を補間したとき、その 1024 入力も full_input1024/ に 16bit で残すか（1024 入力のときは何もしない）"),
+    "save_panel":       Key(bool, "--save_panel",     "true で表示用パネル [入力1024 | PCD-like1024 (出力) | PCD1024 (教師、teacher=true のとき)] を full_panel/ に保存（学習の preview と同じ正規化表示。util/panel.py）"),
+    "io.read_workers":  Key(int,  "--read_workers",   "PNG の読み込み・デコード（512 なら補間も）を先読みするスレッド数（0 = 直列）"),
+    "io.write_workers": Key(int,  "--write_workers",  "PNG の書き込みを非同期にするスレッド数（0 = 直列）"),
+}
+
 INTERPS = ("nearest", "bilinear", "bicubic", "area", "lanczos")
 BEST_METRICS = ("rmse", "ssim", "psnr")   # log.best_metric。rmse は小さいほど良い、ssim / psnr は大きいほど良い
 GPU_GENS = (0, 30, 40, 50)
@@ -168,6 +183,21 @@ def validate(name, data, schema):
     if problems:
         raise ConfigError(f"[{name}] " + " / ".join(problems))
     return {k: _coerce(flat[k], schema[k].type) for k in schema}
+
+
+def to_argv(flat, schema):
+    """検証済みの平坦 dict を inference_dir.py の引数列にする（Stage 1 と同じ。bool は true のときだけフラグを付ける）。"""
+    argv = []
+    for k, key in schema.items():
+        if key.flag is None:
+            continue
+        v = flat[k]
+        if key.type is bool:
+            if v:
+                argv.append(key.flag)
+        else:
+            argv += [key.flag, str(v)]
+    return argv
 
 
 def validate_shared(name, data, schema):
@@ -282,6 +312,15 @@ def check_dataset_values(dataset, machine):
     if dataset["input_size"] < 1: P.append("input_size ≥ 1")
     _check_machine(machine, P)
     _problems_to_error("dataset values", P)
+
+
+def check_infer_values(infer, machine):
+    P = []
+    if infer["max_slices"] < 0: P.append("max_slices ≥ 0（0 で全部）")
+    if infer["batch_slices"] < 1: P.append("batch_slices ≥ 1")
+    if infer["io.read_workers"] < 0 or infer["io.write_workers"] < 0: P.append("io.read_workers / write_workers ≥ 0（0 = 直列）")
+    _check_machine(machine, P)
+    _problems_to_error("infer values", P)
 
 
 def check_train_values(train, mode, machine):
