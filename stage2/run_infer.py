@@ -7,7 +7,8 @@
      （学習入力と同じ関数 data/ct_io.upsample・同じ方式 = 学習中の実 EID テストと同じ結果）
   4. 表示設定（log.display_hu_min/max・preview_bits）は**現在の configs/train.yaml**（--train）から取る（表示は重みに紐づかない。Stage 1 と同じ）
   5. デバイスは machines.yaml の gpu_gen（0 → cpu、それ以外 → cuda）
-  6. sh からの上書き（INFER / MACHINE のフラグ、--weight_dir / --input_dir）を反映し、解決済み設定を
+  6. パネル（save_panel）の 4・5 列目に並べる実 EID（infer.yaml eid_slice、machines.yaml の eid_dir からの相対パス）は存在を確認する（空文字なら無し）
+  7. sh からの上書き（INFER / MACHINE のフラグ、--weight_dir / --input_dir）を反映し、解決済み設定を
      <repo>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/infer.yaml に保存してから inference_dir.py を exec する（実行ごとに別ディレクトリ）
 
 使い方（通常は ../infer_stage2.sh 経由）:
@@ -123,6 +124,8 @@ def main():
             raise ConfigError(f"入力フォルダがありません: {input_dir}（infer_stage2.sh の INPUT_DIR か --input_dir）")
         if infer["teacher"] and not Path(machine["pcd1024_dir"]).is_dir():
             raise ConfigError(f"teacher=true ですが machines.yaml の pcd1024_dir がありません: {machine['pcd1024_dir']}（実 EID など教師の無い入力は --teacher false）")
+        if infer["save_panel"] and infer["eid_slice"] and not (Path(machine["eid_dir"]) / infer["eid_slice"]).is_file():
+            raise ConfigError(f"infer.yaml の eid_slice がありません: {Path(machine['eid_dir']) / infer['eid_slice']}（machines.yaml の eid_dir からの相対パス。4・5 列目が不要なら --eid_slice \"\"）")
         device = "cpu" if machine["gpu_gen"] == 0 else "cuda"
         launch_path = latest_launch(run_dir)
         mode, hu = net_config(load_yaml(launch_path), launch_path)
@@ -145,7 +148,7 @@ def main():
         sys.exit(2)
     out_dir.mkdir(parents=True)
     argv = ["--weight_dir", str(weight_dir), "--input_dir", str(input_dir), "--out_dir", str(out_dir), "--device", device,
-            "--index_cache_dir", str(Path(machine["stage2_checkpoints_dir"]) / ".case_index"), "--pcd1024_dir", str(machine["pcd1024_dir"]),
+            "--index_cache_dir", str(Path(machine["stage2_checkpoints_dir"]) / ".case_index"), "--pcd1024_dir", str(machine["pcd1024_dir"]), "--eid_dir", str(machine["eid_dir"]),
             "--arch", mode["arch"], "--base_ch", str(mode["base_ch"]), "--n_pool", str(mode["n_pool"]), "--final_act", mode["final_act"]]
     if mode["residual"]:
         argv.append("--residual")

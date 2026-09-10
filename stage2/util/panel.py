@@ -1,8 +1,9 @@
-"""stage2/util/panel.py — 表示用パネル [EID-like1024 | PCD1024 | PCD-like1024] の組み立て。
+"""stage2/util/panel.py — 表示用パネル [EID-like1024 | PCD-like1024 | PCD1024 | 実 EID → PCD-like1024 | 実 EID1024] の組み立て。
 stage1/util/panel.py（2026-09-08 ユーザー確定の見た目: 白い余白、画像の周りに 1px の薄いグレー枠、各列の下に白地・黒文字のラベル帯、cv2 Hershey フォント）から
-同日に複製し、Stage 2 用に R 列とゲージを外した（並べるのは 3 列だけ。ユーザー指示 2026-09-08）。
+同日に複製し、Stage 2 用に R 列とゲージを外した。並び順は 2026-09-10 ユーザー確定: 入力 → 出力 → 教師 → 実 EID の出力 → 実 EID の入力（元の EID を右端に）。
+学習（util/monitor.py save_full_images: 固定 5 列、ランダム 3 列）と推論（inference_dir.py --save_panel: 教師・実 EID の有無で 2〜5 列）が同じ full_labels を使う。
 
-入出力はすべて RGB float32 [0,1]（呼び出し側が 8bit に量子化する）。使う所: util/monitor.py log_full_images（TB images/full/*）
+入出力はすべて RGB float32 [0,1]（呼び出し側が 8bit / 16bit に量子化する）。
 """
 
 import cv2
@@ -48,26 +49,24 @@ def build_panel(cols, labels):
     return np.concatenate([top, panel, top], axis=0)
 
 
-def full_labels(epoch, name=None, eid_name=None):
-    """フル画像パネルのラベル（並び順 EID-like1024 → PCD1024 → PCD-like1024 [→ 実 EID テスト]。ユーザー指示 2026-09-08/09）。
-    name はスライス名（ランダムのとき）、eid_name は実 EID テストスライス名（固定パネルの 4 列目。None なら 3 列）。"""
-    tail = f"   {name}" if name else ""
-    labels = [f"EID-like1024  (input){tail}", "PCD1024  (teacher)", f"PCD-like1024  (output)   epoch {int(epoch)}"]
-    if eid_name:
-        labels.append(f"{eid_name} -> PCD-like1024   (real EID test)")
-    return labels
-
-
-def eid_labels(epoch, eid_name, scale, interp):
-    """TB images/full/EID（実 EID テストだけの 2 列 [EID1024 | PCD-like1024]。ユーザー指示 2026-09-09）のラベル。"""
-    return [f"{eid_name}  (real EID, x{scale} {interp})", f"PCD-like1024  (output)   epoch {int(epoch)}"]
-
-
-def infer_labels(weight_name, input_name, upsample=None, teacher=False):
-    """推論（inference_dir.py、2026-09-10）のパネル [入力1024 | PCD-like1024 (出力) | PCD1024 (教師)] のラベル。
-    input_name は入力フォルダ名、upsample は 512 を補間したとき (scale, interp)、teacher=True で 3 列目を付ける。"""
-    tail = f"  (input, x{upsample[0]} {upsample[1]})" if upsample else "  (input)"
-    labels = [f"{input_name}{tail}", f"PCD-like1024  (output)   {weight_name}"]
+def full_labels(model_tag, name=None, teacher=True, eid=None, input_name="EID-like1024", upsample=None):
+    """フル画像パネルのラベル。並び順（2026-09-10 ユーザー確定）:
+      [入力 | PCD-like1024 (output) | PCD1024 (teacher) | <eid> -> PCD-like1024 | <eid> (real EID input)]
+    model_tag : "epoch 12"（学習）| 重みディレクトリ名 "best" / "epoch_030"（推論）
+    name      : 入力のスライス名（ランダムのとき、1 列目に添える）
+    teacher   : False で 3 列目（教師）を外す（推論で教師の無い入力）
+    eid       : (実 EID のスライス名, scale, interp) で 4・5 列目を付ける。None なら 3 列まで
+    input_name / upsample : 1 列目の表記（推論で実 EID512 を入力にしたとき "EID_v5 (input, x2 bicubic)" のように）"""
+    up = f", x{upsample[0]} {upsample[1]}" if upsample else ""
+    labels = [f"{input_name}  (input{up})" + (f"   {name}" if name else ""), f"PCD-like1024  (output)   {model_tag}"]
     if teacher:
         labels.append("PCD1024  (teacher)")
+    if eid:
+        eid_name, scale, interp = eid
+        labels += [f"{eid_name} -> PCD-like1024   (real EID)", f"{eid_name}  (real EID input, x{scale} {interp})"]
     return labels
+
+
+def eid_labels(model_tag, eid_name, scale, interp):
+    """TB images/full/EID（実 EID テストだけの 2 列 [EID1024 | PCD-like1024]。ユーザー指示 2026-09-09）のラベル。"""
+    return [f"{eid_name}  (real EID, x{scale} {interp})", f"PCD-like1024  (output)   {model_tag}"]

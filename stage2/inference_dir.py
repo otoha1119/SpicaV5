@@ -12,8 +12,10 @@ Stage 1 の inference_dir.py と同じ流儀。通常は run_infer.py（ホス�
 出力（out_dir = <repo>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/。入力からの相対パスをそのまま保つので <case>/<slice>.png 構造になる）
   <out_dir>/full/<case>/<slice>.png            PCD-like1024（uint16、stored = HU + hu_offset。学習データと同じ規約）
   <out_dir>/full_input1024/<case>/<slice>.png  512 を補間した 1024 入力（uint16）。--save_input1024 かつ 512 入力のとき
-  <out_dir>/full_panel/<case>/<slice>.png      表示用パネル [入力1024 | PCD-like1024 | PCD1024（教師）]（display_hu_min..max で線形、preview_bits の深度。util/panel.py）。--save_panel のとき
-  <out_dir>/metrics.txt                        --teacher のとき。スライスごとの rmse / ssim / psnr と *_input、末尾に平均（rmse は mse の平均の √ = 学習の val と同じ）
+  <out_dir>/full_panel/<case>/<slice>.png      表示用パネル [入力1024 | PCD-like1024 | PCD1024（教師、--teacher）| 実 EID → PCD-like1024 | 実 EID1024（--eid_slice）]
+                                               （学習の固定パネルと同じ並び。display_hu_min..max で線形、preview_bits の深度。util/panel.py full_labels）。--save_panel のとき
+  <out_dir>/eid/<eid_slice>_{eid1024,pcdlike}.png  --eid_slice（eid_dir からの相対パス。512 なら補間）を 1 回だけ通した 1024 入力と出力（uint16）。全スライスのパネルに同じものを並べる
+  <out_dir>/metrics.txt                       --teacher のとき。スライスごとの rmse / ssim / psnr と *_input、末尾に平均（rmse は mse の平均の √ = 学習の val と同じ）
   <out_dir>/infer.yaml                         解決済み設定（run_infer.py が書く）
 速度: Stage 1 と同じ。読み込み（512 なら補間も）は --read_workers 本のスレッドで先読み、--batch_slices 枚をまとめて 1 回の forward、PNG の書き込みは --write_workers 本で非同期。
 デバイスは --device cuda | cpu で明示（cuda 指定で使えなければエラー。cpu に落とさない）。
@@ -35,7 +37,7 @@ sys.path.insert(0, str(HERE))
 from data.ct_io import INTERP_FLAGS, CaseIndex, denormalize, normalize, read_stored, upsample, write_png  # noqa: E402
 from models.unet import build_net  # noqa: E402
 from util.metrics import mse, psnr, ssim  # noqa: E402
-from util.panel import build_panel, infer_labels  # noqa: E402
+from util.panel import build_panel, full_labels  # noqa: E402
 
 DEVICES = ("cuda", "cpu")
 METRIC_COLS = ("rmse", "ssim", "psnr", "rmse_input", "ssim_input", "psnr_input")
@@ -51,6 +53,7 @@ def parse_args():
     req("--device", choices=DEVICES, help="cuda | cpu（machines.yaml の gpu_gen から。cuda が使えなければエラー）")
     req("--index_cache_dir", help="入力フォルダの列挙結果キャッシュ（<stage2_checkpoints_dir>/.case_index。学習と共通）")
     req("--pcd1024_dir", help="教師 PCD1024 の根（machines.yaml）。--teacher のときだけ読む")
+    req("--eid_dir", help="実 EID512 の根（machines.yaml の eid_dir）。--save_panel かつ --eid_slice のときだけ読む")
     # U-Net の構成（run の launch.yaml の mode。学習時と同じネットを組む）
     req("--arch")
     req("--base_ch", type=int)
@@ -74,6 +77,7 @@ def parse_args():
     p.add_argument("--teacher", action="store_true")
     p.add_argument("--save_input1024", action="store_true")
     p.add_argument("--save_panel", action="store_true")
+    req("--eid_slice", help="パネルの 4・5 列目に並べる実 EID（eid_dir からの相対パス）。空文字で無し")
     req("--read_workers", type=int, help="PNG の読み込み・デコード（と補間）を先読みするスレッド数（0 = 直列）")
     req("--write_workers", type=int, help="PNG の書き込みを非同期にするスレッド数（0 = 直列）")
     return p.parse_args()
@@ -165,14 +169,29 @@ def main():
                                     + ", ".join(missing[:5]) + (" ..." if len(missing) > 5 else ""))
         print(f"[infer] teacher: {a.pcd1024_dir}（{len(teacher_of)} 枚すべて対応あり）→ metrics.txt")
 
-    # --save_panel: 表示用パネル [入力1024 | PCD-like1024 | 教師]（util/monitor.py の _lin01 / _rgb と同じ正規化表示）
-    panel_labels = infer_labels(Path(a.weight_dir).name, input_dir.name, (a.scale, a.interp) if up else None, a.teacher)
+    # --save_panel: 表示用パネル [入力1024 | PCD-like1024 | 教師 | 実 EID → PCD-like1024 | 実 EID1024]（学習の固定パネルと同じ並び。util/monitor.py の _lin01 / _rgb と同じ正規化表示）
     lin01 = lambda stored: np.repeat(np.clip((stored.astype(np.float32) - a.hu_offset - a.display_hu_min) / float(a.display_hu_max - a.display_hu_min), 0.0, 1.0)[..., None], 3, axis=2)  # noqa: E731
     quant = (  # noqa: E731
         (lambda x01: (np.clip(x01, 0, 1) * 65535.0).round().astype(np.uint16)) if a.preview_bits == 16
         else (lambda x01: (np.clip(x01, 0, 1) * 255.0).round().astype(np.uint8))
     )
     bgr = lambda rgb: np.ascontiguousarray(rgb[..., ::-1])  # noqa: E731  cv2.imwrite は BGR
+    eid_cols, eid_info = [], None
+    if a.save_panel and a.eid_slice:  # 4・5 列目: 実 EID を 1 回だけ通し、全スライスのパネルに同じものを並べる（学習の固定パネルの右 2 列と同じ）
+        e_path = Path(a.eid_dir) / a.eid_slice
+        e16 = read_stored(e_path)
+        if e16.shape == (small, small):
+            e16 = upsample(e16, a.scale, a.interp)
+        elif e16.shape != (a.image_size, a.image_size):
+            raise ValueError(f"--eid_slice の大きさ {e16.shape} が {a.image_size} でも {small} でもありません: {e_path}")
+        with torch.inference_mode():
+            e_out16 = denormalize(forward(torch.from_numpy(normalize(e16, *hu))[None, None].to(device))[0, 0].cpu().numpy(), *hu)
+        write_png(out_dir / "eid" / f"{e_path.stem}_eid1024.png", e16)
+        write_png(out_dir / "eid" / f"{e_path.stem}_pcdlike.png", e_out16)
+        eid_info = (e_path.stem, a.scale, a.interp)
+        eid_cols = [lin01(e_out16), lin01(e16)]
+        print(f"[infer] panel: 実 EID {e_path}（{a.scale}x {a.interp}）→ 4・5 列目、eid/ に 16bit")
+    panel_labels = full_labels(Path(a.weight_dir).name, None, a.teacher, eid_info, input_name=input_dir.name, upsample=(a.scale, a.interp) if up else None)
 
     # --- パイプライン（Stage 1 と同じ）: 読み込み（+ 補間 + 教師）はスレッドで先読み → batch_slices 枚をまとめて forward → PNG 書き込みはスレッドで非同期。順序は保つ ---
     reader = ThreadPoolExecutor(max_workers=a.read_workers) if a.read_workers > 0 else None
@@ -265,7 +284,7 @@ def main():
                     row["rmse"], row["rmse_input"] = row["mse"] ** 0.5, row["mse_input"] ** 0.5
                     metric_rows.append((str(rel), row))
                 if a.save_panel:
-                    cols = [lin01(in16), lin01(y16)] + ([lin01(t16)] if t16 is not None else [])
+                    cols = [lin01(in16), lin01(y16)] + ([lin01(t16)] if t16 is not None else []) + eid_cols
                     put(out_dir / "full_panel" / rel, bgr(quant(build_panel(cols, panel_labels))))
                 bar.update(1)
         drain(0)  # 書き込みを全部待つ（失敗があればここで例外）

@@ -8,7 +8,8 @@ max_slices: 0            # 0 で全スライス。1 枚だけ試すなら 1（�
 batch_slices: 1          # 同時に U-Net に通すスライス数。1024² × 128ch の活性化は 1 枚で数 GB なので、学習と GPU を共有する 3070 8GB では 1。96GB なら 4〜8
 teacher: true            # pcd1024_dir に同じ <case>/<slice>.png がある入力（PCD のテスト症例の EID-like）向け: 指標を metrics.txt に、パネルに教師列。実 EID（EID_v5）は教師が無いので --teacher false
 save_input1024: true     # 512 入力を補間したとき、その 1024 入力も full_input1024/ に残す（1024 入力なら何もしない）
-save_panel: false        # 表示用パネル [入力1024 | PCD-like1024 | 教師] を full_panel/ に書くか（学習の preview と同じ正規化表示）。確認したいときは bash start2.sh infer --save_panel true --max_slices 1
+save_panel: false        # 表示用パネル [入力1024 | PCD-like1024 | 教師 | 実 EID → PCD-like1024 | 実 EID1024] を full_panel/ に書くか（学習の固定パネルと同じ並び・正規化表示）。確認したいときは bash start2.sh infer --save_panel true --max_slices 1
+eid_slice: EID-049/EID-049-079.png   # パネルの 4・5 列目の実 EID（machines.yaml の eid_dir からの相対パス。学習の log.eid_slice と同じ 1 枚）。512 なら run の方式で補間して 1 回だけ通し、全スライスに同じものを並べる。空文字 "" で 4・5 列目なし。save_panel のときだけ読む
 
 io:                      # 読み・計算・書きを同時に動かす（Stage 1 と同じ。1024 の PNG は 2 MB なので読み書きが律速になりやすい）
   read_workers: 4        # PNG の読み込み・デコード（512 なら補間も）を先読みするスレッド数（0 = 直列）

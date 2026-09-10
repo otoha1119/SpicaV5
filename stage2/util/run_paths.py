@@ -18,8 +18,8 @@ checkpoint は「重みディレクトリ」単位で扱う（net_G.pth と stat
   output_images/preview_fixed_<slice>/           表示用（stored 0〜3500 を線形に、log.preview_bits の深度。HU は読めない）
       00_eidlike1024_<slice>.png, 01_pcd1024_<slice>.png, 02_eid1024_<eid_slice>.png   代表（入力 / 教師 / 実 EID 入力）。初回の checkpoint で 1 回だけ
       epoch_NNN_pcdlike.png, epoch_NNN_eid_pcdlike.png     epoch ごとの出力（固定 / 実 EID テスト）
-      epoch_NNN_panel.png                                  [EID-like1024 | PCD1024 | PCD-like1024 | 実 EID → PCD-like1024]（util/panel.py。TB の images/full/fixed と同じ絵）
-  output_images/preview_random/epoch_NNN_<slice>.png   ランダムスライスの 3 列パネル [EID-like1024 | PCD1024 | PCD-like1024] だけ（TB の images/full/random と同じ絵）
+      epoch_NNN_panel.png                                  [EID-like1024 | PCD-like1024 | PCD1024 | 実 EID → PCD-like1024 | 実 EID1024（元）] の 5 列（並びは 2026-09-10 ユーザー確定。util/panel.py。TB の images/full/fixed と同じ絵）
+  output_images/preview_random/epoch_NNN_<slice>.png   ランダムスライスの 3 列パネル [EID-like1024 | PCD-like1024 | PCD1024] だけ（TB の images/full/random と同じ絵）
   tb/                         TensorBoard（scalar と images/full/fixed|random）
   tensorboard.log
 
@@ -27,7 +27,8 @@ checkpoint は「重みディレクトリ」単位で扱う（net_G.pth と stat
 <repo>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/   bash start2.sh infer の出力（inference_dir.py）。実行ごとに別ディレクトリ
     full/<case>/<slice>.png            PCD-like1024（uint16、stored = HU + 1400）
     full_input1024/<case>/<slice>.png  512 入力を補間した 1024 入力（uint16）。512 入力 かつ infer.yaml の save_input1024 のとき
-    full_panel/<case>/<slice>.png      表示用パネル [入力1024 | PCD-like1024 | PCD1024（教師）]（util/panel.py infer_labels）。save_panel のとき
+    full_panel/<case>/<slice>.png      表示用パネル [入力1024 | PCD-like1024 | PCD1024（教師、teacher）| 実 EID → PCD-like1024 | 実 EID1024（infer.yaml eid_slice）]（学習の固定パネルと同じ並び。util/panel.py full_labels）。save_panel のとき
+    eid/<eid_slice>_{eid1024,pcdlike}.png   eid_slice の 1024 入力とその出力（uint16）。save_panel かつ eid_slice のとき
     metrics.txt                         出力 vs 教師の rmse / ssim / psnr と入力そのままの参照値（teacher のとき）
     infer.yaml                          解決済み設定（run_infer.py が書く）
 """

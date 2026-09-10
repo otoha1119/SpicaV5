@@ -14,9 +14,9 @@ Stage 1 の util/monitor.py に相当する。画像は学習中の 128 patch �
      val/rmse_input, val/ssim_input, val/psnr_input   参照線: 入力そのまま vs 教師（何もしない場合）。出力がこれを超えなければ学習の意味が無い
      images/current                 image_freq step ごと: いま学習中のバッチ先頭 n_images 枚の 128 patch。各行 [EID-like1024 (input) | PCD-like1024 (output) | PCD1024 (teacher)]
      images/fixed                   同じ間隔: 固定スライス（log.full_slice）から patch_seed で決めた位置の n_images 枚（同じ patch で推移を追う。eval で通す）
-     images/full/fixed              epoch 末（save_epoch_freq ごと）: 固定スライス（train.yaml log.full_slice、PCD-002-236）の 4 列パネル
-                                    [EID-like1024 (input) | PCD1024 (teacher) | PCD-like1024 (output) | 実 EID（log.eid_slice）→ PCD-like1024]（util/panel.py。8bit、HU を display_hu_min..max で線形）
-     images/full/random（複数なら random0, random1, ...）  epoch ごとに別のランダムスライス（val だけ。ラベルに名前）の 3 列パネル
+     images/full/fixed              epoch 末（save_epoch_freq ごと）: 固定スライス（train.yaml log.full_slice、PCD-002-236）の 5 列パネル（並びは 2026-09-10 ユーザー確定）
+                                    [EID-like1024 (input) | PCD-like1024 (output) | PCD1024 (teacher) | 実 EID（log.eid_slice）→ PCD-like1024 | 実 EID1024（元の EID）]（util/panel.py。8bit、HU を display_hu_min..max で線形）
+     images/full/random（複数なら random0, random1, ...）  epoch ごとに別のランダムスライス（val だけ。ラベルに名前）の 3 列パネル [入力 | 出力 | 教師]
      images/full/EID                epoch 末: 実 EID テスト（log.eid_slice）だけの 2 列 [EID1024（512 を補間）| PCD-like1024（出力）]（ユーザー指示 2026-09-09）
      ※ images/full/* は log.tb_full_size（512）に縮小して出す（1024 は TB で拡大が効かない）。ディスクの preview_*/ と epoch_NNN/ は 1024 のまま
   ディスク（Stage 1 と同じ）: <run>/output_images/epoch_NNN/<slice>_{eidlike,pcd1024,pcdlike}.png, <eid_slice>_{eid1024,pcdlike}.png（生 uint16、stored = HU + 1400）
@@ -178,13 +178,15 @@ class TrainMonitor:
     def save_full_images(self, model, dataset, full, epoch, total_iters):
         """epoch 末（save_epoch_freq ごと）: 固定 1 組 + ランダム n 組（PairDataset.full_slices）と実 EID テスト（log.eid_slice）をフル 1024 で通し、
           output_images/epoch_NNN/  生 uint16（<slice>_{eidlike,pcd1024,pcdlike}.png、<eid>_{eid1024,pcdlike}.png）
-          preview_fixed_<slice>/    代表 00_/01_/02_（初回だけ）、epoch_NNN_pcdlike.png、epoch_NNN_eid_pcdlike.png、epoch_NNN_panel.png（4 列）
+          preview_fixed_<slice>/    代表 00_/01_/02_（初回だけ）、epoch_NNN_pcdlike.png、epoch_NNN_eid_pcdlike.png、epoch_NNN_panel.png（5 列）
           preview_random/           epoch_NNN_<slice>.png（3 列パネル）
-        を書き、TB にも images/full/fixed（4 列）と images/full/random（3 列）を 8bit で出す。タグは固定なので TB のスライダーで epoch を追える。"""
+        を書き、TB にも images/full/fixed（5 列）と images/full/random（3 列）を 8bit で出す。タグは固定なので TB のスライダーで epoch を追える。"""
         out_dir = epoch_images_dir(self.run_dir, epoch)
         out_dir.mkdir(parents=True, exist_ok=True)
         ep = out_dir.name  # epoch_NNN
-        # 実 EID テスト（固定パネルの 4 列目）
+        model_tag = f"epoch {int(epoch)}"
+        scale, interp = dataset.upsample_cfg
+        # 実 EID テスト（固定パネルの 4・5 列目 = 出力と元の EID）
         x_e = dataset.load_eid_full()
         e_in, e_out = self._stored(x_e), self._stored(model.predict(x_e))
         eid_stem = Path(dataset.eid_path).stem
@@ -198,10 +200,10 @@ class TrainMonitor:
             write_png(out_dir / f"{stem}_eidlike.png", a)
             write_png(out_dir / f"{stem}_pcd1024.png", b)
             write_png(out_dir / f"{stem}_pcdlike.png", y)
-            cols = [self._lin01(a), self._lin01(b), self._lin01(y)]
+            cols = [self._lin01(a), self._lin01(y), self._lin01(b)]  # 入力 | 出力 | 教師（並びは 2026-09-10 ユーザー確定）
             if kind == "fixed":
-                cols.append(self._lin01(e_out))
-                labels = full_labels(epoch, None, eid_stem)
+                cols += [self._lin01(e_out), self._lin01(e_in)]  # + 実 EID → PCD-like1024 | 実 EID1024（元）
+                labels = full_labels(model_tag, None, True, (eid_stem, scale, interp))
                 panel01 = build_panel(cols, labels)
                 tag = "fixed"
                 d = preview_dir(self.run_dir, f"fixed_{stem}")
@@ -213,13 +215,12 @@ class TrainMonitor:
                 write_png(d / f"{ep}_eid_pcdlike.png", self._gray(e_out))
                 write_png(d / f"{ep}_panel.png", self._rgb(panel01))
             else:
-                labels = full_labels(epoch, name)
+                labels = full_labels(model_tag, name)
                 panel01 = build_panel(cols, labels)
                 tag = "random" if n_rand == 1 else f"random{i - 1}"
                 write_png(preview_dir(self.run_dir, "random") / f"{ep}_{stem}.png", self._rgb(panel01))
             self.tb.add_image(f"images/full/{tag}", to_u8(build_panel([self._tb(c) for c in cols], labels)), total_iters, dataformats="HWC")  # TB は縮小版
-        scale, interp = dataset.upsample_cfg
-        eid_panel = build_panel([self._tb(self._lin01(e_in)), self._tb(self._lin01(e_out))], eid_labels(epoch, eid_stem, scale, interp))
+        eid_panel = build_panel([self._tb(self._lin01(e_in)), self._tb(self._lin01(e_out))], eid_labels(model_tag, eid_stem, scale, interp))
         self.tb.add_image("images/full/EID", to_u8(eid_panel), total_iters, dataformats="HWC")  # 実 EID テストだけの 2 列（縮小版）
         model.net.train()
         self.write(f"saved full-size images ({len(full['pairs'])} slices + real EID test) -> {out_dir}")

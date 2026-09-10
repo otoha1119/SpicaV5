@@ -110,7 +110,8 @@ INFER = {
     "batch_slices":     Key(int,  "--batch_slices",   "同時に U-Net に通すスライス数（1024² × 128ch の活性化は 1 枚で数 GB。学習と GPU を共有する 3070 8GB は 1、96GB なら 4〜8）"),
     "teacher":          Key(bool, "--teacher",        "true で machines.yaml の pcd1024_dir から同じ <case>/<slice>.png を教師として読み、指標（rmse / ssim / psnr、学習の val と同じ）を metrics.txt に書き、パネルの 3 列目に並べる。全スライスに教師が無ければ開始前にエラー。実 EID など教師の無い入力は false"),
     "save_input1024":   Key(bool, "--save_input1024", "512 入力を補間したとき、その 1024 入力も full_input1024/ に 16bit で残すか（1024 入力のときは何もしない）"),
-    "save_panel":       Key(bool, "--save_panel",     "true で表示用パネル [入力1024 | PCD-like1024 (出力) | PCD1024 (教師、teacher=true のとき)] を full_panel/ に保存（学習の preview と同じ正規化表示。util/panel.py）"),
+    "save_panel":       Key(bool, "--save_panel",     "true で表示用パネル [入力1024 | PCD-like1024 (出力) | PCD1024 (教師、teacher=true のとき) | 実 EID → PCD-like1024 | 実 EID1024 (eid_slice のとき)] を full_panel/ に保存（学習の固定パネルと同じ並び・正規化表示。util/panel.py）"),
+    "eid_slice":        Key(str,  "--eid_slice",      "パネルの 4・5 列目に並べる実 EID のスライス（machines.yaml の eid_dir からの相対パス。train.yaml log.eid_slice と同じ形。512 なら run の方式で補間して 1 回だけ通し、全スライスのパネルに同じものを並べる）。空文字で無し。save_panel のときだけ読む"),
     "io.read_workers":  Key(int,  "--read_workers",   "PNG の読み込み・デコード（512 なら補間も）を先読みするスレッド数（0 = 直列）"),
     "io.write_workers": Key(int,  "--write_workers",  "PNG の書き込みを非同期にするスレッド数（0 = 直列）"),
 }
