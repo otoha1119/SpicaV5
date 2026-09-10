@@ -14,6 +14,7 @@
 # ===== 学習・推論生成物 =====
 /stage1/checkpoints/
 /stage1/results/
+/stage2/checkpoints/
 /runs/
 /output/
 *.pth
@@ -36,6 +37,9 @@ venv/
 .claude/settings.local.json
 .claude/
 docs
+weight/
+outputs
 
 # TensorBoard のサーバログ（start.sh がコンテナ内 /workspace に書く）
 /tb_server.log
+/tb_server_stage2.log

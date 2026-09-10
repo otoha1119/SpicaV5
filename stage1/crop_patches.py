@@ -9,7 +9,7 @@
     2_EID-like_<pcd>_x<X>_y<Y>.png  G(z) の同じ場所（グレー 1ch）
     3_PCD_<pcd>_x<X>_y<Y>.png       入力 z（グレー 1ch）
     4_R_color_<pcd>_x<X>_y<Y>.png   R = G(z) − z のカラー（RGB）
-    panel.png                       [EID | EID-like | PCD | R + ゲージ] を panel_scale 倍（最近傍）に拡大して並べ、各列の下にラベル（util/panel.py）
+    panel.png                       [EID | EID-like | PCD | R + ゲージ] を panel_scale 倍（最近傍）に拡大して並べ、各列の下にラベル（util/panel.py。余白・ラベル・ゲージは列の高さに比例し、preview_*/ の 512 パネルと相似形）
 BN は eval。学習中に走らせてよい（device cpu なら VRAM を使わない。出力は学習の書き込み先と別）。
 """
 

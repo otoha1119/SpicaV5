@@ -1,0 +1,21 @@
+# stage2/configs/infer.yaml — Stage 2 推論（bash start2.sh infer）の方式。唯一の正は configs/schema.py の INFER。既定値は無い。
+# 重みディレクトリ・入力フォルダは infer_stage2.sh の WEIGHT_DIR / INPUT_DIR（--weight_dir / --input_dir で上書き可）。デバイスは machines.yaml の gpu_gen（0 → cpu）。
+# U-Net の構成（mode）と HU 正規化（train.data.hu_*）は run の launch.yaml、512 入力の補間方式（scale / interp）は run の dataset_info.yaml から取る（学習と同じ）。
+# 入力の大きさは 1 枚目で判定: 1024（学習画像と同じ）ならそのまま、512（1024 / scale）なら補間してから通す。混在・他の大きさはエラー。
+# 出力は <repo>/output/<run>_<重み>_<入力名>_<実行時刻>/（Stage 1 と同じ根。レイアウトは util/run_paths.py）。
+# パネル（save_panel）は学習の固定パネルと同じ 5 列 [EID-like1024 | PCD-like1024 | PCD1024 | 実 EID → PCD-like1024 | 実 EID1024]（2026-09-10 ユーザー確定）。
+#   input=eidlike: 1〜3 列目 = 入力 / 出力 / 教師（teacher）、4・5 列目 = eid_slice（参照の実 EID を 1 回だけ通す）
+#   input=eid    : 4・5 列目 = 出力 / 入力（実 EID そのもの）、1〜3 列目 = pcd_slice（参照の PCD 症例を 1 回だけ通す）
+
+input: eidlike           # eidlike（PCD 症例の EID-like1024 / EID-like512。教師があれば teacher: true）| eid（実 EID512 = EID_v5。--input eid --teacher false）
+max_slices: 0            # 0 で全スライス。1 枚だけ試すなら 1（または 1 枚だけ入れたフォルダを INPUT_DIR に）
+batch_slices: 1          # 同時に U-Net に通すスライス数。1024² × 128ch の活性化は 1 枚で数 GB なので、学習と GPU を共有する 3070 8GB では 1。96GB なら 4〜8
+teacher: true            # pcd1024_dir に同じ <case>/<slice>.png がある入力（PCD のテスト症例の EID-like）向け: 指標を metrics.txt に、パネルに教師列。実 EID（EID_v5）は教師が無いので --teacher false
+save_input1024: true     # 512 入力を補間したとき、その 1024 入力も full_input1024/ に残す（1024 入力なら何もしない）
+save_panel: false        # 表示用パネル（上の 5 列）を full_panel/ に書くか。確認したいときは bash start2.sh infer --save_panel true --max_slices 1
+eid_slice: EID-049/EID-049-079.png   # input=eidlike のとき 4・5 列目の実 EID（machines.yaml の eid_dir からの相対パス。学習の log.eid_slice と同じ 1 枚）。512 なら run の方式で補間して 1 回だけ通す。空文字 "" で 4・5 列目なし。save_panel のときだけ読む
+pcd_slice: PCD-002/PCD-002-236.png   # input=eid のとき 1〜3 列目の参照 PCD 症例（eidlike1024_dir と pcd1024_dir からの相対パス。学習の log.full_slice と同じ 1 枚）。1 回だけ通す。空文字 "" で 1〜3 列目なし。save_panel のときだけ読む
+
+io:                      # 読み・計算・書きを同時に動かす（Stage 1 と同じ。1024 の PNG は 2 MB なので読み書きが律速になりやすい）
+  read_workers: 4        # PNG の読み込み・デコード（512 なら補間も）を先読みするスレッド数（0 = 直列）
+  write_workers: 2       # PNG の書き込みを非同期にするスレッド数（0 = 直列）

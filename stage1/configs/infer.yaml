@@ -3,16 +3,15 @@
 # G の構成は run の launch.yaml から取る（学習時と同じ G を組む）。出力は <repo>/output/<run>_<重み>_<入力名>_<実行時刻>/（レイアウトは util/run_paths.py。2026-09-09 に run の下から移動）。
 # 設計: docs/plans/20260907_inference-plan.md
 
-mode: full              # full（512 を一発。Stage 2 用のデータ生成はこれ）| patch（下の patch.* で切って重なり平均）| both（両方保存 + |full − patch| を diff_stats.txt に。1 枚 2,401 回 G を呼ぶので遅い）
+mode: patch              # full（512 を一発。Stage 2 用のデータ生成はこれ）| patch（下の patch.* で切って重なり平均）| both（両方保存 + |full − patch| を diff_stats.txt に。1 枚 2,401 回 G を呼ぶので遅い）
 
-full:
-  batch_size: 8         # 512 をまとめて G に通す枚数（BN は eval なので 1 枚ずつと同じ結果。VRAM に合わせる。3070 8GB で 8）。GPU 向け。CPU（gpu_gen 0）では 1 が最速（mac 実測: 1 → 0.22 s/枚、8 → 0.86 s/枚）
+batch_slices: 1      # 同時に G に通すスライス数。full はそのまま 1 回の forward、patch は全スライスの patch（8 枚なら 19,208 個）を束ねて patch.batch_size ずつ。BN は eval なので 1 枚ずつと同じ結果。GPU 向け（3070 8GB で 8、96GB なら 32 でも）。CPU（gpu_gen 0）では 1 が最速（mac 実測: 1 → 0.22 s/枚、8 → 0.86 s/枚）
 
 patch:
   size: 128             # 論文の学習 patch と同じ。8 の倍数
   stride: 8             # 論文の学習 grid と同じ（512 で 2,401 patch/枚）。端まで均等配置で被覆する
   blend: uniform        # uniform（重なりの単純平均）| hann（2D Hann 重みで境界を滑らかに）
-  batch_size: 64        # patch を G に通す枚数（VRAM に合わせる）
+  batch_size: 1024    # patch を G に通す枚数（VRAM に合わせる。3070 8GB で 64、96GB なら 512〜1024 でよい。2026-09-09 の高速化前は上げても速くならなかった）
 
 max_slices: 0           # 0 で全スライス。動作確認は 4 など
 save_residual: false    # 残差 R（0 HU = 32768）と表示用カラーも書くか。Stage 2 用のデータ生成では不要（既定 false）。確認したいときは bash start.sh infer --save_residual true

@@ -22,7 +22,8 @@
 #     （WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR）に書く（同名の --flag で上書き可）。
 #   ・crop はパッチ切り出し（512 のフル推論 → 左上 (x, y) から patch 四方を切り出し、EID の代表パッチと並べる。スライド用）。ケース・patch・拡大率・デバイスは
 #     stage1/configs/crop.yaml、重みディレクトリは crop_stage1.sh の WEIGHT_DIR（--weight_dir で上書き可）。出力 <run>/infer/<重み>/crop/<実行時刻>/。
-#   ・shell / infer / crop / best / tb は、コンテナが起動済みなら up を呼ばず exec だけ行う（学習中に打ってもコンテナを作り直さない）。
+#   ・コンテナ spicav5 が起動済みなら、どのアクションでも up を呼ばず exec だけ行う（学習中に打ってもコンテナを作り直さない。2026-09-08 改訂）。build は起動済みなら拒否。
+#     止めるのは down だけ。compose の設定（ポート・マウント）を変えたときは、中の処理が終わってから down → 起動し直す（起動済みのままだと変更が反映されず、注意が出る）。
 #   ・マシン名を 2 つ渡すとエラー。configs/machines.yaml に無い名前もエラー（候補を表示）。
 #   ・--flag 以降は上書き引数としてそのまま train_stage1.sh / infer_stage1.sh へ渡す（sh の引数が最優先）。
 #     受け付けるのは stage1/configs/schema.py にあるフラグだけ（学習は TRAIN / MODE / MACHINE、推論は INFER）。無いフラグはエラー。
@@ -91,6 +92,9 @@
 #     （port = machines.yaml の tb_port、ログ <run>/tensorboard.log）。前の run の TensorBoard は止める。start.sh は応答を待ってホストのブラウザで
 #     http://localhost:<tb_port> を開く。学習が終わっても TensorBoard は残る（次の学習か down で止まる）。
 #   ・全 run を並べて比較したいときは  bash start.sh tb （logdir = checkpoints_dir 全体）。ポートが塞がっていたら machines.yaml の tb_port を変える。
+#   ・Stage 2（start2.sh）の TensorBoard は machines.yaml の stage2_tb_port（別ポート）。compose は両方を公開するので start.sh も stage2_tb_port を読む。
+#     起動・停止は自分のポートのものだけを対象にする（同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない。2026-09-08）。
+#     ポート設定を変えても起動済みのコンテナには反映されない（up を呼ばないため）。中の処理が終わってから down → 起動し直す。
 #   ・ブラウザは mac = open、Windows Git Bash = cmd //c start、Linux = xdg-open、WSL = cmd.exe。開けなくても学習は続く。
 #   ・画像は images/current / images/fixed（8bit 表示。TB だけ）と images/full。
 #
@@ -98,7 +102,8 @@
 #   ・学習中は重み（net_G.pth / net_D.pth）に加えて state.pth（optimizer / RNG / epoch / iteration 数）を同じ重みディレクトリに保存する。
 #     保存タイミングは本家と同じ（save_latest_freq 枚ごとに latest/、save_epoch_freq epoch ごとに weights/epoch_NNN/）。
 #   ・tag は latest | best | <epoch>。best は bash start.sh best <run> <epoch> で手動指定（判定指標は未実装）。
-#   ・resume は run の launch.yaml に記録された起動時の設定を使う（今の yaml は無視。差があれば表示）。
+#   ・resume は**選んだ checkpoint の state.pth に入っている実効設定**（その重みを作った設定）を使う（今の yaml は無視。差があれば表示。2026-09-09 変更:
+#     失敗した起動の launch_resume_*.yaml を次の基準にしない。state.pth に設定が無い古い run だけ最新の launch を使う）。
 #     sh の --flag 上書きだけは末尾に付くので、n_epochs を延ばすなどに使える。
 #   ・途中保存（epoch 未完）の latest から再開すると、その epoch を頭からやり直す（ケース 1 はランダム抽選なので害はない）。
 #
@@ -136,11 +141,11 @@ case "$(uname -s)" in
     if command -v winpty >/dev/null 2>&1; then WINPTY="winpty"; else EXEC_TTY=(-T); fi ;;
 esac
 exec_it() {  # 対話 exec（学習 / 推論 / shell / best）。Windows では winpty か -T を付ける。引数は docker compose exec に渡すもの（-e ... サービス コマンド）
-  $WINPTY "${COMPOSE[@]}" exec ${EXEC_TTY[@]+"${EXEC_TTY[@]}"} "$@"
+  $WINPTY "${COMPOSE[@]}" exec ${EXEC_TTY[@]+"${EXEC_TTY[@]}"} -e SPICA_MACHINE="$MACHINE" "$@"  # 今回のマシン名を毎回渡す（コンテナ作成時の値に頼らない。2026-09-09）
 }
 
 # ===== ここだけマシンごとに書き換える =====
-MACHINE="PC1"          # configs/machines.yaml のエントリ名（PC1 / mac / ...）
+MACHINE="PC3"          # configs/machines.yaml のエントリ名（PC1 / mac / ...）
 # =========================================
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -189,17 +194,17 @@ done
 [ -n "$PY" ] || { echo "[start] python3 と pyyaml がホストに必要です (pip install pyyaml)" >&2; exit 1; }
 
 # --- machines.yaml から gpu_gen / host_data_root / container_data_root を取る（欠落はエラー） ---
-IFS=$'\t' read -r GPU_GEN HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT CHECKPOINTS_DIR < <("$PY" - "$MACHINES" "$MACHINE" <<'PYEOF'
+IFS=$'\t' read -r GPU_GEN HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT CHECKPOINTS_DIR TB_PORT_STAGE2 < <("$PY" - "$MACHINES" "$MACHINE" <<'PYEOF'
 import sys, yaml
 path, name = sys.argv[1], sys.argv[2]
 m = yaml.safe_load(open(path, encoding="utf-8"))
 if not isinstance(m, dict) or name not in m:
     sys.exit(f"[start] {path} にエントリ '{name}' がありません。候補: {list(m) if isinstance(m, dict) else '(不正な形式)'}  → start.sh の MACHINE かコマンド引数のマシン名を直してください")
 e = m[name]
-missing = [k for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "checkpoints_dir") if k not in e]
+missing = [k for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "checkpoints_dir", "stage2_tb_port") if k not in e]
 if missing:
     sys.exit(f"[start] machines.yaml の '{name}' にキーがありません: {missing}")
-print("\t".join(str(e[k]) for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "checkpoints_dir")))  # タブ区切り（パスの空白対応。F-24）
+print("\t".join(str(e[k]) for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "checkpoints_dir", "stage2_tb_port")))  # タブ区切り（パスの空白対応。F-24）。stage2_tb_port は compose が両ポートを公開するため
 PYEOF
 )
 
@@ -220,7 +225,7 @@ case "$GPU_GEN" in
   *) echo "[start] gpu_gen=$GPU_GEN は未対応 (30 / 40 / 50 / 0)" >&2; exit 1 ;;
 esac
 COMPOSE=("docker" "compose" "-f" "$ROOT/docker/compose.$GEN.yaml" "-p" "spicav5")
-export HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT SPICA_MACHINE="$MACHINE"
+export HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT TB_PORT_STAGE2 SPICA_MACHINE="$MACHINE"
 echo "[start] machine=$MACHINE gpu_gen=$GPU_GEN -> $GEN | mount $HOST_DATA_ROOT -> $CONTAINER_DATA_ROOT | action=$ACTION ${BUILD:+(rebuild)}${RESUME:+ resume=$RESUME tag=$RESUME_TAG}${BEST_RUN:+ run=$BEST_RUN epoch=$BEST_EPOCH}"
 
 if [ "$ACTION" = down ]; then
@@ -228,21 +233,45 @@ if [ "$ACTION" = down ]; then
   exit 0
 fi
 
-# 起動（up -d はイメージが無ければビルドする。build 指定時は --build で強制再ビルド）
-#   shell / infer / crop / best / tb は、コンテナが起動済みなら up を呼ばず exec だけ行う（学習中に打っても compose がコンテナを作り直して学習を殺さないように）
+# 起動の規則（2026-09-08 改訂。コンテナは Stage 1 / Stage 2 で共用なので、中で動いている処理を止めないことを最優先にする）
+#   ・コンテナ spicav5 が起動済みなら、**どのアクションでも up を呼ばず exec だけ行う**（学習 / 再開も同じ）。compose は設定（ポート・マウント・イメージ）が
+#     変わっていると up -d でコンテナを作り直し、中の学習を殺すため。設定を変えたときは、学習が終わってから bash start.sh down → 起動し直す
+#   ・build は起動済みなら拒否する（イメージの再ビルドはコンテナの作り直しを伴う）
+#   ・コンテナを止めるのは down だけ
 container_running() { [ "$(docker inspect -f '{{.State.Running}}' spicav5 2>/dev/null)" = "true" ]; }
-case "$ACTION" in
-  shell|infer|crop|best|tb)
-    if container_running; then
-      echo "[start] コンテナ spicav5 は起動済み（学習中なら触らない）。up は呼ばず exec だけ行う"
-    else
-      "${COMPOSE[@]}" up -d
-      "${COMPOSE[@]}" exec -T spicav5 python -c "import torch; print('[start] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())"
-    fi ;;
-  *)
-    "${COMPOSE[@]}" up -d $BUILD
-    "${COMPOSE[@]}" exec -T spicav5 python -c "import torch; print('[start] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())" ;;
-esac
+check_container() {  # 起動済みコンテナが今回の指定（マシン名・イメージ・データマウント）と一致するか。違えば止める（exec だけでは変えられない）
+  local env_machine image mount_src host_real
+  env_machine=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' spicav5 2>/dev/null | sed -n 's/^SPICA_MACHINE=//p' | head -1)
+  image=$(docker inspect -f '{{.Config.Image}}' spicav5 2>/dev/null)
+  mount_src=$(docker inspect -f "{{range .Mounts}}{{if eq .Destination \"$CONTAINER_DATA_ROOT\"}}{{.Source}}{{end}}{{end}}" spicav5 2>/dev/null)
+  if [ "$env_machine" != "$MACHINE" ]; then
+    echo "[start] 起動中のコンテナ spicav5 はマシン '$env_machine' で作られています（今回の指定は '$MACHINE'）。マウントも作成時のままなので、中の処理が終わってから bash start.sh down → 起動し直してください" >&2
+    exit 2
+  fi
+  if [ "$image" != "spicav5-$GEN" ]; then
+    echo "[start] 起動中のコンテナ spicav5 のイメージは '$image' です（今回の指定 gpu_gen=$GPU_GEN → spicav5-$GEN）。中の処理が終わってから bash start.sh down → 起動し直してください" >&2
+    exit 2
+  fi
+  host_real=$(cd "$HOST_DATA_ROOT" 2>/dev/null && pwd -P)
+  if [ -n "$mount_src" ] && [ "$mount_src" != "$HOST_DATA_ROOT" ] && [ "$mount_src" != "$host_real" ]; then
+    echo "[start] 注意: 起動中のコンテナのデータマウント元は '$mount_src' で、今回の host_data_root '$HOST_DATA_ROOT' と表記が違います（同じ場所なら問題ない。違う場所なら down → 起動し直す）"
+  fi
+}
+port_published() { [ -n "$(docker port spicav5 "$1" 2>/dev/null)" ]; }  # 起動中のコンテナがそのポートをホストに公開しているか
+if container_running; then
+  if [ "$ACTION" = build ]; then
+    echo "[start] コンテナ spicav5 は起動済みです（学習中かもしれません）。build はコンテナを作り直すので、中の処理が終わってから bash start.sh down → bash start.sh build の順で実行してください" >&2
+    exit 2
+  fi
+  check_container
+  echo "[start] コンテナ spicav5 は起動済み（中の処理は触らない。マシン名・イメージは今回の指定と一致）。up は呼ばず exec だけ行う"
+  if ! port_published "$TB_PORT"; then
+    echo "[start] 注意: 起動中のコンテナはポート $TB_PORT を公開していません（compose の設定を変えた後に down していない）。処理は動くが TensorBoard はホストから見えない。中の処理が終わってから bash start.sh down → 起動し直してください"
+  fi
+else
+  "${COMPOSE[@]}" up -d $BUILD
+  "${COMPOSE[@]}" exec -T spicav5 python -c "import torch; print('[start] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())"
+fi
 if [ "$ACTION" = build ]; then
   echo "[start] ビルド完了。コンテナ spicav5 は起動したまま（学習: bash start.sh / 推論: bash start.sh infer / 停止: bash start.sh down）"
   exit 0
@@ -258,16 +287,17 @@ open_browser() {  # ホスト OS ごとにブラウザを開く。開けなく�
     *) return 1 ;;
   esac
 }
-tb_running() {  # コンテナ内で TensorBoard が動いているか（pgrep が無いイメージでも動くよう /proc を走査）
-  "${COMPOSE[@]}" exec -T spicav5 bash -c 'for p in /proc/[0-9]*; do [ "$p" = "/proc/$$" ] && continue; tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "tensorboard --logdir" && exit 0; done; exit 1'
+tb_running_all() {  # コンテナ内で **このポート（tb_port）かつ全 run の logdir** の TensorBoard が動いているか（run 単位のものは別物として扱う。2026-09-09）
+  "${COMPOSE[@]}" exec -T spicav5 bash -c 'for p in /proc/[0-9]*; do [ "$p" = "/proc/$$" ] && continue; tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -qF -- "tensorboard --logdir '"$CHECKPOINTS_DIR"' --port '"$TB_PORT"' " && exit 0; done; exit 1'
 }
 start_tensorboard() {
   local url="http://localhost:$TB_PORT"
-  if ! tb_running; then
+  if ! tb_running_all; then
+    tb_kill  # run 単位の TensorBoard（学習が起動したもの）が同じポートにいれば止めて、全 run 表示に切り替える
     echo "[start] TensorBoard を起動: logdir=$CHECKPOINTS_DIR port=${TB_PORT}（ログ: /workspace/tb_server.log）"
     "${COMPOSE[@]}" exec -d spicav5 bash -c "tensorboard --logdir '$CHECKPOINTS_DIR' --port '$TB_PORT' --bind_all > /workspace/tb_server.log 2>&1"
   else
-    echo "[start] TensorBoard は起動済み ($url)"
+    echo "[start] TensorBoard（全 run）は起動済み ($url)"
   fi
   # 応答を待ってからブラウザを開く（最大 20 秒）。curl が無ければ 5 秒待つだけ
   if command -v curl >/dev/null 2>&1; then
@@ -279,8 +309,8 @@ start_tensorboard() {
   open_browser "$url" || echo "[start] ブラウザを自動で開けませんでした。$url を手で開いてください"
 }
 
-tb_kill() {  # コンテナ内の TensorBoard を止める（学習側が run 単位のものを起動し直す）
-  "${COMPOSE[@]}" exec -T spicav5 bash -c 'for p in /proc/[0-9]*; do [ "$p" = "/proc/$$" ] && continue; tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "tensorboard --logdir" && kill "${p#/proc/}" 2>/dev/null; done; exit 0'
+tb_kill() {  # コンテナ内の **このポート（tb_port）** の TensorBoard を止める（学習側が run 単位のものを起動し直す。Stage 2 のものは止めない）
+  "${COMPOSE[@]}" exec -T spicav5 bash -c 'for p in /proc/[0-9]*; do [ "$p" = "/proc/$$" ] && continue; tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "tensorboard --logdir.* --port '"$TB_PORT"' " && kill "${p#/proc/}" 2>/dev/null; done; exit 0'
 }
 open_when_ready() {  # バックグラウンド: 学習側（run_train.py）が起動する run 単位の TensorBoard の応答を待ってブラウザを開く（最大 120 秒）
   local url="http://localhost:$TB_PORT"

@@ -1,0 +1,163 @@
+timestamp: '2026-09-08T00:41:28+09:00'
+machine_name: PC2
+train:
+  optim.lr: 0.0002
+  optim.beta1: 0.5
+  optim.beta2: 0.999
+  optim.batch_size: 40
+  optim.n_epochs: 300
+  optim.n_epochs_decay: 0
+  optim.lr_policy: linear
+  optim.seed: 0
+  loss.lambda_fid: 10.0
+  network.ngf: 32
+  network.ndf: 32
+  network.norm: batch
+  network.init_type: normal
+  network.init_gain: 0.01
+  network.input_nc: 1
+  network.output_nc: 1
+  data.patch_size: 128
+  data.patch_stride: 1
+  data.patches_per_image: 40
+  data.patch_seed: 0
+  data.samples_per_epoch: 24000
+  data.hu_offset: 1400
+  data.hu_min: -1400
+  data.hu_max: 4096
+  log.print_freq: 100
+  log.image_freq: 1000
+  log.n_images: 4
+  log.full_slice: PCD-002/PCD-002-215.png
+  log.n_full_random: 1
+  log.display_hu_min: -1400
+  log.display_hu_max: 2100
+  log.preview_bits: 16
+  log.diff_range_hu: 200
+  log.save_epoch_freq: 1
+  log.save_latest_freq: 5000
+  log.continue_train: false
+  log.epoch_count: 1
+mode:
+  sampling: random
+  gan_mode: fgan_kl
+  netG: wavelet
+  netD: paper
+  final_norm_act: false
+  serial_batches: false
+machine:
+  gpu_gen: 30
+  gpu_name: RTX 3070
+  host_data_root: D:/DataSet/DataSet
+  container_data_root: /workspace/DataSet
+  pcd_dir: /workspace/DataSet/PCD512_v2
+  eid_dir: /workspace/DataSet/EID_v5
+  align_meta: /workspace/DataSet/align_meta.yaml
+  checkpoints_dir: /workspace/stage1/checkpoints
+  num_threads: 8
+  tb_port: 6006
+overrides: []
+applied: {}
+resume: null
+resume_tag: null
+base_launch: null
+argv:
+- --name
+- '2026_0908_0041'
+- --model
+- fidelity_gan
+- --dataset_mode
+- ct
+- --lr
+- '0.0002'
+- --beta1
+- '0.5'
+- --beta2
+- '0.999'
+- --batch_size
+- '40'
+- --n_epochs
+- '300'
+- --n_epochs_decay
+- '0'
+- --lr_policy
+- linear
+- --seed
+- '0'
+- --lambda_fid
+- '10.0'
+- --ngf
+- '32'
+- --ndf
+- '32'
+- --norm
+- batch
+- --init_type
+- normal
+- --init_gain
+- '0.01'
+- --input_nc
+- '1'
+- --output_nc
+- '1'
+- --patch_size
+- '128'
+- --patch_stride
+- '1'
+- --patches_per_image
+- '40'
+- --patch_seed
+- '0'
+- --samples_per_epoch
+- '24000'
+- --hu_offset
+- '1400'
+- --hu_min
+- '-1400'
+- --hu_max
+- '4096'
+- --print_freq
+- '100'
+- --image_freq
+- '1000'
+- --n_images
+- '4'
+- --full_slice
+- PCD-002/PCD-002-215.png
+- --n_full_random
+- '1'
+- --display_hu_min
+- '-1400'
+- --display_hu_max
+- '2100'
+- --preview_bits
+- '16'
+- --diff_range_hu
+- '200'
+- --save_epoch_freq
+- '1'
+- --save_latest_freq
+- '5000'
+- --epoch_count
+- '1'
+- --sampling
+- random
+- --gan_mode
+- fgan_kl
+- --netG
+- wavelet
+- --netD
+- paper
+- --dataroot
+- /workspace/DataSet
+- --dir_A
+- /workspace/DataSet/PCD512_v2
+- --dir_B
+- /workspace/DataSet/EID_v5
+- --align_meta
+- /workspace/DataSet/align_meta.yaml
+- --checkpoints_dir
+- /workspace/stage1/checkpoints
+- --num_threads
+- '8'
+- --require_cuda

@@ -5,7 +5,7 @@
 # 学習中に同じコンテナで走らせてよい（start.sh は起動済みコンテナに exec するだけ。device: cpu なら VRAM も取り合わない）。
 
 patch: 72             # 切り出す正方形の一辺（画素）。座標は左上
-panel_scale: 4        # 並べたパネルだけ最近傍で拡大（72 → 288。ラベルとゲージが読める大きさ）。個別画像は等倍
+panel_scale: 4        # 並べたパネルだけ最近傍で拡大（72 → 288）。個別画像は等倍。余白・ラベル・ゲージは列の高さに比例（preview_*/ の 512 パネルと相似形。2026-09-10）ので、等倍で文字まで読みたければ 7（→ 504 ≈ 512）
 device: cpu           # cpu | cuda。学習中は cpu（512 を数枚通すだけなので数秒）
 
 cases:                # PCD と EID のペア。スライス名（PCD-nnn-sss / EID-nnn-sss）と左上座標。ファイルは pcd_dir/<PCD-nnn>/<name>.png、eid_dir/<EID-nnn>/<name>.png

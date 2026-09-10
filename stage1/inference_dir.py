@@ -24,7 +24,7 @@ mode
   <out_dir>/diff_stats.txt                 mode = both のとき
 
 BN は eval（running 統計）。学習の checkpoint 時のフル画像（util/monitor.py save_full_images）と同じ。
-速度（2026-09-09）: 読み込み・デコードは --read_workers 本のスレッドで先読み、full は --full_batch_size 枚まとめて 1 回の forward（BN は eval なので 1 枚ずつと同じ結果）、
+速度（2026-09-09）: 読み込み・デコードは --read_workers 本のスレッドで先読み、--batch_slices 枚のスライスをまとめて G に通す（full はそのまま 1 回の forward、patch は全スライスの patch を束ねて --patch_batch_size ずつ。BN は eval なので 1 枚ずつと同じ結果）、
 PNG の書き込みは --write_workers 本のスレッドで非同期。GPU は数 ms で終わるので、律速は PNG の読み書き（HDD + WSL 越しだと 1 枚 0.1〜0.3 s）。終了時に内訳（読み待ち / full / patch / 書き待ち）を表示する。
 デバイスは --device cuda | cpu で明示（run_infer.py が machines.yaml の gpu_gen から決める）。cuda 指定で使えなければエラー。
 """
@@ -91,7 +91,7 @@ def parse_args():
     req("--max_slices", type=int)
     p.add_argument("--save_residual", action="store_true")
     p.add_argument("--save_panel", action="store_true")
-    req("--full_batch_size", type=int, help="full 方式で 512 をまとめて G に通す枚数")
+    req("--batch_slices", type=int, help="同時に G に通すスライス数（full はそのまま、patch は全スライスの patch を束ねて patch_batch_size ずつ）")
     req("--read_workers", type=int, help="PNG の読み込み・デコードを先読みするスレッド数（0 = 直列）")
     req("--write_workers", type=int, help="PNG の書き込みを非同期にするスレッド数（0 = 直列）")
     # 出力形式（infer_stage1.sh の OUTPUT_FORMAT / DICOM_DIR）
@@ -153,22 +153,31 @@ def blend_window(patch, blend, device):
 
 
 def infer_patch(net, x, patch, stride, window, batch_size):
-    """x: (1,1,H,W)。patch を切って G に通し、窓で重み付き平均して (1,1,H,W) を返す。"""
-    h, w = x.shape[-2:]
-    coords = [(y, xx) for y in grid_positions(h, patch, stride) for xx in grid_positions(w, patch, stride)]
-    out = torch.zeros_like(x)
-    wsum = torch.zeros_like(x)
-    for s in range(0, len(coords), batch_size):
-        chunk = coords[s : s + batch_size]
-        inp = torch.cat([x[..., y : y + patch, xx : xx + patch] for y, xx in chunk])  # (b,1,p,p)
-        o = net(inp)
-        for k, (y, xx) in enumerate(chunk):
-            out[..., y : y + patch, xx : xx + patch] += o[k] * window
-            wsum[..., y : y + patch, xx : xx + patch] += window
+    """x: (K,1,H,W)。K 枚のスライスの patch を全部まとめて切り出し、batch_size 枚ずつ G に通し、窓で重み付き平均して (K,1,H,W) を返す。
+    2026-09-09: patch ごとの Python ループを廃止。切り出しは平坦 index の gather 1 回、合成は index_add_（重なりは加算）で、
+    バッチ 1 回につき G の呼び出し + 数カーネルだけ。スライスをまたいで束ねるので、スライス末尾の半端なバッチと GPU 同期も K 枚に 1 回になる。
+    旧実装は 1 枚ずつ、patch ごとに 2 回の小さな GPU 演算（2,401 patch で約 5,000 回/枚）を 1 本の Python スレッドで発行していて、
+    GPU も CPU も遊んだまま 0.5 s/枚かかっていた（PC3、patch.batch_size 256 でも変わらず）。
+    index_add_ の重なりの加算順は CUDA では不定なので float の下位桁が変わりうる（uint16 化後に 1 違うことがある程度）。"""
+    k, _, h, w = x.shape
+    dev = x.device
+    ys, xs = grid_positions(h, patch, stride), grid_positions(w, patch, stride)
+    base1 = torch.tensor([y * w + xx for y in ys for xx in xs], dtype=torch.int64, device=dev)  # (N,) 1 枚の中の各 patch の左上の平坦 index
+    base = (torch.arange(k, device=dev)[:, None] * (h * w) + base1[None, :]).reshape(-1)  # (K*N,) スライス k の分は k*H*W だけずらす
+    offs = (torch.arange(patch, device=dev)[:, None] * w + torch.arange(patch, device=dev)[None, :]).reshape(-1)  # (p*p,) patch 内の相対 index
+    flat = x.reshape(-1)
+    wflat = window.reshape(-1).to(x.dtype)
+    out = torch.zeros(k * h * w, dtype=x.dtype, device=dev)
+    wsum = torch.zeros(k * h * w, dtype=x.dtype, device=dev)
+    for s in range(0, base.shape[0], batch_size):
+        idx = base[s : s + batch_size, None] + offs[None, :]  # (b, p*p)
+        o = net(flat[idx].view(-1, 1, patch, patch))  # (b,1,p,p)。gather 1 回で切り出し
+        out.index_add_(0, idx.reshape(-1), (o.reshape(idx.shape[0], -1) * wflat).reshape(-1))  # 重み付きで重なりを加算
+        wsum.index_add_(0, idx.reshape(-1), wflat.expand(idx.shape[0], -1).reshape(-1))
     # F-08: 被覆されない画素（wsum = 0 → 0/0 = NaN）や非有限値を黙って出さない（stride ≤ size は schema でも検査。二重防御）
     if bool((wsum <= 0).any()):
         raise RuntimeError(f"patch 合成で被覆されない画素があります（patch {patch}, stride {stride}）。patch_stride ≤ patch_size にしてください")
-    y_out = out / wsum
+    y_out = (out / wsum).view(k, 1, h, w)
     if not bool(torch.isfinite(y_out).all()):
         raise RuntimeError("patch 合成の結果に NaN / inf が含まれます")
     return y_out
@@ -187,6 +196,8 @@ def resolve_device(name):
 def main():
     a = parse_args()
     device = resolve_device(a.device)
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True  # 入力の形が固定なので cuDNN に最速アルゴリズムを選ばせる（2026-09-09）
     write_png_out = a.output_format in ("png", "both")
     write_dcm = a.output_format in ("dicom", "both")
     dicom_index = DicomIndex(a.dicom_dir) if write_dcm else None  # 無ければここで止まる
@@ -232,7 +243,7 @@ def main():
     if a.save_residual:  # R のカラー表示の凡例（<out_dir>/ 直下に 1 枚。範囲を名前に入れる）
         out_dir.mkdir(parents=True, exist_ok=True)
         write_png(out_dir / colorbar_filename(a.diff_range_hu), rgb_to_bgr((colorbar_rgb01(a.diff_range_hu, 512) * 255.0).round().astype(np.uint8)))
-    # --- パイプライン（2026-09-09）: 読み込みはスレッドで先読み → full は full_batch_size 枚まとめて forward → PNG 書き込みはスレッドで非同期 ---
+    # --- パイプライン（2026-09-09）: 読み込みはスレッドで先読み → batch_slices 枚をまとめて forward（full はそのまま、patch は全スライスの patch を束ねる）→ PNG 書き込みはスレッドで非同期 ---
     #     GPU は数 ms で終わるので、律速は PNG の読み書き（PC2 は HDD + WSL 越しで 1 枚 0.1〜0.3 s）。読み・計算・書きを同時に動かして読み書きの上限まで詰める。
     #     順序は保つ（先読みは deque に submit 順で積み、先頭から取る）。DICOM の照合・書き出しは pydicom なので主スレッドで直列のまま。
     reader = ThreadPoolExecutor(max_workers=a.read_workers) if a.read_workers > 0 else None
@@ -257,7 +268,7 @@ def main():
             pending.append(writer.submit(write_png, path, arr))
             drain(4 * a.write_workers + 16)  # 溜めすぎない（メモリ）
 
-    batch_n = a.full_batch_size if "full" in modes else 1
+    batch_n = a.batch_slices
     prefetch = 2 * batch_n + (a.read_workers if reader is not None else 0)
     queue = collections.deque()
     it = iter(paths)
@@ -300,26 +311,32 @@ def main():
             if "full" in modes:
                 xs = [torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0) for _, _, x_np in items]
                 t = time.time()
-                with torch.no_grad():
+                with torch.inference_mode():
                     if all(x.shape == xs[0].shape for x in xs):
                         outs_full = list(infer_full(net, torch.cat(xs).to(device)).split(1))  # まとめて 1 回（形が同じときだけ）
                     else:
                         outs_full = [infer_full(net, x.to(device)) for x in xs]
                 tm["full"] += time.time() - t
+            outs_patch = None
+            if "patch" in modes:
+                xs = [torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0) for _, _, x_np in items]
+                if n_patches is None:
+                    n_patches = len(grid_positions(xs[0].shape[-2], a.patch_size, a.patch_stride)) * len(grid_positions(xs[0].shape[-1], a.patch_size, a.patch_stride))
+                    tqdm.write(f"[infer] patch: {a.patch_size}px stride {a.patch_stride} → {n_patches} patch/枚, blend={a.patch_blend}, patch_batch={a.patch_batch_size}, slices/forward={a.batch_slices}")
+                t = time.time()
+                with torch.inference_mode():
+                    if all(x.shape == xs[0].shape for x in xs):
+                        outs_patch = list(infer_patch(net, torch.cat(xs).to(device), a.patch_size, a.patch_stride, window, a.patch_batch_size).split(1))  # K 枚の patch を束ねて
+                    else:
+                        outs_patch = [infer_patch(net, x.to(device), a.patch_size, a.patch_stride, window, a.patch_batch_size) for x in xs]
+                tm["patch"] += time.time() - t
             for k, (p, stored, x_np) in enumerate(items):
                 rel = Path(p).relative_to(input_dir)
                 outs = {}
                 if outs_full is not None:
                     outs["full"] = outs_full[k]
-                if "patch" in modes:
-                    x = torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0).to(device)
-                    if n_patches is None:
-                        n_patches = len(grid_positions(x.shape[-2], a.patch_size, a.patch_stride)) * len(grid_positions(x.shape[-1], a.patch_size, a.patch_stride))
-                        tqdm.write(f"[infer] patch: {a.patch_size}px stride {a.patch_stride} → {n_patches} patch/枚, blend={a.patch_blend}, batch={a.patch_batch_size}")
-                    t = time.time()
-                    with torch.no_grad():
-                        outs["patch"] = infer_patch(net, x, a.patch_size, a.patch_stride, window, a.patch_batch_size)
-                    tm["patch"] += time.time() - t
+                if outs_patch is not None:
+                    outs["patch"] = outs_patch[k]
                 pcd16 = denormalize(x_np, *hu)  # 正規化窓でクリップした入力（R の基準）
                 ref_ds = None
                 if write_dcm:  # F-18a: このスライスの参照 DICOM が本当に入力 PNG の元か、画素で照合（違えばここで止まる）
@@ -367,7 +384,7 @@ def main():
                 f.write(f"# ALL\tmean_of_means={np.mean([m for _, m, _ in diff_lines]):.3f}\tmax={max(x for _, _, x in diff_lines):.3f}\n")
         if diff_lines:
             print(f"[infer] |full − patch|: mean {np.mean([m for _, m, _ in diff_lines]):.3f} HU, max {max(x for _, _, x in diff_lines):.3f} HU -> {out_dir / 'diff_stats.txt'}")
-    print(f"[infer] time: 読み待ち {tm['read']:.1f}s | full {tm['full']:.1f}s | patch {tm['patch']:.1f}s | 書き待ち {tm['write']:.1f}s（先読み {a.read_workers} / full_batch {a.full_batch_size} / 書き {a.write_workers}）")
+    print(f"[infer] time: 読み待ち {tm['read']:.1f}s | full {tm['full']:.1f}s | patch {tm['patch']:.1f}s | 書き待ち {tm['write']:.1f}s（先読み {a.read_workers} / 同時スライス {a.batch_slices} / patch_batch {a.patch_batch_size} / 書き {a.write_workers}）")
     print(f"[infer] done: {len(paths)} slices, {elapsed:.1f}s ({elapsed / max(len(paths), 1):.2f} s/slice) -> {out_dir}")
 
 

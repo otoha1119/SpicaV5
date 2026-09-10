@@ -91,6 +91,11 @@ MACHINE = {
     "checkpoints_dir":     Key(str, "--checkpoints_dir", "重み・ログの保存先ルート。run 名 yyyy_mmdd_HHMM がこの下に付く（レイアウトは util/run_paths.py）"),
     "num_threads":         Key(int, "--num_threads",     "DataLoader の worker 数"),
     "tb_port":             Key(int, None,                "TensorBoard のポート（ホスト側・コンテナ側とも同じ番号で公開）。start.sh が使う"),
+    # Stage 2 用（machines.yaml は Stage 共通ファイル。Stage 1 は使わないが、未知キーで落とさないためにここで宣言する。2026-09-08）
+    "pcd1024_dir":         Key(str, None,                "Stage 2 の教師 PCD1024。Stage 1 は使わない"),
+    "eidlike1024_dir":     Key(str, None,                "Stage 2 の学習入力（bash start2.sh dataset の出力先）。Stage 1 は使わない"),
+    "stage2_checkpoints_dir": Key(str, None,           "Stage 2 の run の保存先ルート。Stage 1 は使わない"),
+    "stage2_tb_port":      Key(int, None,                "Stage 2 の TensorBoard のポート（compose が両方公開するので start.sh も読む）。Stage 1 の TensorBoard は tb_port"),
 }
 
 # ---------------------------------------------------------------------------
@@ -107,7 +112,7 @@ INFER = {
     "save_residual":    Key(bool, "--save_residual",    "true で残差 R（0 HU = 32768）と表示用カラーも <mode>_R/ <mode>_R_color/ に保存（Stage 2 用のデータ生成では不要なので既定 false。--save_residual true で一時的に有効）"),
     "save_panel":       Key(bool, "--save_panel",       "true で表示用パネル [EID-like | PCD | R + ゲージ]（学習の output_images/preview_* と同じ正規化表示、util/panel.py）も <mode>_panel/ に保存。学習中の目視確認用。既定 false"),
     # 速度（2026-09-09）: GPU は数 ms で終わるので、読み・計算・書きを同時に動かす
-    "full.batch_size":  Key(int,  "--full_batch_size",  "full 方式で 512 をまとめて G に通す枚数（BN は eval なので結果は 1 枚ずつと同じ。VRAM に合わせる。3070 8GB で 8。CPU では 1 が最速）"),
+    "batch_slices":     Key(int,  "--batch_slices",     "同時に G に通すスライス数（full はそのまま 1 回の forward、patch は全スライスの patch を束ねて patch.batch_size ずつ。BN は eval なので結果は 1 枚ずつと同じ。3070 8GB で 8。CPU では 1 が最速）"),
     "io.read_workers":  Key(int,  "--read_workers",     "PNG の読み込み・デコードを先読みするスレッド数（0 = 直列）"),
     "io.write_workers": Key(int,  "--write_workers",    "PNG の書き込みを非同期にするスレッド数（0 = 直列）"),
     # DICOM 出力（OUTPUT_FORMAT = dicom | both のとき）。stored = (HU − intercept) / slope。参照 DICOM のタグと一致しなければエラー
@@ -355,7 +360,7 @@ def check_infer_values(infer):
     if infer["patch.blend"] not in BLENDS: P.append(f"patch.blend は {BLENDS}")
     if infer["patch.batch_size"] < 1: P.append("patch.batch_size ≥ 1")
     if infer["max_slices"] < 0: P.append("max_slices ≥ 0（0 で全部）")
-    if infer["full.batch_size"] < 1: P.append("full.batch_size ≥ 1")
+    if infer["batch_slices"] < 1: P.append("batch_slices ≥ 1")
     if infer["io.read_workers"] < 0 or infer["io.write_workers"] < 0: P.append("io.read_workers / write_workers ≥ 0（0 = 直列）")
     if infer["dicom.rescale_slope"] == 0: P.append("dicom.rescale_slope ≠ 0")
     _problems_to_error("infer values", P)
