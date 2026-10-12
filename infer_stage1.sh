@@ -32,6 +32,8 @@
 #     {full,patch}_R_color/<case>/<slice>.png 残差の表示用カラー（8bit RGB）                … infer.yaml の save_residual
 #     {full,patch}_panel/<case>/<slice>.png   表示用パネル [EID-like | PCD | R + ゲージ]（学習の preview と同じ正規化表示） … infer.yaml の save_panel
 #     diff_stats.txt（mode = both のとき）、infer.yaml（解決済み設定）
+#     noise.yaml（乱数画像 n の記録: スライスごとの seed と sigma_hu。2026-10-12）、{full,patch}_std/ + std_stats.txt（infer.yaml noise.n_draws ≥ 2: n の効きの確認用の標準偏差画像 [HU]）
+#   n の指定例: bash start.sh infer --noise_n_draws 16 --max_slices 4 / --noise_sigma_mode fixed --noise_sigma_hu_fixed 15（run が noise_input: false なら n_draws 1 / random 以外はエラー）
 #
 # ■ デバイス
 #   machines.yaml の gpu_gen（start.sh から渡る SPICA_MACHINE のエントリ）で決まる: 0 → cpu、それ以外 → cuda（使えなければエラー。cpu に落とさない）。

@@ -79,7 +79,7 @@ def main():
         if run_dir is None:
             raise ConfigError(f"重みディレクトリの上に {LAUNCH_FILE} を持つ run が見つかりません: {weight_dir}")
         launch_path = latest_launch(run_dir)
-        g_argv, g_cfg = generator_argv(load_yaml(launch_path))
+        g_argv, g_cfg = generator_argv(load_yaml(launch_path), weight_dir)
         # task で参照するデータが変わる（degrade: PCD512 = pcd_dir / EID512 = eid_dir、sr: PCD1024 = pcd1024_dir / EID1024 = eid1024_dir）。crop.yaml の pcd / eid はその中のスライス名
         dir_keys = ("pcd1024_dir", "eid1024_dir") if g_cfg["task"] == "sr" else ("pcd_dir", "eid_dir")
         for k in dir_keys:

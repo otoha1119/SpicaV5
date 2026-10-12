@@ -4,7 +4,7 @@
   1. configs/train.yaml, configs/mode.yaml, ../configs/machines.yaml を読み、configs/schema.py で検証する
      （必須キー欠落・未知キー・型違いはエラー。既定値は無い）
   1'. mode.yaml の task（sh の --task で上書き可）が sr なら configs/sr.yaml（--sr）も読む [2026-10-12]:
-     SR のキー（split_file / b_exclude_cases）を検証し、`train:` セクションで train.yaml を差し替え（優先順位 train.yaml → sr.yaml → --flag）、
+     SR のキー（split_file / b_exclude_cases）を検証し、`train:` / `mode:` セクションで train.yaml / mode.yaml を差し替え（優先順位 yaml → sr.yaml → --flag）、
      A = eid1024_dir / B = pcd1024_dir の存在と eid1024_dir/manifest.yaml（補間の方式）を確認して launch の sr に記録する。degrade では sr.yaml を読まない
   2. sh から渡された上書き引数を **平坦 dict に反映**してから（後勝ち。schema に無いフラグはエラー）、値域・相互条件を検証する
   3. schema の順に train.py（junyanz 本家）の引数列を**全パラメータ明示**で組む（実効値から。argv に生の上書きは足さない）
@@ -19,7 +19,8 @@
   → **選んだ checkpoint の state.pth に入っている実効設定**（その重みを作った設定。古い run は最新の launch）を基準に、今回の上書きを反映し、
     重みディレクトリ（<run>/latest | best | weights/epoch_NNN）の state.pth（optimizer / RNG / 進捗）と net_G/D.pth を復元して同じディレクトリに続きを保存する。
     設定は launch_resume_<日時秒>.yaml に保存され、次の再開・推論の基準になる。
-    residual / task / d_pack は checkpoint から変えられない（重みの意味・形が変わる）。d_pack は net_D.pth の 1 層目の入力チャネルとも照合する（2026-10-12）
+    residual / task / d_pack / noise_input は checkpoint から変えられない（重みの意味・形が変わる）。d_pack は net_D.pth の 1 層目の入力チャネル、
+    noise_input は net_G.pth の 1 層目の入力チャネル（input_nc + 1）とも照合する（2026-10-12）
 """
 
 import argparse
@@ -53,12 +54,14 @@ def peek_task(overrides, default):
     return task
 
 
-def load_sr(path, train):
-    """configs/sr.yaml を読み、SR のキーを検証して、`train:` の差し替えを train（平坦 dict）に反映する。戻り値 (sr_flat, overlay_flat)。"""
-    sr, overlay = validate_sr(load_yaml(path))
-    for k, v in overlay.items():
+def load_sr(path, train, mode):
+    """configs/sr.yaml を読み、SR のキーを検証して、`train:` / `mode:` の差し替えを train / mode（平坦 dict）に反映する。戻り値 (sr_flat, {"train": overlay, "mode": overlay})。"""
+    sr, train_overlay, mode_overlay = validate_sr(load_yaml(path))
+    for k, v in train_overlay.items():
         train[k] = v
-    return sr, overlay
+    for k, v in mode_overlay.items():
+        mode[k] = v
+    return sr, {"train": train_overlay, "mode": mode_overlay}
 
 
 def read_upsample(eid1024_dir):
@@ -103,6 +106,21 @@ def check_d_pack_weights(weight_path, train, mode):
     expect = train["network.output_nc"] * mode["d_pack"]
     if first[1].shape[1] != expect:
         raise ConfigError(f"{weight_path} の D の 1 層目 {first[0]} の入力チャネル {first[1].shape[1]} が実効設定 output_nc × d_pack = {train['network.output_nc']} × {mode['d_pack']} = {expect} と合いません（d_pack は resume で変えられない）")
+
+
+def check_noise_input_weights(weight_path, train, mode):
+    """net_G.pth の 1 層目（state_dict で最初の 4 次元 weight）の入力チャネルが実効 mode の input_nc + (1 if noise_input else 0) と一致するか（2026-10-12、段階 5-5）。
+    check_d_pack_weights と同じ流儀: strict な load_state_dict でも落ちるが train.py の起動後になるので、launch を書く前にここで照合する。
+    resume のほか、推論・crop（run_infer.py）も旧 run を読むときにこれを呼ぶ。"""
+    import torch  # コンテナ内でのみ使う
+
+    sd = torch.load(weight_path, map_location="cpu", weights_only=True)
+    first = next(((k, v) for k, v in sd.items() if k.endswith(".weight") and getattr(v, "dim", lambda: 0)() == 4), None)
+    if first is None:
+        raise ConfigError(f"{weight_path} に畳み込みの weight がありません（形式が不正）")
+    expect = train["network.input_nc"] + (1 if mode["noise_input"] else 0)
+    if first[1].shape[1] != expect:
+        raise ConfigError(f"{weight_path} の G の 1 層目 {first[0]} の入力チャネル {first[1].shape[1]} が実効設定 input_nc + (noise_input ? 1 : 0) = {train['network.input_nc']} + {1 if mode['noise_input'] else 0} = {expect} と合いません（noise_input は resume で変えられない）")
 
 
 def start_tensorboard(run_dir, port):
@@ -248,6 +266,7 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, sr_yaml, overrides, n
             sr_saved = dict(saved["sr"])
             upsample = sr_saved.pop("upsample", None)
             sr_saved.pop("train_overlay", None)
+            sr_saved.pop("mode_overlay", None)
             sr = validate("sr(run)", sr_saved, SR)
             if not isinstance(upsample, dict) or any(k not in upsample for k in SR_UPSAMPLE_KEYS):
                 raise ConfigError(f"{base} の sr.upsample が不正です（scale / interp / input_size）")
@@ -258,7 +277,7 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, sr_yaml, overrides, n
         diff = {k: (sv.get(k), v) for k, v in cur.items() if sv.get(k) != v and k not in ("log.continue_train", "log.epoch_count")}
         if diff:
             print(f"[run_train] 注意: 今の {section} 設定は checkpoint の実効設定と異なる（checkpoint の値を使う。変えるなら --flag で上書き）: {diff}")
-    saved_residual, saved_task, saved_d_pack = mode["residual"], mode["task"], mode["d_pack"]
+    saved_residual, saved_task, saved_d_pack, saved_noise = mode["residual"], mode["task"], mode["d_pack"], mode["noise_input"]
     applied = apply_overrides(overrides, sections(train, mode, machine, sr))
     if sr is None:
         used = [k.flag for k in SR.values() if k.flag in applied]
@@ -272,12 +291,15 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, sr_yaml, overrides, n
         raise ConfigError(f"再開時に task を変えることはできません（データと G の意味が変わる）: checkpoint は task={saved_task}")
     if mode["d_pack"] != saved_d_pack:
         raise ConfigError(f"再開時に d_pack を変えることはできません（D の 1 層目の形が変わる）: checkpoint は d_pack={saved_d_pack}")
+    if mode["noise_input"] != saved_noise:
+        raise ConfigError(f"再開時に noise_input を変えることはできません（G の 1 層目の形が変わる）: checkpoint は noise_input={saved_noise}")
     if Path(machine["checkpoints_dir"]) / a.resume != run_dir:
         raise ConfigError(f"再開時に checkpoints_dir を変えることはできません: {machine['checkpoints_dir']} != {run_dir.parent}")
     for kind in ("net_G.pth", "net_D.pth"):
         if not ckpt_path(run_dir, a.resume_tag, kind).is_file():
             raise ConfigError(f"再開用の重みがありません: {ckpt_path(run_dir, a.resume_tag, kind)}")
     check_d_pack_weights(ckpt_path(run_dir, a.resume_tag, "net_D.pth"), train, mode)  # 旧 run（d_pack 無し = 1）の net_D.pth は 1 ch なので整合する
+    check_noise_input_weights(ckpt_path(run_dir, a.resume_tag, "net_G.pth"), train, mode)  # 旧 run（noise_input 無し = false）の net_G.pth は input_nc ch なので整合する
     epoch_count = st["epoch"] + 1 if st["epoch_done"] else st["epoch"]  # epoch 末保存なら次の epoch から、途中保存ならその epoch を頭から
     train["log.continue_train"] = True
     train["log.epoch_count"] = epoch_count
@@ -317,7 +339,7 @@ def main():
             raise ConfigError(f"machines.yaml にエントリ '{a.machine}' がありません。候補: {list(machines) if isinstance(machines, dict) else '(不正な形式)'}")
         machine = validate(f"machines.{a.machine}", machines[a.machine], MACHINE)
         # task: sr なら sr.yaml を読んで train.yaml を差し替える（--flag より前。新規 run のとき。再開は checkpoint の sr を基準にする）
-        sr, overlay = (load_sr(a.sr, train) if peek_task(overrides, mode["task"]) == "sr" else (None, {}))
+        sr, overlay = (load_sr(a.sr, train, mode) if peek_task(overrides, mode["task"]) == "sr" else (None, {}))
         if a.resume:
             name, out_dir, extra, launch_name, applied, base, train, mode, machine, sr = prepare_resume(a, train, mode, machine, sr, overrides, now)
         else:
@@ -328,7 +350,8 @@ def main():
     sr_record = None
     if sr is not None:
         sr_record = dict(sr)
-        sr_record["train_overlay"] = overlay if not a.resume else "(resume: checkpoint の train が基準)"  # sr.yaml が train.yaml のどのキーを差し替えたか（記録用）
+        sr_record["train_overlay"] = overlay["train"] if not a.resume else "(resume: checkpoint の train が基準)"  # sr.yaml が train.yaml のどのキーを差し替えたか（記録用）
+        sr_record["mode_overlay"] = overlay["mode"] if not a.resume else "(resume: checkpoint の mode が基準)"  # 同じく mode.yaml（noise_input: false。2026-10-12）
 
     if machine["gpu_gen"] != 0:
         extra = list(extra) + ["--require_cuda"]  # F-16: GPU マシンの定義で CUDA が無ければ train.py が止める（黙って CPU に落ちない）

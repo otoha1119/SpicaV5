@@ -25,6 +25,7 @@ checkpoint は「重みディレクトリ」単位で扱う（G と D と optimi
   <run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/   bash start.sh infer の出力（inference_dir.py。uint16 PNG / DICOM）。実行ごとに別ディレクトリ
       {full,patch}/<case>/<slice>.png, {full,patch}_dicom/, {full,patch}_R/（16bit、0 HU = 32768）, {full,patch}_R_color/（表示用カラー 8bit RGB）, R_colorbar_pm<range>HU.png, diff_stats.txt, infer.yaml
       {full,patch}_panel/<case>/<slice>.png   表示用パネル [EID-like | PCD | R + ゲージ]（学習の output_images/preview_* と同じ正規化表示、util/panel.py）。--save_panel のとき
+      noise.yaml（乱数画像 n の記録: noise_input / sigma の範囲・方式 / スライスごとの seed と sigma_hu。常に書く）、{full,patch}_std/<case>/<slice>.png + std_stats.txt（infer.yaml noise.n_draws ≥ 2 のとき: n_draws 通りの n の出力の画素ごとの標準偏差 [HU]、16bit stored = round(HU)。2026-10-12）
   <run>_<重みディレクトリ名>_crop_<実行時刻>/case<N>_<pcd>_<eid>/   bash start.sh crop の出力（crop_patches.py。表示用のみ、16bit 生データは無し）
       1_EID_<eid>_x<X>_y<Y>.png, 2_EID-like_<pcd>_x_y.png, 3_PCD_<pcd>_x_y.png（グレー 1ch、patch 四方、等倍）, 4_R_color_<pcd>_x_y.png（RGB）, panel.png（[EID | EID-like | PCD | R + ゲージ] を panel_scale 倍）
 """

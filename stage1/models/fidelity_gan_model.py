@@ -74,6 +74,9 @@ class FidelityGANModel(BaseModel):
         )
         parser.add_argument("--final_norm_act", action="store_true", help="G 最終 conv に bnorm+LReLU を付ける（確定: 付けない。ablation 用）")
         parser.add_argument("--residual", action="store_true", help="G を residual 化: fake_B = real_A + F(real_A)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変（段階 5-1、2026-09-11）")
+        parser.add_argument("--noise_input", action="store_true", help="G の入力に乱数画像 n を連結: fake_B = F(cat[real_A, n])、residual なら real_A + F(cat[real_A, n])（networks.NoiseInputGenerator。F の 1 層目は input_nc + 1 ch）。sigma は --sigma_hu_min / max。損失は不変（段階 5-5、2026-10-12）")
+        parser.add_argument("--sigma_hu_min", type=float, default=None, help="n の振幅 sigma の下限 [HU]（train.yaml noise.sigma_hu_min。学習ではサンプルごとに log-uniform）")
+        parser.add_argument("--sigma_hu_max", type=float, default=None, help="n の振幅 sigma の上限 [HU]（train.yaml noise.sigma_hu_max）")
         parser.add_argument("--d_pack", type=int, default=None, help="D の packing 数（PacGAN）。1 = 論文どおり | 2 = batch の前半と後半（サンプル i と i + B/2）をチャネル連結して D に入れる。D の 1 層目は output_nc × d_pack ch（段階 5-6 ①、2026-10-12）")
         if is_train:
             parser.set_defaults(
@@ -116,7 +119,10 @@ class FidelityGANModel(BaseModel):
         self.model_names = ["G", "D"] if self.isTrain else ["G"]
 
         # G: A→B (論文 G: z → G(z))
-        self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain, final_norm_act=opt.final_norm_act, residual=opt.residual)
+        # [SpicaV5] --noise_input（段階 5-5、2026-10-12）: G = F(cat[z, n])（residual なら z + F(cat[z, n])）。n は NoiseInputGenerator が forward のたびに引く（学習は毎回ランダム）。
+        #   sigma_hu_min / max は noise_input=false では使われない（キーは train.yaml に必須なので値は常に渡る）
+        self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain, final_norm_act=opt.final_norm_act, residual=opt.residual,
+                                      noise_input=opt.noise_input, sigma_hu=(opt.sigma_hu_min, opt.sigma_hu_max), hu=(opt.hu_min, opt.hu_max))
 
         if self.isTrain:
             # D: B 側の判別器 (論文 D: x vs G(z))
@@ -153,7 +159,8 @@ class FidelityGANModel(BaseModel):
         self.image_paths = input["A_paths" if AtoB else "B_paths"]
 
     def forward(self):
-        """fake_B = G(real_A)。論文 Fig. 3 の generator G の順伝播。--residual のときは G = z + F(z)（networks.ResidualGenerator）なので fake_B − real_A が F の生出力 R。"""
+        """fake_B = G(real_A)。論文 Fig. 3 の generator G の順伝播。--residual のときは G = z + F(z)（networks.ResidualGenerator）なので fake_B − real_A が F の生出力 R。
+        --noise_input のときは G の中で n が毎回引かれる（F(cat[z, n])）。fidelity ‖fake_B − real_A‖² は n を含む出力に対して取る（変更なし）。"""
         self.fake_B = self.netG(self.real_A)
 
     def _pack(self, x):

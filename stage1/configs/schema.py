@@ -50,6 +50,9 @@ TRAIN = {
     "data.hu_offset":       Key(int,   "--hu_offset",      "stored = HU + hu_offset（1400）"),
     "data.hu_min":          Key(int,   "--hu_min",         "正規化窓の下限 HU（−1400）"),
     "data.hu_max":          Key(int,   "--hu_max",         "正規化窓の上限 HU（4096）"),
+    # noise（乱数画像 n。mode.yaml noise_input: true のときだけ使われる。false でもキーは必須で型・値域の検査は同じ。段階 5-5、2026-10-12）
+    "noise.sigma_hu_min":   Key(float, "--sigma_hu_min",   "n の振幅 sigma の下限 [HU]。学習ではサンプルごとに log-uniform [min, max] から引く。正規化空間では sigma_hu / ((hu_max − hu_min) / 2)。仮決め 15（docs/decisions/20261012）"),
+    "noise.sigma_hu_max":   Key(float, "--sigma_hu_max",   "n の振幅 sigma の上限 [HU]。仮決め 60（中央 30 HU は未測定の一般値。実測後に両端を同倍率でずらし比 ×4 を維持）"),
     # log（util/monitor.py）。単位に注意: *_freq のうち print_freq / image_freq は **step（iteration）**、save_latest_freq は junyanz 由来で **画像枚数**
     "log.print_freq":       Key(int,   "--print_freq",     "バー末尾の損失・TensorBoard scalar・loss_log.txt を更新する間隔（step）"),
     "log.image_freq":       Key(int,   "--image_freq",     "TensorBoard に途中画像を出す間隔（step）"),
@@ -79,16 +82,18 @@ MODE = {
     "residual":       Key(bool, "--residual",       "true で G を residual 化: G(z) = z + F(z)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変。false = 論文どおり G(z) を直接出力（段階 5-1、2026-09-11）"),
     "serial_batches": Key(bool, "--serial_batches", "true で sampler を index 決定的に（再現用）"),
     "task":           Key(str,  "--task",           "degrade（論文どおり A = PCD512 → B = EID512 の劣化生成。pcd_dir / eid_dir、分割なし）| sr（一発超解像: A = EID1024（eid1024_dir、EID_v5 を ×2 補間）→ B = PCD1024（pcd1024_dir）。configs/sr.yaml を読む: A の症例分割、B の除外、train.yaml の差し替え。2026-10-12）"),
+    "noise_input":    Key(bool, "--noise_input",    "true で G の入力に乱数画像 n（1 ch 白色ガウス × sigma、x と同じ大きさ）をチャネル連結する: G(z) = F(cat[z, n])、residual なら z + F(cat[z, n])（networks.NoiseInputGenerator。F の 1 層目は input_nc + 1 ch）。損失は不変。sigma は train.yaml noise.*。task: sr では false にする。resume で変更不可、導入前の run は false 扱い。false = 論文どおり（段階 5-5、2026-10-12）"),
     "d_pack":         Key(int,  "--d_pack",         "D の packing（PacGAN: Zhang et al., NeurIPS 2018）。1 = 論文どおり D の入力 1 枚 | 2 = batch 内の別スライス 2 枚（i と i + B/2）をチャネル連結して D に入れる（D の 1 層目が output_nc × 2 ch、出力 (B/2,1,h,w)。損失式は不変）。batch_size は偶数で、B/2 ≥ data.patches_per_slice（同じスライスの 2 枚を束ねない）。resume で変更不可（段階 5-6 ①、2026-10-12）"),
 }
 # 導入前の run の launch.yaml / state.pth に無い mode のキーと、そのとき仮定する値。無い = その機構なしで学習された重みなので、推論・crop・resume では「導入前の意味」で扱う
 # （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の値で補うと旧 run の重みの意味が変わる。2026-09-11 residual、2026-10-12 task / d_pack）
-LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade", "d_pack": 1}
+LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade", "d_pack": 1, "noise_input": False}
 
 # ---------------------------------------------------------------------------
 # stage1/configs/sr.yaml — task: sr（一発超解像）のときだけ読む。degrade では一切読まない（既存の挙動は不変）
 #   split_file / b_exclude_cases はここで宣言（train.py へのフラグ）。`train:` セクションは train.yaml の差し替え表で、書けるのは TRAIN のキーだけ（validate_sr）。
-#   優先順位: train.yaml → sr.yaml の train → sh の --flag（後勝ち）。実効値と由来は launch.yaml に残る（run_train.py）。
+#   `mode:` セクションは mode.yaml の差し替え表（MODE のキーだけ。sr では n を使わないので noise_input: false を書く。2026-10-12）。
+#   優先順位: train.yaml → sr.yaml の train → sh の --flag（後勝ち）。mode も同じ（mode.yaml → sr.yaml の mode → --flag）。実効値と由来は launch.yaml に残る（run_train.py）。
 #   補間の方式（scale / interp / input_size）はここに書かない: A = eid1024_dir の manifest.yaml（bash start2.sh dataset が書く）が正で、run_train.py が読んで launch に記録する
 # ---------------------------------------------------------------------------
 SR = {
@@ -96,6 +101,7 @@ SR = {
     "b_exclude_cases": Key(list, "--b_exclude_cases", "B 側（PCD1024）から外す症例名のリスト（Stage 2 の test と揃えて holdout にする）。空リスト [] で全症例。ディスクに無い名前はエラー。上書きは --b_exclude_cases PCD-001,PCD-002"),
 }
 SR_TRAIN_SECTION = "train"  # sr.yaml の中で train.yaml を差し替えるセクション名
+SR_MODE_SECTION = "mode"    # sr.yaml の中で mode.yaml を差し替えるセクション名（2026-10-12、noise_input: false 用）
 SR_UPSAMPLE_KEYS = ("scale", "interp", "input_size")  # eid1024_dir/manifest.yaml の dataset.* から launch の sr.upsample に写すキー（推論が 512 入力を同じ方式で補間するため）
 
 # ---------------------------------------------------------------------------
@@ -133,6 +139,10 @@ INFER = {
     "max_slices":       Key(int,  "--max_slices",       "推論するスライス数の上限。0 で全部（動作確認用に絞る）"),
     "save_residual":    Key(bool, "--save_residual",    "true で残差 R（0 HU = 32768）と表示用カラーも <mode>_R/ <mode>_R_color/ に保存（Stage 2 用のデータ生成では不要なので既定 false。--save_residual true で一時的に有効）"),
     "save_panel":       Key(bool, "--save_panel",       "true で表示用パネル [EID-like | PCD | R + ゲージ]（学習の output_images/preview_* と同じ正規化表示、util/panel.py）も <mode>_panel/ に保存。学習中の目視確認用。既定 false"),
+    # 乱数画像 n（run の launch の mode.noise_input が true のときだけ意味を持つ。false の run に n_draws > 1 や fixed を指定するとエラー。段階 5-5、2026-10-12）
+    "noise.sigma_mode":     Key(str,   "--noise_sigma_mode",     "random（スライス名の seed から log-uniform [sigma_hu_min, max]。学習の preview と同じ n）| fixed（全スライス noise.sigma_hu_fixed。粒の量の比較用）"),
+    "noise.sigma_hu_fixed": Key(float, "--noise_sigma_hu_fixed", "sigma_mode fixed のときの sigma [HU]（random では使わない）"),
+    "noise.n_draws":        Key(int,   "--noise_n_draws",        "n の効きの確認用。1 = 通常。2 以上なら seed, seed+1, … で n_draws 回推論し、平均を通常の出力に、画素ごとの標準偏差 [HU] を <mode>_std/ に（16bit、stored = 標準偏差 HU の整数化）、スライスごとの平均を std_stats.txt に出す"),
     # 速度（2026-09-09）: GPU は数 ms で終わるので、読み・計算・書きを同時に動かす
     "batch_slices":     Key(int,  "--batch_slices",     "同時に G に通すスライス数（full はそのまま 1 回の forward、patch は全スライスの patch を束ねて patch.batch_size ずつ。BN は eval なので結果は 1 枚ずつと同じ。3070 8GB で 8。CPU では 1 が最速）"),
     "io.read_workers":  Key(int,  "--read_workers",     "PNG の読み込み・デコードを先読みするスレッド数（0 = 直列）"),
@@ -208,29 +218,35 @@ def validate(name, data, schema):
     return {k: (float(flat[k]) if schema[k].type is float else flat[k]) for k in schema}
 
 
-def validate_sr(data):
-    """sr.yaml: SR のキー + `train:`（train.yaml の差し替え表）。戻り値 (sr_flat, overlay_flat)。
-    overlay は TRAIN のキー（入れ子は train.yaml と同じ書き方）だけを受け付け、型も TRAIN と同じ検査。無い・空でもよい（差し替え無し）。"""
-    if not isinstance(data, dict):
-        raise ConfigError(f"[sr] トップレベルが dict ではありません: {type(data).__name__}")
-    data = dict(data)
-    overlay = data.pop(SR_TRAIN_SECTION, None)
-    sr = validate("sr", data, SR)
+def _validate_overlay(overlay, section, schema, base_name):
+    """sr.yaml の差し替えセクション（train: / mode:）: schema のキーだけを受け付け、型も同じ検査。None なら {}（差し替え無し）。"""
     if overlay is None:
-        return sr, {}
+        return {}
     if not isinstance(overlay, dict):
-        raise ConfigError(f"[sr] {SR_TRAIN_SECTION} は train.yaml と同じ入れ子の dict で書いてください")
+        raise ConfigError(f"[sr] {section} は {base_name} と同じ入れ子の dict で書いてください")
     flat = flatten(overlay)
-    unknown = [k for k in flat if k not in TRAIN]
-    bad = [f"{k}: 期待 {TRAIN[k].type.__name__}, 実際 {type(flat[k]).__name__} ({flat[k]!r})" for k in flat if k in TRAIN and not _type_ok(flat[k], TRAIN[k].type)]
+    unknown = [k for k in flat if k not in schema]
+    bad = [f"{k}: 期待 {schema[k].type.__name__}, 実際 {type(flat[k]).__name__} ({flat[k]!r})" for k in flat if k in schema and not _type_ok(flat[k], schema[k].type)]
     problems = []
     if unknown:
-        problems.append("train.yaml に無いキーです（差し替えできるのは TRAIN のキーだけ）: " + ", ".join(unknown))
+        problems.append(f"{base_name} に無いキーです（差し替えできるのは {base_name} のキーだけ）: " + ", ".join(unknown))
     if bad:
         problems.append("型が違います: " + "; ".join(bad))
     if problems:
-        raise ConfigError(f"[sr.{SR_TRAIN_SECTION}] " + " / ".join(problems))
-    return sr, {k: (float(v) if TRAIN[k].type is float else v) for k, v in flat.items()}
+        raise ConfigError(f"[sr.{section}] " + " / ".join(problems))
+    return {k: (float(v) if schema[k].type is float else v) for k, v in flat.items()}
+
+
+def validate_sr(data):
+    """sr.yaml: SR のキー + `train:`（train.yaml の差し替え表）+ `mode:`（mode.yaml の差し替え表。2026-10-12）。戻り値 (sr_flat, train_overlay_flat, mode_overlay_flat)。
+    overlay は TRAIN / MODE のキー（入れ子は元の yaml と同じ書き方）だけを受け付け、型も同じ検査。無い・空でもよい（差し替え無し）。"""
+    if not isinstance(data, dict):
+        raise ConfigError(f"[sr] トップレベルが dict ではありません: {type(data).__name__}")
+    data = dict(data)
+    train_overlay = data.pop(SR_TRAIN_SECTION, None)
+    mode_overlay = data.pop(SR_MODE_SECTION, None)
+    sr = validate("sr", data, SR)
+    return sr, _validate_overlay(train_overlay, SR_TRAIN_SECTION, TRAIN, "train.yaml"), _validate_overlay(mode_overlay, SR_MODE_SECTION, MODE, "mode.yaml")
 
 
 def to_argv(flat, schema):
@@ -353,6 +369,7 @@ NORMS = ("batch", "instance", "none")
 INIT_TYPES = ("normal", "xavier", "kaiming", "orthogonal")
 GPU_GENS = (0, 30, 40, 50)
 INFER_MODES = ("full", "patch", "both")
+SIGMA_MODES = ("random", "fixed")  # 推論の n の sigma の決め方（2026-10-12）
 BLENDS = ("uniform", "hann")
 HAAR_LEVELS = 3  # wavelet G は 2**3 の倍数の入力が必要
 
@@ -389,6 +406,7 @@ def check_values(train, mode, machine):
     if train["data.patches_per_slice"] < 1: P.append("data.patches_per_slice ≥ 1")
     if mode["sampling"] == "paper" and train["data.patches_per_slice"] != 1: P.append("sampling=paper のときは data.patches_per_slice を 1 にする（paper は固定集合を index で走査するので適用しない）")
     if train["data.hu_min"] >= train["data.hu_max"]: P.append("data.hu_min < data.hu_max")
+    if not (0.0 < train["noise.sigma_hu_min"] <= train["noise.sigma_hu_max"]): P.append(f"noise.sigma_hu_min / max は 0 < min ≤ max: {train['noise.sigma_hu_min']} / {train['noise.sigma_hu_max']}")
     if train["log.print_freq"] < 1 or train["log.image_freq"] < 1: P.append("log.print_freq / image_freq ≥ 1（step）")
     if train["log.n_images"] < 1: P.append("log.n_images ≥ 1")
     if train["log.n_full_random"] < 0: P.append("log.n_full_random ≥ 0")
@@ -407,6 +425,7 @@ def check_values(train, mode, machine):
     if mode["netG"] not in NETGS: P.append(f"netG は {NETGS}")
     if mode["netD"] not in NETDS: P.append(f"netD は {NETDS}")
     if mode["task"] not in TASKS: P.append(f"task は {TASKS}")
+    if mode["task"] == "sr" and mode["noise_input"]: P.append("task: sr では noise_input を false にする（n は degrade 用。sr.yaml の mode: か --noise_input false。フォールバックしない。2026-10-12）")
     if mode["d_pack"] not in D_PACKS: P.append(f"d_pack は {D_PACKS}")
     elif mode["d_pack"] == 2:  # PacGAN-2: batch を前半 / 後半で組にする（サンプル i と i + B/2）。フォールバックせず起動時に止める（2026-10-12）
         if bs % 2: P.append(f"d_pack=2 では optim.batch_size ({bs}) を偶数にする（batch の前半と後半を組にするため）")
@@ -479,6 +498,9 @@ def check_infer_values(infer):
     if infer["batch_slices"] < 1: P.append("batch_slices ≥ 1")
     if infer["io.read_workers"] < 0 or infer["io.write_workers"] < 0: P.append("io.read_workers / write_workers ≥ 0（0 = 直列）")
     if infer["dicom.rescale_slope"] == 0: P.append("dicom.rescale_slope ≠ 0")
+    if infer["noise.sigma_mode"] not in SIGMA_MODES: P.append(f"noise.sigma_mode は {SIGMA_MODES}")
+    if infer["noise.sigma_hu_fixed"] <= 0: P.append("noise.sigma_hu_fixed は正")
+    if infer["noise.n_draws"] < 1: P.append("noise.n_draws ≥ 1")
     _problems_to_error("infer values", P)
 
 

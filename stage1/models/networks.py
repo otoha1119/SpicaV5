@@ -1,3 +1,6 @@
+import math
+import zlib
+
 import torch
 import torch.nn as nn
 from torch.nn import init
@@ -20,7 +23,9 @@ class Identity(nn.Module):
 class ResidualGenerator(nn.Module):
     """[SpicaV5] Residual 化（段階 5-1、2026-09-11）: G(z) = z + F(z)。F は包んだ generator（線形出力）で、その生出力が残差 R。
     損失は変えない（fidelity ‖G(z) − z‖² = ‖F(z)‖²）。入出力のチャネル数が同じときだけ使える。state_dict のキーには inner. が付く
-    （非 residual の重みを residual 構成に strict load すると明示的に落ちる）。mode.yaml の residual で切替、false なら包まない。"""
+    （非 residual の重みを residual 構成に strict load すると明示的に落ちる）。mode.yaml の residual で切替、false なら包まない。
+    noise_input（段階 5-5、2026-10-12）と併用するときは inner が NoiseInputGenerator で、G(z) = z + F(cat[z, n])（足すのは z だけ。n は inner が連結する）。
+    forward のキーワード引数（n=）は inner に素通しする。"""
 
     def __init__(self, inner, input_nc, output_nc):
         super().__init__()
@@ -28,8 +33,97 @@ class ResidualGenerator(nn.Module):
             raise ValueError(f"residual は input_nc == output_nc が必要です: {input_nc} != {output_nc}")
         self.inner = inner
 
-    def forward(self, x):
-        return x + self.inner(x)
+    def forward(self, x, **kw):
+        return x + self.inner(x, **kw)
+
+
+class NoiseInputGenerator(nn.Module):
+    """[SpicaV5] 乱数画像 n の入力（段階 5-5、2026-10-12、ユーザー採用。論文 Park 2019 には無い独自機構）:
+    F(cat[x, n])。n = randn(B,1,H,W) × sigma（1 ch の白色ガウス、x と同じ大きさ）を x にチャネル連結して包んだ generator F に入れる。
+    F の 1 層目の入力は input_nc + 1（define_G が F をこのチャネル数で組む）。residual と併用するときは ResidualGenerator が外側で z を足す。
+    損失は不変（fidelity ‖G(z) − z‖² は n を含む G の出力で自動的に計算される）。state_dict のキーには inner. が付く。
+
+    sigma は HU で設定し（train.yaml noise.sigma_hu_min / max）、正規化空間では sigma = sigma_hu / ((hu_max − hu_min) / 2)。
+      学習（forward に n を渡さない）: サンプルごとに sigma_hu を log-uniform [min, max] から引き、n も毎回引く（torch のグローバル RNG。学習は毎回ランダム）
+      推論・preview（再現性）: 呼ぶ側が slice_noise(name, hw, device, ...) で **スライス名から決まる seed**（zlib.crc32。Python の hash() はプロセスごとに変わるので使わない）
+        と、その seed から引いた sigma_hu（sigma_mode random）または固定値（fixed）で n を作り、forward(x, n=n) で渡す。
+        n は CPU の torch.Generator で作る（cuda / cpu で同じ n）。draw k（n_draws 用）は seed + k。sigma は draw によらず同じ（n の効きだけを見る）。
+        patch 推論は 1 スライスにつき 512 全体の n を 1 枚作り、各 patch はその対応領域を切り出して使う（patch ごとに独立に引くと重なりの平均で粒が薄まる）。
+    直近の学習 batch の sigma_hu は last_sigma_hu（TensorBoard diag/sigma_hu 用）。"""
+
+    def __init__(self, inner, sigma_hu_min, sigma_hu_max, hu_min, hu_max):
+        super().__init__()
+        if not (0.0 < sigma_hu_min <= sigma_hu_max):
+            raise ValueError(f"noise.sigma_hu_min / max は 0 < min ≤ max: {sigma_hu_min} / {sigma_hu_max}")
+        if hu_min >= hu_max:
+            raise ValueError(f"hu_min < hu_max: {hu_min} / {hu_max}")
+        self.inner = inner
+        self.sigma_hu_min = float(sigma_hu_min)
+        self.sigma_hu_max = float(sigma_hu_max)
+        self.hu_per_unit = (float(hu_max) - float(hu_min)) / 2.0  # 正規化 [−1,1] の 1.0 が何 HU か
+        self.last_sigma_hu = None
+
+    # ---- 再現用 API（推論・preview・crop が使う）----
+    @staticmethod
+    def slice_seed(name):
+        """スライス名（例 PCD-002-215。拡張子なしの stem）→ 決定的な 32bit 整数。"""
+        return zlib.crc32(str(name).encode("utf-8")) & 0xFFFFFFFF
+
+    def _sigma_hu_from_u(self, u):
+        """u ∈ [0,1) → log-uniform [sigma_hu_min, sigma_hu_max]。"""
+        lo, hi = math.log(self.sigma_hu_min), math.log(self.sigma_hu_max)
+        return math.exp(lo + u * (hi - lo))
+
+    def slice_noise(self, name, hw, device, sigma_mode="random", sigma_hu_fixed=None, draw=0):
+        """スライス名から決定的に n を作る。戻り値 (n (1,1,H,W) on device, seed, sigma_hu)。
+        generator は seed + draw で初期化し、先頭の rand 1 個を sigma 用の u（draw 0 のときだけ使う。sigma は draw によらず draw 0 のもの）、続く randn を n に使う。
+        sigma_mode: random = draw 0 の u から log-uniform | fixed = sigma_hu_fixed（n の乱数列は random と同じなので、違いは振幅だけ）。"""
+        seed = self.slice_seed(name)
+        g0 = torch.Generator(device="cpu").manual_seed(seed)
+        u0 = torch.rand(1, generator=g0).item()
+        if sigma_mode == "random":
+            sigma_hu = self._sigma_hu_from_u(u0)
+        elif sigma_mode == "fixed":
+            if sigma_hu_fixed is None or sigma_hu_fixed <= 0:
+                raise ValueError(f"sigma_mode fixed には正の sigma_hu_fixed が必要です: {sigma_hu_fixed!r}")
+            sigma_hu = float(sigma_hu_fixed)
+        else:
+            raise ValueError(f"sigma_mode は random | fixed: {sigma_mode!r}")
+        g = g0 if draw == 0 else torch.Generator(device="cpu").manual_seed(seed + int(draw))
+        if draw != 0:
+            torch.rand(1, generator=g)  # draw 0 と同じ位置から randn を取る（先頭の u は捨てる）
+        h, w = hw
+        n = torch.randn(1, 1, int(h), int(w), generator=g) * (sigma_hu / self.hu_per_unit)
+        return n.to(device), seed, sigma_hu
+
+    def random_noise(self, x):
+        """学習用: x (B,1,H,W) と同じ形の n を、サンプルごとの log-uniform sigma で引く（グローバル RNG、x のデバイス）。sigma_hu を last_sigma_hu に残す。"""
+        b = x.shape[0]
+        lo, hi = math.log(self.sigma_hu_min), math.log(self.sigma_hu_max)
+        sigma_hu = torch.exp(lo + torch.rand(b, device=x.device, dtype=x.dtype) * (hi - lo))  # (B,)
+        self.last_sigma_hu = sigma_hu.detach()
+        n = torch.randn(b, 1, x.shape[-2], x.shape[-1], device=x.device, dtype=x.dtype) * (sigma_hu / self.hu_per_unit).view(b, 1, 1, 1)
+        return n
+
+    def forward(self, x, n=None):
+        """n を渡さなければ毎回ランダム（学習）。渡せばそれを使う（推論・preview の再現用。形は x と同じ (B,1,H,W)）。"""
+        if n is None:
+            n = self.random_noise(x)
+        elif n.shape != (x.shape[0], 1, x.shape[-2], x.shape[-1]):
+            raise ValueError(f"n の形 {tuple(n.shape)} が x {tuple(x.shape)} と合いません（(B,1,H,W)）")
+        return self.inner(torch.cat([x, n.to(x.dtype)], dim=1))
+
+
+def noise_wrapper(net):
+    """G の包みの中から NoiseInputGenerator を探して返す（無ければ None）。DDP / torch.compile / ResidualGenerator の包みを剥がして .inner を辿る。
+    呼ぶ側（monitor / inference_dir / crop_patches）はこれで「n あり」を判別し、再現用の n を slice_noise で作って netG(x, n=n) に渡す。"""
+    net = net.module if hasattr(net, "module") else net
+    net = net._orig_mod if hasattr(net, "_orig_mod") else net
+    while net is not None:
+        if isinstance(net, NoiseInputGenerator):
+            return net
+        net = getattr(net, "inner", None)
+    return None
 
 
 def get_norm_layer(norm_type="instance"):
@@ -146,7 +240,7 @@ def init_net(net, init_type="normal", init_gain=0.02):
     return net
 
 
-def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, init_type="normal", init_gain=0.02, final_norm_act=False, residual=False):
+def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, init_type="normal", init_gain=0.02, final_norm_act=False, residual=False, noise_input=False, sigma_hu=None, hu=None):
     """Create a generator
 
     Parameters:
@@ -159,24 +253,32 @@ def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, in
         init_type (str)    -- the name of our initialization method.
         init_gain (float)  -- scaling factor for normal, xavier and orthogonal.
 
+    [SpicaV5] noise_input（段階 5-5、2026-10-12）: true なら F の 1 層目を input_nc + 1 ch で組み、NoiseInputGenerator で包む（sigma_hu = (min, max) [HU]、hu = (hu_min, hu_max) が必須）。
+    residual と併用するときの包みの順は ResidualGenerator(NoiseInputGenerator(F))（G(z) = z + F(cat[z, n])。state_dict のキーは inner.inner.…）。
+
     Returns a generator
     """
     net = None
     norm_layer = get_norm_layer(norm_type=norm)
+    f_in = input_nc + 1 if noise_input else input_nc  # [SpicaV5] n を 1 ch 連結する分
 
     if netG == "resnet_9blocks":
-        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
+        net = ResnetGenerator(f_in, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
     elif netG == "resnet_6blocks":
-        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6)
+        net = ResnetGenerator(f_in, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6)
     elif netG == "unet_128":
-        net = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+        net = UnetGenerator(f_in, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
     elif netG == "unet_256":
-        net = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+        net = UnetGenerator(f_in, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
     elif netG == "wavelet":  # [SpicaV5] Park et al. 2019 (deep convolutional framelet)。論文どおり BatchNorm 固定のため norm_layer / use_dropout は使わない
-        net = WaveletGenerator(input_nc, output_nc, ngf=ngf, final_norm_act=final_norm_act)
+        net = WaveletGenerator(f_in, output_nc, ngf=ngf, final_norm_act=final_norm_act)
     else:
         raise NotImplementedError("Generator model name [%s] is not recognized" % netG)
-    if residual:  # [SpicaV5] 段階 5-1: G(z) = z + F(z)（mode.yaml residual）
+    if noise_input:  # [SpicaV5] 段階 5-5: F(cat[z, n])（mode.yaml noise_input）
+        if sigma_hu is None or hu is None:
+            raise ValueError("noise_input には sigma_hu=(sigma_hu_min, sigma_hu_max) と hu=(hu_min, hu_max) が必要です")
+        net = NoiseInputGenerator(net, sigma_hu[0], sigma_hu[1], hu[0], hu[1])
+    if residual:  # [SpicaV5] 段階 5-1: G(z) = z + F(z)（mode.yaml residual）。noise_input のときは z + F(cat[z, n])
         net = ResidualGenerator(net, input_nc, output_nc)
     return net
 

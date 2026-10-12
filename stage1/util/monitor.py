@@ -10,6 +10,7 @@ junyanz の util/visualizer.py（wandb / HTML）は使わない。train.py は�
      loss/D, loss/G_GAN, loss/G_fid, loss/G_total（= G_GAN + λ·G_fid）
      diag/D_real, diag/D_fake（E[D(x)], E[D(G(z))]。最適で 1 − p_G/p_x。D_fake の急落 = KL 発散の兆候）
      diag/d_in_HU（mean|G(z) − z| を HU 換算。恒等退行 ≈ 0 / 暴走の監視）
+     diag/sigma_hu（noise_input のときだけ。直近 batch の n の sigma [HU] の平均。段階 5-5、2026-10-12）
      time/sec_per_step, time/data_sec_per_step（データ律速の検出）
      train/lr（epoch ごと）
      images/current（いま学習中のバッチ先頭 n_images 枚）, images/fixed（学習開始時に固定した同じ patch）
@@ -23,6 +24,10 @@ junyanz の util/visualizer.py（wandb / HTML）は使わない。train.py は�
                PCD / EID-like / 残差 R = G(z) − z で保存（uint16。pcd/eidlike は HU + hu_offset、R は 32768 + ΔHU）。TB にも images/full/<slice>
                （画像パネルは stored = HU + hu_offset、差分パネルは 32768 + ΔHU。TB は 8bit しか描けないため厳密値はこちら）
   loss_log.txt: print_freq ごとの損失（テキスト。grep 用の保険）
+
+【乱数画像 n（mode.yaml noise_input、2026-10-12）】 epoch 末のフル画像（save_full_images）は再現用に **スライス名の seed**（networks.NoiseInputGenerator.slice_noise、sigma_mode random）で n を作って netG(x, n=n) に渡す。
+   固定スライスは名前が同じなので毎 epoch 同じ n（epoch 間で比較できる）、ランダムスライスもそのスライス名の seed（推論の sigma_mode random と同じ n になる）。
+   学習中の 128 patch グリッド（log_images）は変更なし（netG(x) = n は毎回ランダム）。
 
 【表示の線形範囲】 TB の 8bit 表示と preview パネルは HU を [display_hu_min, display_hu_max] で線形に 0..白へ（窓は掛けない。既定 −1400..2100 HU = stored 0..3500）。
    差分パネル（G(z) − z）はカラー: 白 = 0 HU（変化なし）、純青 = −diff_range_hu（G が HU を下げた）、純赤 = +diff_range_hu（上げた）。
@@ -40,6 +45,7 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 
 from data.ct_dataset import denormalize, residual_stored, write_png
+from models.networks import noise_wrapper
 from util.panel import build_panel, full_labels
 from util.task_names import names as task_names
 from util.residual_color import colorbar_rgb01, residual_rgb01, rgb_to_bgr
@@ -116,6 +122,9 @@ class TrainMonitor:
         if "G_GAN" in losses and "G_fid" in losses:
             self.tb.add_scalar("loss/G_total", losses["G_GAN"] + self.opt.lambda_fid * losses["G_fid"], total_iters)
         self.tb.add_scalar("diag/d_in_HU", d_in_hu, total_iters)
+        nw = noise_wrapper(model.netG)
+        if nw is not None and nw.last_sigma_hu is not None:  # noise_input: 直近 batch の sigma_hu（batch 平均）
+            self.tb.add_scalar("diag/sigma_hu", float(nw.last_sigma_hu.float().mean()), total_iters)
         self.tb.add_scalar("time/sec_per_step", t_comp, total_iters)
         self.tb.add_scalar("time/data_sec_per_step", t_data, total_iters)
         with open(self.log_path, "a", encoding="utf-8") as f:
@@ -186,9 +195,19 @@ class TrainMonitor:
         net = model.netG
         was_training = net.training
         net.eval()
+        nw = noise_wrapper(net)  # noise_input のときだけ非 None
+        noise_note = []
         with torch.no_grad():
             a = full["A"].to(model.device)
-            g = torch.cat([net(a[i : i + 1]) for i in range(a.shape[0])])  # 1 枚ずつ（512 なのでメモリを抑える）
+            outs = []
+            for i in range(a.shape[0]):  # 1 枚ずつ（512 なのでメモリを抑える）
+                if nw is None:
+                    outs.append(net(a[i : i + 1]))
+                else:  # 再現用: スライス名の seed から n（固定スライスは毎 epoch 同じ n、ランダムはそのスライス名の seed。推論の sigma_mode random と同じ）
+                    n, seed, sigma_hu = nw.slice_noise(Path(full["paths"][i]).stem, a.shape[-2:], a.device)
+                    outs.append(net(a[i : i + 1], n=n))
+                    noise_note.append(f"{Path(full['paths'][i]).stem}: seed {seed} sigma {sigma_hu:.1f}HU")
+            g = torch.cat(outs)
         net.train(was_training)
         to_hu = lambda t: (t.detach().float().cpu() + 1.0) / 2.0 * (o.hu_max - o.hu_min) + o.hu_min
         A, G = to_hu(a), to_hu(g)
@@ -226,7 +245,7 @@ class TrainMonitor:
                 write_png(d / f"{ep}_panel.png", rgb_png(panel01))
             else:
                 write_png(preview_dir(self.run_dir, "random") / f"{ep}_{stem}.png", rgb_png(panel01))  # preview_random/epoch_NNN_<slice>.png（パネルだけ）
-        self.write(f"saved full-size images ({len(full['paths'])} slices) -> {out_dir}")
+        self.write(f"saved full-size images ({len(full['paths'])} slices) -> {out_dir}" + (f" | n: {'; '.join(noise_note)}" if noise_note else ""))
 
     def close(self):
         self.tb.flush()

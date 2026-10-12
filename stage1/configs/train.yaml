@@ -37,6 +37,10 @@ data:
   hu_min: -1400         # 正規化窓 [−1400, 4096] → [−1, 1]
   hu_max: 4096
 
+noise:                  # 乱数画像 n の振幅（mode.yaml noise_input: true のときだけ使われる。false でもキーは必須。段階 5-5、2026-10-12）
+  sigma_hu_min: 15.0    # 学習ではサンプルごとに log-uniform [min, max] HU から sigma を引く。正規化空間では sigma_hu / ((hu_max − hu_min) / 2)（= ÷2748）
+  sigma_hu_max: 60.0    # 仮決め（docs/decisions/20261012: 中央 30 HU は冠動脈 CTA の EID の一般値で未測定。実測後は両端を同倍率でずらし比 ×4 を維持）
+
 log:
   # 単位: print_freq / image_freq は step（iteration。batch_size 枚で 1 step）、save_latest_freq は画像枚数（junyanz 由来）
   print_freq: 100         # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step）

@@ -17,6 +17,12 @@ max_slices: 0           # 0 で全スライス。動作確認は 4 など
 save_residual: false    # 残差 R（0 HU = 32768）と表示用カラーも書くか。Stage 2 用のデータ生成では不要（既定 false）。確認したいときは bash start.sh infer --save_residual true
 save_panel: false       # 表示用パネル [EID-like | PCD | R + ゲージ]（学習の output_images/preview_* と同じ正規化表示。util/panel.py）も <mode>_panel/ に書くか。学習中の目視確認用。既定 false（確認したいときは bash start.sh infer --save_panel true --max_slices 1）
 
+noise:                  # 乱数画像 n（run の launch の mode.noise_input が true のときだけ意味を持つ。false の run に n_draws > 1 や fixed を指定するとエラー。段階 5-5、2026-10-12）
+  sigma_mode: random    # random（スライス名の seed から log-uniform [sigma_hu_min, max]。学習の preview と同じ n）| fixed（全スライス sigma_hu_fixed。粒の量の比較用: --noise_sigma_mode fixed --noise_sigma_hu_fixed 15）
+  sigma_hu_fixed: 30.0  # sigma_mode fixed のときの sigma [HU]
+  n_draws: 1            # n の効きの確認用。1 = 通常。16 なら seed, seed+1, … で 16 回推論し、平均を通常の出力に、画素ごとの標準偏差 [HU] を <mode>_std/（16bit、stored = 整数化した HU）と std_stats.txt に。一様領域で平坦・血管の縁で盛り上がらなければ粒として使われている
+                        # スライスごとの seed と sigma_hu は出力の noise.yaml に記録される。full と patch は同じ n（patch は 512 全体の n から対応領域を切る）
+
 io:                     # 読み・計算・書きを同時に動かす（GPU は数 ms、PNG の読み書きが律速。特に HDD + WSL 越し）
   read_workers: 4       # PNG の読み込み・デコードを先読みするスレッド数（0 = 直列）
   write_workers: 2      # PNG の書き込みを非同期にするスレッド数（0 = 直列）

@@ -27,7 +27,8 @@ import torch
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from data.ct_dataset import denormalize, normalize, read_stored, write_png  # noqa: E402
-from inference_dir import DEVICES, build_generator, infer_full, resolve_device  # noqa: E402
+from inference_dir import DEVICES, add_generator_args, build_generator, infer_full, resolve_device  # noqa: E402
+from models.networks import noise_wrapper  # noqa: E402
 from util.panel import build_panel  # noqa: E402
 from util.residual_color import residual_rgb01, rgb_to_bgr  # noqa: E402
 from util.task_names import TASKS, names as task_names  # noqa: E402
@@ -41,11 +42,8 @@ def parse_args():
     req("--eid_dir", help="EID の根（machines.yaml eid_dir）")
     req("--out_dir", help="出力先（<repo>/output/<run>_<重みディレクトリ名>_crop_<実行時刻>/）")
     req("--device", choices=DEVICES)
-    # G の構成（run の launch.yaml から）
-    req("--netG"); req("--ngf", type=int); req("--input_nc", type=int); req("--output_nc", type=int); req("--norm")
-    p.add_argument("--final_norm_act", action="store_true")
-    p.add_argument("--residual", action="store_true")
-    req("--hu_offset", type=int); req("--hu_min", type=int); req("--hu_max", type=int)
+    # G の構成（run の launch.yaml から。inference_dir.py と共通。noise_input のときは --sigma_hu_min / max も）
+    add_generator_args(p)
     req("--task", choices=TASKS, help="run の launch.yaml の mode.task（degrade | sr）。どちらのモダリティが入力かと表示名")
     p.add_argument("--sr_scale", type=int, default=None); p.add_argument("--sr_interp", type=str, default=None); p.add_argument("--sr_input_size", type=int, default=None)  # run_infer.generator_argv が sr で付ける（crop は 1024 を直接読むので使わない。記録用）
     # 表示（run の launch.yaml の log.*）
@@ -100,11 +98,19 @@ def main():
         crop(read_stored(ref_path), rx, ry, a.patch, f"case{i} {nm['B']} {ref_name}")
         plan.append((i, in_name, ix, iy, in_path, ref_name, rx, ry, ref_path))
 
+    nw = noise_wrapper(net)  # noise_input の run だけ非 None
     for i, in_name, ix, iy, in_path, ref_name, rx, ry, ref_path in plan:
         stored = read_stored(in_path)
         x_np = normalize(stored, *hu)
+        x = torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0).to(device)
+        noise_note = ""
         with torch.no_grad():
-            y = infer_full(net, torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0).to(device))
+            if nw is None:
+                y = infer_full(net, x)
+            else:  # 再現用: スライス名の seed と、その seed からの sigma（推論の sigma_mode random・学習の preview と同じ n）
+                n, seed, sigma_hu = nw.slice_noise(in_name, x.shape[-2:], device)
+                y = infer_full(net, x, n=n)
+                noise_note = f" | n: seed {seed} sigma {sigma_hu:.1f}HU"
         in16 = denormalize(x_np, *hu)                       # 正規化窓でクリップした入力 A（R の基準。inference_dir と同じ）
         gen16 = denormalize(y[0, 0].cpu().numpy(), *hu)     # G(z)
         R = gen16.astype(np.int32) - in16.astype(np.int32)  # ΔHU（推論の *_R/ と同じ差）
@@ -122,7 +128,7 @@ def main():
         write_png(d / f"4_R_color_{tag_i}.png", rgb_to_bgr(quant(rgb_R)))
         cols = [up(np.repeat(g[..., None], 3, 2)) for g in (g_ref, g_gen, g_in)] + [up(rgb_R)]
         write_png(d / "panel.png", rgb_to_bgr(quant(build_panel(cols, labels, a.diff_range_hu))))
-        print(f"[crop] case{i}: {nm['A']} {in_name} ({ix},{iy}) / {nm['B']} {ref_name} ({rx},{ry}) | ΔHU min {int(c_R.min())} max {int(c_R.max())} mean {float(c_R.mean()):.1f} -> {d}")
+        print(f"[crop] case{i}: {nm['A']} {in_name} ({ix},{iy}) / {nm['B']} {ref_name} ({rx},{ry}) | ΔHU min {int(c_R.min())} max {int(c_R.max())} mean {float(c_R.mean()):.1f}{noise_note} -> {d}")
     print(f"[crop] done: {len(a.case)} cases -> {out_root}")
 
 
