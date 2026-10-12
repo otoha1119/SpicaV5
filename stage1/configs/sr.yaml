@@ -14,8 +14,8 @@ split_file: configs/splits/eid_v5.yaml   # A 側（EID）の症例分割（train
                                          # train = 学習、val = epoch 末のランダムプレビュー（log.n_full_random）、test = 読まない（例外は log.full_slice の 1 枚 = 目視の holdout）。
                                          # ディスク上の症例が全部どれかのリストに入っていないと起動前にエラー（Stage 2 と同じ規則）
 
-b_exclude_cases: [PCD-001, PCD-002, PCD-019, PCD-020]   # B 側（PCD1024）から外す症例（Stage 2 の test_cases と同じ holdout。「PCD を劣化 → SR → PCD1024 と比較」の定量評価を後でやるときに汚さない）。
-                                                        # 全 20 症例を使うなら []。ディスクに無い名前はエラー（黙って無視しない）。上書き: --b_exclude_cases PCD-001,PCD-002 / --b_exclude_cases ""
+b_exclude_cases: []     # B 側（PCD1024）から外す症例。ユーザー決定 2026-10-12: **外さない**（SR モードでは PCD は分布の参照先と比較表示にしか使わず、PCD 側で定量評価しないため全 20 症例を B に使う）。
+                        # Stage 2 の test と揃えて holdout にするなら [PCD-001, PCD-002, PCD-019, PCD-020]。ディスクに無い名前はエラー。上書き: --b_exclude_cases PCD-001,PCD-002 / --b_exclude_cases ""
 
 train:                      # train.yaml の差し替え（書けるのは train.yaml にあるキーだけ。入れ子も同じ書き方）。ここに無いキーは train.yaml の値のまま
   data:
