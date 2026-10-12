@@ -12,7 +12,10 @@ Stage 1 の util/monitor.py に相当する。画像は学習中の 128 patch �
      val/rmse, val/ssim, val/psnr   epoch 末、val 症例のフル 1024（出力 vs 教師）。rmse は正規化空間（0 へ）、ssim は 1 へ、psnr は dB（大きいほど良い）
      val/best_<metric>, val/best_epoch   best/ の記録（train.yaml log.best_metric。更新した epoch は loss_log.txt に [best] 行）
      val/rmse_input, val/ssim_input, val/psnr_input   参照線: 入力そのまま vs 教師（何もしない場合）。出力がこれを超えなければ学習の意味が無い
+     loss/gan_G, loss/D, loss/D_real, loss/D_fake, diag/gan_ratio   実 EID 枝（mode real_eid_branch、2026-10-13）だけ。gan_G = U-Net に戻す GAN 損失（λ を掛ける前）、D = ½(D_real + D_fake)。
+                                    diag/gan_ratio = adv.lambda_gan · gan_G / mse（区間平均の比。MSE が主役なら ≪ 1。loss/<mse> は mse だけで、U-Net の損失全体ではない）
      images/current                 image_freq step ごと: いま学習中のバッチ先頭 n_images 枚の 128 patch。各行 [EID-like1024 (input) | PCD-like1024 (output) | PCD1024 (teacher)]
+     images/current_eid             実 EID 枝だけ: いまのステップの実 EID 小片先頭 n_images 枚。各行 [EID1024 crop (input, x2) | PCD-like (output)]（教師は無い）
      images/fixed                   同じ間隔: 固定スライス（log.full_slice）から patch_seed で決めた位置の n_images 枚（同じ patch で推移を追う。eval で通す）
      images/full/fixed              epoch 末（save_epoch_freq ごと）: 固定スライス（train.yaml log.full_slice、PCD-002-236）の 5 列パネル（並びは 2026-09-10 ユーザー確定）
                                     [EID-like1024 (input) | PCD-like1024 (output) | PCD1024 (teacher) | 実 EID（log.eid_slice）→ PCD-like1024 | 実 EID1024（元の EID）]（util/panel.py。8bit、HU を display_hu_min..max で線形）
@@ -44,9 +47,13 @@ to_u8 = lambda x01: (np.clip(x01, 0.0, 1.0) * 255.0).round().astype(np.uint8)  #
 
 
 class TrainMonitor:
-    def __init__(self, run_dir, train, loss_name, batch_size, dataset_size):
-        """train は launch の実効値（平坦 dict。hu_* と display_hu_* を使う）。"""
+    GAN_KEYS = ("gan_G", "D", "D_real", "D_fake")  # 実 EID 枝の損失（RegressionModel.optimize の戻り値のキー）
+
+    def __init__(self, run_dir, train, loss_name, batch_size, dataset_size, real_eid_branch=False):
+        """train は launch の実効値（平坦 dict。hu_* と display_hu_* を使う）。real_eid_branch なら GAN 系の scalar と images/current_eid も出す。"""
         self.run_dir = Path(run_dir)
+        self.real_eid_branch = real_eid_branch
+        self.lambda_gan = train["adv.lambda_gan"] if real_eid_branch else None
         self.hu = (train["data.hu_offset"], train["data.hu_min"], train["data.hu_max"])
         self.hu_min, self.hu_max = train["data.hu_min"], train["data.hu_max"]
         self.disp_min, self.disp_max = train["log.display_hu_min"], train["log.display_hu_max"]
@@ -63,6 +70,8 @@ class TrainMonitor:
 
     def _reset_window(self):
         self.win = {"loss": 0.0, "mse": 0.0, "ssim": 0.0, "t_comp": 0.0, "t_data": 0.0, "n": 0}
+        if self.real_eid_branch:
+            self.win.update({k: 0.0 for k in self.GAN_KEYS})
 
     def epoch_bar(self, loader, epoch, total_epochs):
         self.bar = tqdm(loader, total=len(loader), unit="img", unit_scale=self.batch_size, dynamic_ncols=True, mininterval=0.5,
@@ -77,6 +86,9 @@ class TrainMonitor:
     def accumulate(self, losses, t_comp, t_data):
         w = self.win
         w["loss"] += losses["loss"]; w["mse"] += losses["mse"]; w["ssim"] += losses["ssim"]
+        if self.real_eid_branch:
+            for k in self.GAN_KEYS:
+                w[k] += losses[k]
         w["t_comp"] += t_comp; w["t_data"] += t_data; w["n"] += 1
 
     def step(self, epoch, total_iters):
@@ -91,9 +103,17 @@ class TrainMonitor:
         self.tb.add_scalar("train/ssim", sim, total_iters)
         self.tb.add_scalar("time/sec_per_step", w["t_comp"] / n, total_iters)
         self.tb.add_scalar("time/data_sec_per_step", w["t_data"] / n, total_iters)
+        gan_txt = ""
+        if self.real_eid_branch:  # 実 EID 枝の損失と、λ·gan_G / mse の比（2026-10-13）
+            g = {k: w[k] / n for k in self.GAN_KEYS}
+            ratio = self.lambda_gan * g["gan_G"] / max(w["mse"] / n, 1e-12)
+            for k in self.GAN_KEYS:
+                self.tb.add_scalar(f"loss/{k}", g[k], total_iters)
+            self.tb.add_scalar("diag/gan_ratio", ratio, total_iters)
+            gan_txt = f" gan_G: {g['gan_G']:.4f} D: {g['D']:.4f} D_real: {g['D_real']:.4f} D_fake: {g['D_fake']:.4f} gan_ratio: {ratio:.3e}"
         if self.bar is not None:
-            self.bar.set_postfix_str(f"{self.loss_name} {loss:.5f} | rmse {rmse:.4f} | ssim {sim:.4f} | data {w['t_data'] / n * 1000:.0f} ms", refresh=False)
-        self.log.write(f"(epoch: {epoch}, iters: {total_iters}, time: {w['t_comp'] / n:.3f}, data: {w['t_data'] / n:.3f}) {self.loss_name}: {loss:.6f} rmse: {rmse:.5f} ssim: {sim:.4f}\n")
+            self.bar.set_postfix_str(f"{self.loss_name} {loss:.5f} | rmse {rmse:.4f} | ssim {sim:.4f}" + (f" | gan_G {w['gan_G'] / n:.3f} D {w['D'] / n:.3f}" if self.real_eid_branch else "") + f" | data {w['t_data'] / n * 1000:.0f} ms", refresh=False)
+        self.log.write(f"(epoch: {epoch}, iters: {total_iters}, time: {w['t_comp'] / n:.3f}, data: {w['t_data'] / n:.3f}) {self.loss_name}: {loss:.6f} rmse: {rmse:.5f} ssim: {sim:.4f}{gan_txt}\n")
         self.log.flush()
         self._reset_window()
 
@@ -120,23 +140,24 @@ class TrainMonitor:
 
     # ------------------------------------------------------------------ 128 patch グリッド（image_freq step ごと。TB だけ）
     PATCH_LABELS = ("EID-like (input)", "PCD-like (output)", "PCD1024 (teacher)")
+    EID_PATCH_LABELS = ("EID crop (real, up)", "PCD-like (output)")  # 実 EID 枝の images/current_eid（教師なし）
 
-    def _patch_grid(self, x, y, t):
-        """(n,1,p,p) 正規化 tensor ×3 → 各行 [input | output | teacher] のグリッド (H,W,3) uint8。上に列ラベル。表示は HU を display_hu_min..max で線形。"""
+    def _patch_grid(self, cols, labels):
+        """(n,1,p,p) 正規化 tensor の列（例 [input, output, teacher]）→ 各行にそれらを並べたグリッド (H,W,3) uint8。上に列ラベル。表示は HU を display_hu_min..max で線形。"""
         rows = []
-        for i in range(x.shape[0]):
-            for tsr in (x, y, t):
+        for i in range(cols[0].shape[0]):
+            for tsr in cols:
                 g = self._lin01(self._stored(tsr[i : i + 1]))  # (p,p,3)
                 rows.append(torch.from_numpy(g).permute(2, 0, 1))
         pad = 2
-        grid = make_grid(torch.stack(rows), nrow=3, padding=pad, pad_value=0.5).permute(1, 2, 0).numpy()  # (H, 3p+4*pad, 3)
-        p = x.shape[-1]
+        grid = make_grid(torch.stack(rows), nrow=len(cols), padding=pad, pad_value=0.5).permute(1, 2, 0).numpy()  # (H, k·p+(k+1)·pad, 3)
+        p = cols[0].shape[-1]
         scale = 0.45
-        while scale > 0.25 and max(cv2.getTextSize(s, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)[0][0] for s in self.PATCH_LABELS) > p - 4:
+        while scale > 0.25 and max(cv2.getTextSize(s, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)[0][0] for s in labels) > p - 4:
             scale -= 0.05  # 列幅（patch_size）に収まるまで文字を小さく
         blank = np.ones((22, pad, 3), np.float32)
         header = [blank]
-        for s in self.PATCH_LABELS:
+        for s in labels:
             header += [label_strip(p, s, height=22, scale=scale), blank]
         return to_u8(np.concatenate([np.concatenate(header, axis=1), grid], axis=0))
 
@@ -145,10 +166,13 @@ class TrainMonitor:
         n = fixed["input"].shape[0]
         if model.last is not None:
             x, y, t = (a[:n].cpu() for a in model.last)
-            self.tb.add_image("images/current", self._patch_grid(x, y, t), total_iters, dataformats="HWC")
+            self.tb.add_image("images/current", self._patch_grid([x, y, t], self.PATCH_LABELS), total_iters, dataformats="HWC")
+        if self.real_eid_branch and model.last_eid is not None:  # 実 EID 枝: [実 EID 小片（補間済み）| 出力]（2026-10-13）
+            xe, ye = (a[:n].cpu() for a in model.last_eid)
+            self.tb.add_image("images/current_eid", self._patch_grid([xe, ye], self.EID_PATCH_LABELS), total_iters, dataformats="HWC")
         y_f = model.predict(fixed["input"])  # eval で通す（BN は無いが学習の勾配を汚さない）
         model.net.train()
-        self.tb.add_image("images/fixed", self._patch_grid(fixed["input"], y_f, fixed["target"]), total_iters, dataformats="HWC")
+        self.tb.add_image("images/fixed", self._patch_grid([fixed["input"], y_f, fixed["target"]], self.PATCH_LABELS), total_iters, dataformats="HWC")
 
     # ------------------------------------------------------------------ フル画像（epoch 末。生 16bit / preview / TB）
     def _stored(self, t):

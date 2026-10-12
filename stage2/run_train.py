@@ -26,9 +26,12 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import MACHINE, MODE, TRAIN, ConfigError, apply_overrides, check_train_values, validate, validate_shared  # noqa: E402
-from data.pair_dataset import check_split_on_disk  # noqa: E402
-from util.run_paths import LAUNCH_FILE, ckpt_path, latest_launch, run_name, saved_tags  # noqa: E402
+from configs.schema import LEGACY_MODE_DEFAULTS, MACHINE, MODE, TRAIN, ConfigError, apply_overrides, check_train_values, load_eid_split, resolve_eid_split_file, validate, validate_shared  # noqa: E402
+from data.eid_dataset import check_eid_crop, check_eid_split_on_disk  # noqa: E402
+from data.pair_dataset import check_split_on_disk, read_upsample_cfg  # noqa: E402
+from util.run_paths import CKPT_D, LAUNCH_FILE, ckpt_path, latest_launch, run_name, saved_tags  # noqa: E402
+
+REPO_ROOT = HERE.parent  # adv.eid_split_file の相対パスの基準（リポジトリ直下。コンテナでは /workspace）
 
 
 def start_tensorboard(run_dir, port):
@@ -72,18 +75,32 @@ def sections(train, mode, machine):
     return {"train": (train, TRAIN), "mode": (mode, MODE), "machine": (machine, MACHINE)}
 
 
-def _check_split(train, machine):
-    """症例リストとディスクの照合（未割当・欠落）。run ディレクトリを作る前に止める（空の run を残さない）。"""
+def _check_split(train, mode, machine):
+    """症例リストとディスクの照合（未割当・欠落）。run ディレクトリを作る前に止める（空の run を残さない）。
+    実 EID 枝（mode.real_eid_branch）なら adv.eid_split_file も解決（絶対パスに置換）して eid_dir と照合する（2026-10-13）。戻り値は実 EID の split（記録用。枝なしなら None）。"""
     try:
         check_split_on_disk(train, machine)
+        if mode["real_eid_branch"]:
+            resolve_eid_split_file(train, REPO_ROOT)
+            check_eid_crop(train, mode, read_upsample_cfg(machine["eidlike1024_dir"]))  # crop_eid × scale が U-Net に入るか（manifest の scale を読んでから）
+            return check_eid_split_on_disk(train, machine)
     except RuntimeError as e:
         raise ConfigError(str(e))
+    return None
+
+
+def eid_split_record(train, mode):
+    """launch.yaml に残す実 EID の分割の要約（ファイルと症例数）。枝なしなら None。"""
+    if not mode["real_eid_branch"]:
+        return None
+    split = load_eid_split(train["adv.eid_split_file"])
+    return {"file": train["adv.eid_split_file"], "n_train": len(split["train"]), "n_val": len(split["val"]), "n_test": len(split["test"])}
 
 
 def prepare_new(train, mode, machine, overrides, now):
     applied = apply_overrides(overrides, sections(train, mode, machine))
     check_train_values(train, mode, machine)
-    _check_split(train, machine)
+    _check_split(train, mode, machine)
     name = run_name(now)
     run_dir = Path(machine["stage2_checkpoints_dir"]) / name
     if run_dir.exists():
@@ -92,16 +109,25 @@ def prepare_new(train, mode, machine, overrides, now):
 
 
 def check_weights_match(weight_path, mode):
-    """net_G.pth の各テンソルの形が、実効 mode で組んだネットと一致するか（--base_ch 等を変えた再開をここで止める。launch を書く前）。"""
+    """net_G.pth の各テンソルの形が、実効 mode で組んだネットと一致するか（--base_ch 等を変えた再開をここで止める。launch を書く前）。
+    実 EID 枝なら同じディレクトリの net_D.pth も D の形と照合する（無ければ止める）。"""
     import torch
+    from models.discriminator import build_D
     from models.unet import build_net
 
-    saved = torch.load(weight_path, map_location="cpu", weights_only=True)
-    expect = build_net(mode).state_dict()
-    bad = [f"{k}: 重み {tuple(saved[k].shape) if k in saved else '無し'} ≠ 設定 {tuple(v.shape)}" for k, v in expect.items() if k not in saved or tuple(saved[k].shape) != tuple(v.shape)]
-    extra = [k for k in saved if k not in expect]
-    if bad or extra:
-        raise ConfigError(f"{weight_path} の形が実効設定（arch / base_ch / n_pool）と合いません: " + "; ".join(bad[:3] + [f"余分 {k}" for k in extra[:3]]) + ("" if len(bad) + len(extra) <= 3 else " ..."))
+    def compare(path, expect, what):
+        saved = torch.load(path, map_location="cpu", weights_only=True)
+        bad = [f"{k}: 重み {tuple(saved[k].shape) if k in saved else '無し'} ≠ 設定 {tuple(v.shape)}" for k, v in expect.items() if k not in saved or tuple(saved[k].shape) != tuple(v.shape)]
+        extra = [k for k in saved if k not in expect]
+        if bad or extra:
+            raise ConfigError(f"{path} の形が実効設定（{what}）と合いません: " + "; ".join(bad[:3] + [f"余分 {k}" for k in extra[:3]]) + ("" if len(bad) + len(extra) <= 3 else " ..."))
+
+    compare(weight_path, build_net(mode).state_dict(), "arch / base_ch / n_pool")
+    if mode["real_eid_branch"]:
+        d_path = Path(weight_path).with_name(CKPT_D)
+        if not d_path.is_file():
+            raise ConfigError(f"real_eid_branch=true ですが D の重みがありません: {d_path}（この checkpoint は実 EID 枝なしで学習された。resume で real_eid_branch は変えられない）")
+        compare(d_path, build_D().state_dict(), "D")
 
 
 def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
@@ -132,6 +158,12 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
     try:
         for section, cur, schema in (("train", train_yaml, TRAIN), ("mode", mode_yaml, MODE), ("machine", machine_yaml, MACHINE)):
             missing = [k for k in schema if k not in saved[section]]
+            legacy = [k for k in missing if section == "mode" and k in LEGACY_MODE_DEFAULTS]  # 導入前の run = その機構なしで学習された重み。今の yaml で補わず導入前の意味に（2026-10-13）
+            if legacy:
+                print("[run_train] 注意: run の mode に無いキー（導入前の run）は導入前の値で扱う: " + ", ".join(f"{k}={LEGACY_MODE_DEFAULTS[k]!r}" for k in legacy))
+                for k in legacy:
+                    saved[section][k] = LEGACY_MODE_DEFAULTS[k]
+                missing = [k for k in missing if k not in legacy]
             if missing:
                 print(f"[run_train] 注意: run の {section} に無いキー（run 作成後に追加）は今の yaml の値を使う: " + ", ".join(f"{k}={cur[k]!r}" for k in missing))
                 for k in missing:
@@ -150,9 +182,12 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
         diff = {k: (sv.get(k), v) for k, v in cur.items() if sv.get(k) != v}
         if diff:
             print(f"[run_train] 注意: 今の {section} 設定は checkpoint の実効設定と異なる（checkpoint の値を使う。変えるなら --flag で上書き）: {diff}")
+    saved_branch = mode["real_eid_branch"]
     applied = apply_overrides(overrides, sections(train, mode, machine))
+    if mode["real_eid_branch"] != saved_branch:  # D の重み・optimizer の有無が変わるので resume では変えられない（2026-10-13）
+        raise ConfigError(f"resume で real_eid_branch は変えられません（checkpoint は {saved_branch}、指定 {mode['real_eid_branch']}。D の重みの有無が変わる）。変えるなら新しい run を起動")
     check_train_values(train, mode, machine)
-    _check_split(train, machine)
+    _check_split(train, mode, machine)
     if Path(machine["stage2_checkpoints_dir"]) / a.resume != run_dir:
         raise ConfigError(f"再開時に stage2_checkpoints_dir を変えることはできません: {machine['stage2_checkpoints_dir']} != {run_dir.parent}")
     check_weights_match(weight_path, mode)  # launch を書く前に、重みと設定の食い違いを止める
@@ -203,6 +238,7 @@ def main():
         yaml.safe_dump(
             {"timestamp": now.isoformat(timespec="seconds"), "machine_name": a.machine,
              "train": train, "mode": mode, "machine": machine,  # 実効値（yaml + 上書き、平坦キー）。再開はこれを読む
+             "eid_split": eid_split_record(train, mode),  # 実 EID 枝の分割ファイル（絶対パス）と症例数（記録用。2026-10-13）。枝なしなら null
              "overrides": list(overrides), "applied": applied,
              "resume": a.resume, "resume_tag": a.resume_tag if a.resume else None, "base_launch": str(base) if base else None,
              "argv": argv},

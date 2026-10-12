@@ -43,3 +43,15 @@ log:
   preview_bits: 16        # preview_*/ のビット深度。16 = 表示範囲（stored 0〜3500）を 0..65535 に伸ばす（Stage 1 と同じ）| 8
   display_hu_min: -1400   # 表示の線形範囲（Stage 1 と同じ）。stored 0 = HU −1400 を黒
   display_hu_max: 2100    # stored 3500 = HU 2100 を白。窓は掛けない
+
+adv:                      # 実 EID 枝（mode.yaml real_eid_branch: true のときだけ使う。false なら読まない。2026-10-13。docs/plans/20260908_stage2-unet-implementation-spec.md §9）
+  lambda_gan: 0.001       # U-Net の損失 = mse + lambda_gan · gan_G。**仮**（MSE が主役になる値。TB diag/gan_ratio = lambda_gan · gan_G / mse を見て決める。目安 0.01〜0.1）
+  gan_mode: lsgan         # lsgan（最小二乗。単純で安定）| vanilla（BCE with logits）
+  lr_D: 0.0001            # D の Adam。**仮**（U-Net の 1e-3 より小さく）
+  beta1_D: 0.5            # GAN 慣行（Stage 1 と同じ）
+  beta2_D: 0.999
+  batch_eid: 16           # 1 step に U-Net → D に通す実 EID 小片の数。**仮** = optim.batch_size
+  crop_eid: 64            # 実 EID512 上の小片の一辺。×2 → 128 = 学習 patch と同じ大きさ（D は PatchGAN なので違ってもよい）
+  patches_per_slice_eid: 8   # 1 回読んだ実 EID512 から連続して切る小片の数（data.patches_per_slice と同じ仕組み。512 は 0.5 MB なので読みは軽いが同じ 8）
+  eid_split_file: configs/splits/eid_v5.yaml   # 実 EID の症例分割（train / val / test。bash start.sh split が作る Stage 1 と同じファイル）。実 EID 枝は train の症例だけから引く。
+                                               # val / test は読まない（例外は log.eid_slice の 1 枚。その症例 EID-049 は test にあること = train にあれば起動時エラー）。eid_dir の症例は全部どれかにあること

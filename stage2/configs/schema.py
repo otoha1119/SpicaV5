@@ -20,6 +20,7 @@ flag は「sh からの上書き」の名前としてだけ使う（Stage 1 の 
 """
 
 from collections import namedtuple
+from pathlib import Path
 
 Key = namedtuple("Key", "type flag doc")
 
@@ -70,6 +71,17 @@ TRAIN = {
     "log.n_full_random":           Key(int, "--n_full_random",           "epoch 末に書き出すランダムスライスの枚数（epoch ごとに別。val の症例だけから。0 で無し）"),
     "log.display_hu_min":          Key(int, "--display_hu_min",          "TensorBoard 画像の線形表示範囲の下限 HU（この値以下を黒）。Stage 1 と同じ −1400"),
     "log.display_hu_max":          Key(int, "--display_hu_max",          "同上の上限 HU（この値以上を白）。Stage 1 と同じ 2100（stored 3500）"),
+    # adv — 実 EID 枝（mode.yaml real_eid_branch: true のときだけ使う。false なら読まない。2026-10-13。docs/plans/20260908_stage2-unet-implementation-spec.md §9）
+    "adv.lambda_gan":             Key(float, "--lambda_gan",             "U-Net に戻す GAN 損失の重み（U-Net の損失 = mse + lambda_gan · gan_G）。MSE が主役になる小さい値（仮 0.001）。TB diag/gan_ratio = lambda_gan · gan_G / mse を見て決める"),
+    "adv.gan_mode":               Key(str,   "--gan_mode",               "GAN 損失: lsgan（最小二乗。単純で安定）| vanilla（BCE with logits）。D の最終層に活性化は無い"),
+    "adv.lr_D":                   Key(float, "--lr_D",                   "D の Adam の学習率（仮 1e-4。U-Net の 1e-3 より小さく）"),
+    "adv.beta1_D":                Key(float, "--beta1_D",                "D の Adam β1（GAN 慣行 0.5）"),
+    "adv.beta2_D":                Key(float, "--beta2_D",                "D の Adam β2（0.999）"),
+    "adv.batch_eid":              Key(int,   "--batch_eid",              "1 step に U-Net → D に通す実 EID 小片の数（仮 = optim.batch_size）"),
+    "adv.crop_eid":               Key(int,   "--crop_eid",               "実 EID512 上で切る小片の一辺（画素）。×scale 補間して U-Net に入れる（64 → 128 = 学習 patch と同じ大きさ）。crop_eid × scale は 2^n_pool の倍数"),
+    "adv.patches_per_slice_eid":  Key(int,   "--patches_per_slice_eid",  "1 回読んだ実 EID512 から連続して切る小片の数（data.patches_per_slice と同じ仕組み。位置は小片ごとに独立）"),
+    "adv.eid_split_file":         Key(str,   "--eid_split_file",         "実 EID（eid_dir）の症例分割 YAML（train / val / test の症例名リスト。stage1/make_split.py が書く形、bash start.sh split で生成。リポジトリ直下からの相対パスか絶対パス）。"
+                                                                         "実 EID 枝は **train の症例だけ**から小片を引く。val / test は読まない（例外は監視用 log.eid_slice の 1 枚。その症例は train に入っていてはならない）。eid_dir 直下の症例は全部どれかのリストにあること"),
 }
 
 # ---------------------------------------------------------------------------
@@ -84,7 +96,13 @@ MODE = {
     "final_act":      Key(str,  "--final_act",      "最終層の活性化: linear（論文、回帰）| tanh（出力を [−1,1] に縛る変種）"),
     "residual":       Key(bool, "--residual",       "true で 出力 = 入力 + net(入力)（変種。論文は false）"),
     "serial_batches": Key(bool, "--serial_batches", "true で sampler を index 決定的に（再現用）"),
+    "real_eid_branch": Key(bool, "--real_eid_branch", "true で実 EID 枝を付ける（2026-10-13。§9）: 実 EID512 の小片 → ×scale → U-Net → D（PatchGAN、models/discriminator.py）が対応の無い PCD1024 の小片（ペア枝の教師）と見分け、"
+                                                      "その GAN 損失 × train.yaml adv.lambda_gan を U-Net に戻す。false で MSE だけ（Stage 1 評価用プローブ）。net_D.pth の有無が変わるので resume で変更不可"),
 }
+
+# mode.yaml に後から追加したキーの「導入前の run」での意味（Stage 1 の LEGACY_MODE_DEFAULTS と同じ仕組み。2026-10-13）。
+# resume / 推論で run の launch（state.pth の config）にキーが無ければ、今の mode.yaml で補わず導入前の意味（その機構なしで学習された重み）にする
+LEGACY_MODE_DEFAULTS = {"real_eid_branch": False}
 
 # ---------------------------------------------------------------------------
 # configs/machines.yaml（リポジトリ直上、Stage 共通）のうち Stage 2 が使うキー。選択したマシンのエントリに対して検証（他のキーは無視）
@@ -128,6 +146,7 @@ ARCHS = ("unet_ilumenate",)
 INIT_TYPES = ("xavier_uniform", "torch")
 LOSSES = ("mse", "l1")
 FINAL_ACTS = ("linear", "tanh")
+GAN_MODES = ("lsgan", "vanilla")   # adv.gan_mode（実 EID 枝）
 
 
 # ---------------------------------------------------------------------------
@@ -377,5 +396,71 @@ def check_train_values(train, mode, machine):
     if mode["init_type"] not in INIT_TYPES: P.append(f"init_type は {INIT_TYPES}")
     if mode["loss"] not in LOSSES: P.append(f"loss は {LOSSES}")
     if mode["final_act"] not in FINAL_ACTS: P.append(f"final_act は {FINAL_ACTS}")
+    if mode["real_eid_branch"]:  # 実 EID 枝（2026-10-13）。false のときは adv.* を使わないので値域も見ない
+        if train["adv.lambda_gan"] <= 0: P.append("adv.lambda_gan は正（実 EID 枝を使わないなら mode.yaml real_eid_branch: false）")
+        if train["adv.gan_mode"] not in GAN_MODES: P.append(f"adv.gan_mode は {GAN_MODES}")
+        if train["adv.lr_D"] <= 0: P.append("adv.lr_D は正")
+        if not (0.0 <= train["adv.beta1_D"] < 1.0 and 0.0 <= train["adv.beta2_D"] < 1.0): P.append("adv.beta1_D / beta2_D は [0, 1)")
+        if train["adv.batch_eid"] < 1: P.append("adv.batch_eid ≥ 1")
+        if train["adv.crop_eid"] < 1: P.append("adv.crop_eid ≥ 1（crop_eid × scale が 2^n_pool の倍数かは manifest の scale を読んでから data/eid_dataset.py が検査）")
+        if train["adv.patches_per_slice_eid"] < 1: P.append("adv.patches_per_slice_eid ≥ 1")
+        if not train["adv.eid_split_file"]: P.append("adv.eid_split_file（実 EID の症例分割 YAML）を指定。bash start.sh split で作る")
     _check_machine(machine, P)
     _problems_to_error("train values", P)
+
+
+# ---------------------------------------------------------------------------
+# 実 EID の症例分割ファイル（adv.eid_split_file。Stage 1 の sr の split_file と同じ形・同じ規則。check_split は stage1/configs/schema.py から 2026-10-13 に複製）
+# ---------------------------------------------------------------------------
+SPLIT_KEYS = ("train", "val", "test")
+
+
+def resolve_eid_split_file(train, root):
+    """adv.eid_split_file を root（リポジトリ直下）基準で解決して存在を検査し、実効値を絶対パスに置き換える（launch.yaml にはそのパスが残る。Stage 1 の check_sr_values と同じ）。"""
+    sf = Path(train["adv.eid_split_file"])
+    sf = sf if sf.is_absolute() else Path(root) / sf
+    if not sf.is_file():
+        raise ConfigError(f"adv.eid_split_file がありません: {sf}（bash start.sh split で作る。実 EID 枝を使わないなら mode.yaml real_eid_branch: false）")
+    train["adv.eid_split_file"] = str(sf)
+    return sf
+
+
+def check_split(split, where):
+    """split_file の中身: train / val / test の文字列リスト（空リスト可）。重複・他のキー・型違いはエラー。戻り値 {kind: [case, ...]}。"""
+    if not isinstance(split, dict):
+        raise ConfigError(f"[{where}] トップレベルが dict ではありません")
+    P = []
+    missing = [k for k in SPLIT_KEYS if k not in split]
+    if missing:
+        P.append("キーがありません: " + ", ".join(missing))
+    out = {}
+    for k in SPLIT_KEYS:
+        v = split.get(k)
+        if k in split and not (isinstance(v, list) and all(isinstance(x, str) and x for x in v)):
+            P.append(f"{k} は症例名（文字列）のリスト")
+        else:
+            out[k] = list(v or [])
+    if not P:
+        seen = {}
+        for k in SPLIT_KEYS:
+            for c in out[k]:
+                if c in seen:
+                    P.append(f"症例 {c} が {seen[c]} と {k} の両方にあります")
+                seen[c] = k
+        if len(set(out["train"])) != len(out["train"]) or len(set(out["val"])) != len(out["val"]) or len(set(out["test"])) != len(out["test"]):
+            P.append("同じリストの中に重複があります")
+        if not out["train"]:
+            P.append("train が空です")
+    _problems_to_error(where, P)
+    return out
+
+
+def load_eid_split(path):
+    """adv.eid_split_file（絶対パス）を読んで check_split で検査する。"""
+    import yaml
+    path = Path(path)
+    if not path.is_file():
+        raise ConfigError(f"adv.eid_split_file がありません: {path}（bash start.sh split で作る）")
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    return check_split(data, f"adv.eid_split_file {path}")

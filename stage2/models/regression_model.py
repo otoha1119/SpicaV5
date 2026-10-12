@@ -6,6 +6,14 @@
   checkpoint: 重みディレクトリ（util/run_paths.py）に net_G.pth と state.pth（optimizer / RNG / epoch / total_iters / **保存時の実効設定 config**）を**原子的に**保存
               （<dir>.tmp に書く → 既存 <dir> を .old に → .tmp を <dir> に → .old を消す。Stage 1 の save_networks と同じ手順）
   resume    : state.pth から optimizer と RNG（python / torch / numpy）を復元し、lr / betas は今の実効値を再適用（上書きが最優先）
+
+実 EID 枝（mode.real_eid_branch、2026-10-13。docs/plans/20260908_stage2-unet-implementation-spec.md §9）:
+  D         : models/discriminator.py（Park 2019 の PatchGAN、Stage 1 の D のコピー）。optimizer_D = Adam(adv.lr_D, (adv.beta1_D, adv.beta2_D))
+  1 step    : pred = net(x_pair), mse = criterion(pred, t) ／ pred_eid = net(x_eid)（実 EID512 小片 → ×scale 済み）
+              U-Net の損失 = mse + adv.lambda_gan · gan(D(pred_eid), real)（ペア枝の出力に GAN は掛けない = §9.2）
+              D の損失   = ½ [ gan(D(t), real) + gan(D(pred_eid.detach()), fake) ]。**本物側 = このステップのペア枝の教師 t**（PCD1024 の patch。追加 I/O なし。実 EID とは対応が無い）
+              更新順は G → D（junyanz / Stage 1 fidelity_gan_model と同じ。G の backward 中は D の requires_grad を切る）
+  checkpoint: net_D.pth を追加（3 ファイル 1 組）。state.pth に optimizer_D。resume で両方復元。false の run には net_D.pth が無い
 """
 
 import os
@@ -18,8 +26,9 @@ import torch
 import torch.nn as nn
 
 from util.metrics import mse, psnr, ssim
+from models.discriminator import D_MIN_INPUT, GANLoss, build_D
 from models.unet import build_net
-from util.run_paths import ckpt_dir, write_best_note
+from util.run_paths import CKPT_D, ckpt_dir, write_best_note
 
 BETTER = {"rmse": lambda new, old: new < old, "ssim": lambda new, old: new > old, "psnr": lambda new, old: new > old}  # log.best_metric ごとの「更新」の向き
 
@@ -49,26 +58,71 @@ class RegressionModel:
         self.cur_epoch, self.epoch_done, self.total_iters = 0, False, 0
         self.best = None  # best/ の記録 {"metric", "value", "epoch", "total_iters"}。state.pth に入れて resume で引き継ぐ（無ければ None = 次の val が必ず best）
         self.last = None  # 直近の学習バッチ (input, pred, target)。optimize が更新
+        self.last_eid = None  # 実 EID 枝の直近 (x_eid, pred_eid)。TB images/current_eid 用
         self.n_params = sum(p.numel() for p in self.net.parameters())
+        # 実 EID 枝（2026-10-13）
+        self.real_eid_branch = mode["real_eid_branch"]
+        self.netD, self.optimizer_D, self.criterionGAN = None, None, None
+        if self.real_eid_branch:
+            self.netD = build_D().to(device)
+            self.lambda_gan = train["adv.lambda_gan"]
+            self.lr_D, self.betas_D = train["adv.lr_D"], (train["adv.beta1_D"], train["adv.beta2_D"])
+            self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=self.lr_D, betas=self.betas_D)
+            self.criterionGAN = GANLoss(train["adv.gan_mode"]).to(device)
+            self.n_params_D = sum(p.numel() for p in self.netD.parameters())
 
     # --- 前向き ---
     def forward(self, x):
         y = self.net(x)
         return x + y if self.residual else y
 
-    def optimize(self, batch):
-        """1 step。戻り値は表示用の dict: loss（正規化空間の損失）、mse（出力 vs 教師。monitor が √ を取って train/rmse に。0 へ）、ssim（1 へ）。"""
+    @staticmethod
+    def _set_requires_grad(net, flag):
+        for p in net.parameters():
+            p.requires_grad = flag
+
+    def optimize(self, batch, batch_eid=None):
+        """1 step。戻り値は表示用の dict: loss（U-Net の損失全体）、mse（出力 vs 教師。monitor が √ を取って train/rmse に。0 へ）、ssim（1 へ）。
+        実 EID 枝のときは batch_eid（{"input": (B,1,p,p)}）が必須で、gan_G / D / D_real / D_fake も返す（loss = mse + lambda_gan · gan_G）。"""
         x = batch["input"].to(self.device, non_blocking=True)
         t = batch["target"].to(self.device, non_blocking=True)
         self.net.train()
         pred = self.forward(x)
-        loss = self.criterion(pred, t)
+        loss_mse = self.criterion(pred, t)
+        if not self.real_eid_branch:
+            self.optimizer.zero_grad(set_to_none=True)
+            loss_mse.backward()
+            self.optimizer.step()
+            with torch.no_grad():
+                self.last = (x.detach(), pred.detach(), t.detach())  # TB の images/current 用（util/monitor.py log_images）
+                return {"loss": float(loss_mse), "mse": mse(pred, t), "ssim": ssim(pred, t)}
+        if batch_eid is None:
+            raise RuntimeError("real_eid_branch=true なのに実 EID のバッチがありません")
+        x_eid = batch_eid["input"].to(self.device, non_blocking=True)
+        if min(x_eid.shape[-2:]) < D_MIN_INPUT or min(t.shape[-2:]) < D_MIN_INPUT:
+            raise ValueError(f"D の入力が小さすぎます（一辺 ≥ {D_MIN_INPUT}）: 実 EID 小片 {tuple(x_eid.shape)}, 教師 patch {tuple(t.shape)}")
+        self.netD.train()
+        # --- G（U-Net）: mse + lambda_gan · gan_G。D は固定（requires_grad を切る。junyanz の流儀） ---
+        pred_eid = self.forward(x_eid)
+        self._set_requires_grad(self.netD, False)
+        loss_gan_G = self.criterionGAN(self.netD(pred_eid), True)
+        loss_G = loss_mse + self.lambda_gan * loss_gan_G
         self.optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+        loss_G.backward()
         self.optimizer.step()
+        # --- D: 本物 = ペア枝の教師 t（PCD1024 patch）、偽物 = 実 EID 小片の出力（detach） ---
+        self._set_requires_grad(self.netD, True)
+        loss_D_real = self.criterionGAN(self.netD(t), True)
+        loss_D_fake = self.criterionGAN(self.netD(pred_eid.detach()), False)
+        loss_D = 0.5 * (loss_D_real + loss_D_fake)
+        self.optimizer_D.zero_grad(set_to_none=True)
+        loss_D.backward()
+        self.optimizer_D.step()
         with torch.no_grad():
-            self.last = (x.detach(), pred.detach(), t.detach())  # TB の images/current 用（util/monitor.py log_images）
-            return {"loss": float(loss), "mse": mse(pred, t), "ssim": ssim(pred, t)}
+            self.last = (x.detach(), pred.detach(), t.detach())
+            self.last_eid = (x_eid.detach(), pred_eid.detach())  # TB の images/current_eid 用
+            return {"loss": float(loss_G), "mse": mse(pred, t), "ssim": ssim(pred, t),
+                    "gan_G": float(loss_gan_G), "D": float(loss_D), "D_real": float(loss_D_real), "D_fake": float(loss_D_fake)}
 
     @torch.no_grad()
     def predict(self, x):
@@ -114,6 +168,7 @@ class RegressionModel:
             "best": self.best,  # best/ の記録（自動更新の比較対象。resume で引き継ぐ）
             "optimizer": self.optimizer.state_dict(),
             "lr": float(self.optimizer.param_groups[0]["lr"]),
+            "optimizer_D": self.optimizer_D.state_dict() if self.real_eid_branch else None,  # 実 EID 枝の D（2026-10-13）。false なら None
             "config": self.config,  # 保存時の実効設定（train / mode / machine、平坦キー）。resume はこれを基準にする（失敗した起動の launch を引き継がない。レビュー指摘 2026-09-09）
             "rng": {
                 "python": random.getstate(),
@@ -123,13 +178,15 @@ class RegressionModel:
         }
 
     def save(self, run_dir, tag):
-        """net_G.pth と state.pth を重みディレクトリに原子的に保存する。"""
+        """net_G.pth と state.pth（実 EID 枝なら net_D.pth も）を重みディレクトリに原子的に保存する。"""
         final = ckpt_dir(run_dir, tag)
         tmp, old = final.with_name(final.name + ".tmp"), final.with_name(final.name + ".old")
         if tmp.exists():
             shutil.rmtree(tmp)
         tmp.mkdir(parents=True)
         torch.save(self.net.state_dict(), tmp / "net_G.pth")
+        if self.real_eid_branch:
+            torch.save(self.netD.state_dict(), tmp / CKPT_D)
         torch.save(self._state(), tmp / "state.pth")
         if old.exists():
             shutil.rmtree(old)
@@ -141,6 +198,11 @@ class RegressionModel:
 
     def load_weights(self, weight_dir):
         self.net.load_state_dict(torch.load(Path(weight_dir) / "net_G.pth", map_location=self.device, weights_only=True))
+        if self.real_eid_branch:
+            d_path = Path(weight_dir) / CKPT_D
+            if not d_path.is_file():
+                raise RuntimeError(f"real_eid_branch=true ですが D の重みがありません: {d_path}（この checkpoint は実 EID 枝なしで学習された。resume で real_eid_branch は変えられない）")
+            self.netD.load_state_dict(torch.load(d_path, map_location=self.device, weights_only=True))
 
     def resume(self, state_path):
         """state.pth から optimizer / RNG / 進捗を復元する。state は CPU に読む（RNG 用 Tensor を CUDA に載せない）。lr / betas は今の実効値を再適用。"""
@@ -149,6 +211,13 @@ class RegressionModel:
         for g in self.optimizer.param_groups:
             g["lr"] = self.lr
             g["betas"] = self.betas
+        if self.real_eid_branch:
+            if not isinstance(state.get("optimizer_D"), dict):
+                raise RuntimeError(f"{state_path} に D の optimizer がありません（実 EID 枝なしの checkpoint。resume で real_eid_branch は変えられない）")
+            self.optimizer_D.load_state_dict(state["optimizer_D"])
+            for g in self.optimizer_D.param_groups:
+                g["lr"] = self.lr_D
+                g["betas"] = self.betas_D
         rng = state["rng"]
         random.setstate(_to_tuple(rng["python"]))
         torch.set_rng_state(rng["torch"].cpu())

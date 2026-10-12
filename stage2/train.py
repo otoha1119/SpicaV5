@@ -7,6 +7,8 @@
   4. epoch ループ: print_freq step ごとに scalar、image_freq step ごとに 128 patch グリッド（TB images/current, images/fixed）、save_latest_freq 枚ごとに latest/、epoch 末に val 指標 →（log.best_metric が最良なら best/ + best.txt）→ latest/ + weights/epoch_NNN/ + フル 1024 画像
      （固定 = train.yaml log.full_slice、ランダム = n_full_random 枚、実 EID テスト = log.eid_slice。output_images/ の生 16bit と preview、TB のパネル。util/monitor.py）
   5. 最終 epoch は save_epoch_freq の倍数でなくても保存する
+  6. 実 EID 枝（mode.real_eid_branch、2026-10-13）: RealEIDDataset（data/eid_dataset.py。adv.eid_split_file の train の症例から実 EID512 の小片 → ×scale）を別の DataLoader で
+     ペアの loader と並走させ（長さはペア枝の step 数 × adv.batch_eid。足りなければ cycle）、毎 step 両方のバッチを model.optimize に渡す。D の本物側はペア枝の教師（models/regression_model.py）
 """
 
 import argparse
@@ -23,6 +25,7 @@ from torch.utils.data import DataLoader
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import MACHINE, MODE, TRAIN, ConfigError, validate, validate_shared  # noqa: E402
+from data.eid_dataset import RealEIDDataset  # noqa: E402
 from data.pair_dataset import PairDataset  # noqa: E402
 from models.regression_model import RegressionModel  # noqa: E402
 from util.monitor import TrainMonitor  # noqa: E402
@@ -68,16 +71,34 @@ def main():
                         "val_slices_per_epoch": len(dataset.val_slices())}, f, allow_unicode=True, sort_keys=False)
     bs = train["optim.batch_size"]
     loader = DataLoader(dataset, batch_size=bs, shuffle=False, num_workers=machine["num_threads"], pin_memory=(device.type == "cuda"), drop_last=False)
+    loader_eid, eid_iter = None, None
+    if mode["real_eid_branch"]:  # 実 EID 枝（2026-10-13）: ペアの loader と同じ step 数になる長さで別 loader を作り並走させる
+        dataset_eid = RealEIDDataset(train, mode, machine, dataset.upsample_cfg, n_steps=len(loader), cache_dir=Path(machine["stage2_checkpoints_dir"]) / ".case_index")
+        with open(run_dir / DATASET_INFO_FILE, "a", encoding="utf-8") as f:
+            yaml.safe_dump({"real_eid_branch": dataset_eid.info()}, f, allow_unicode=True, sort_keys=False)
+        loader_eid = DataLoader(dataset_eid, batch_size=train["adv.batch_eid"], shuffle=False, num_workers=machine["num_threads"], pin_memory=(device.type == "cuda"), drop_last=False)
+
+    def next_eid():
+        """実 EID のバッチを 1 つ取る（loader_eid が尽きたら頭から = cycle）。"""
+        nonlocal eid_iter
+        if eid_iter is None:
+            eid_iter = iter(loader_eid)
+        try:
+            return next(eid_iter)
+        except StopIteration:
+            eid_iter = iter(loader_eid)
+            return next(eid_iter)
 
     model = RegressionModel(train, mode, machine, device)
-    print(f"[train] {mode['arch']} base_ch {mode['base_ch']} n_pool {mode['n_pool']} final_act {mode['final_act']} residual {mode['residual']}: {model.n_params / 1e6:.2f}M params, loss {mode['loss']}, device {device}")
+    print(f"[train] {mode['arch']} base_ch {mode['base_ch']} n_pool {mode['n_pool']} final_act {mode['final_act']} residual {mode['residual']}: {model.n_params / 1e6:.2f}M params, loss {mode['loss']}, device {device}"
+          + (f" | real_eid_branch: D {model.n_params_D / 1e6:.2f}M params, {train['adv.gan_mode']}, lambda_gan {train['adv.lambda_gan']}, lr_D {train['adv.lr_D']}, batch_eid {train['adv.batch_eid']}" if mode["real_eid_branch"] else ""))
     if a.resume_state:
         model.load_weights(Path(a.resume_state).parent)
         model.resume(a.resume_state)
     total_iters = model.total_iters
     val_slices = dataset.val_slices()
     fixed = dataset.fixed_patches(train["log.n_images"])  # TB images/fixed 用（log.full_slice から。位置は patch_seed で固定）
-    monitor = TrainMonitor(run_dir, train, mode["loss"], bs, len(dataset))
+    monitor = TrainMonitor(run_dir, train, mode["loss"], bs, len(dataset), real_eid_branch=mode["real_eid_branch"])
     n_epochs, print_freq, save_latest, save_epoch = train["optim.n_epochs"], train["log.print_freq"], train["log.save_latest_freq"], train["log.save_epoch_freq"]
     best_metric = train["log.best_metric"]
     image_freq = train["log.image_freq"]
@@ -93,7 +114,7 @@ def main():
             n_batch = int(batch["input"].shape[0])
             total_iters += n_batch
             model.total_iters = total_iters
-            losses = model.optimize(batch)
+            losses = model.optimize(batch, next_eid() if loader_eid is not None else None)
             monitor.accumulate(losses, time.time() - t0, t_data)
             step = total_iters // bs
             if step % print_freq == 0:
@@ -103,6 +124,7 @@ def main():
             if total_iters % save_latest == 0:
                 model.save(run_dir, "latest")
             iter_data_time = time.time()
+        eid_iter = None  # 実 EID の loader も epoch ごとに頭から（worker の乱数は DataLoader が epoch ごとに seed し直す）
         model.epoch_done = True
         val = model.evaluate(dataset, val_slices)
         monitor.log_val(val, total_iters)

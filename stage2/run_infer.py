@@ -2,7 +2,8 @@
 
   1. configs/infer.yaml（方式）と ../configs/machines.yaml（gpu_gen / pcd1024_dir / stage2_checkpoints_dir）を configs/schema.py で検証する（既定値なし）
   2. 重みディレクトリ（--weight_dir、infer_stage2.sh の変数）に net_G.pth があることを確認し、そこから run（launch.yaml がある所）を探して
-     **最新の launch の実効設定**から U-Net の構成（mode: arch / base_ch / n_pool / final_act / residual）と HU 正規化（train: data.hu_*）を取る（学習時と同じネットを組む）
+     **最新の launch の実効設定**から U-Net の構成（mode: arch / base_ch / n_pool / final_act / residual）と HU 正規化（train: data.hu_*）を取る（学習時と同じネットを組む）。
+     実 EID 枝（mode.real_eid_branch）の run でも D は使わない（net_D.pth は読まない。2026-10-13）
   3. 512 入力を補間する方式（scale / interp）と学習画像の大きさは run の dataset_info.yaml（train.py が起動時に eidlike1024_dir/manifest.yaml から写したもの）から取る
      （学習入力と同じ関数 data/ct_io.upsample・同じ方式 = 学習中の実 EID テストと同じ結果）
   4. 表示設定（log.display_hu_min/max・preview_bits）は**現在の configs/train.yaml**（--train）から取る（表示は重みに紐づかない。Stage 1 と同じ）
@@ -27,7 +28,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import INFER, MACHINE, MODE, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate, validate_shared  # noqa: E402
+from configs.schema import INFER, LEGACY_MODE_DEFAULTS, MACHINE, MODE, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate, validate_shared  # noqa: E402
 from data.ct_io import INTERP_FLAGS  # noqa: E402
 from util.run_paths import DATASET_INFO_FILE, LAUNCH_FILE, find_run_dir, infer_output_dir, latest_launch  # noqa: E402
 
@@ -64,7 +65,12 @@ def net_config(launch, path):
     """run の launch から U-Net の構成（mode 全部。schema で検証）と HU 正規化（train.data.hu_*）を取る。無ければエラー（古い run）。"""
     if not isinstance(launch.get("train"), dict) or not isinstance(launch.get("mode"), dict):
         raise ConfigError(f"{path} に train / mode セクションがありません")
-    mode = validate("mode(run)", launch["mode"], MODE)
+    mode_saved = dict(launch["mode"])
+    for k, v in LEGACY_MODE_DEFAULTS.items():  # 導入前の run（キー無し）は導入前の意味（real_eid_branch=false）。推論は D を使わないので構成には影響しない（2026-10-13）
+        if k not in mode_saved:
+            print(f"[run_infer] 注意: run の launch の mode に {k} が無い（{k} 導入前の run）。{k}={v!r} として扱う")
+            mode_saved[k] = v
+    mode = validate("mode(run)", mode_saved, MODE)
     missing = [k for k in HU_KEYS if k not in launch["train"]]
     if missing:
         raise ConfigError(f"{path} の train に {missing} がありません（古い run?）")

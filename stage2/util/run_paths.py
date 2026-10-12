@@ -2,16 +2,16 @@
 stage1/util/run_paths.py（2026-09-07 第 2 版）から 2026-09-08 に複製し、Stage 2 に合わせた（D が無いので checkpoint は 2 ファイル、画像出力は未実装）。
 
 run 名は起動時刻（JST）を yyyy_mmdd_HHMM にしたもの（例 2026_0908_2130）。'/' は使わない。
-checkpoint は「重みディレクトリ」単位で扱う（net_G.pth と state.pth の 2 ファイルが 1 組）。
+checkpoint は「重みディレクトリ」単位で扱う（net_G.pth と state.pth の 2 ファイルが 1 組。実 EID 枝（mode real_eid_branch: true、2026-10-13）の run は net_D.pth を足した 3 ファイル）。
 
 <stage2_checkpoints_dir>/<run>/
   launch.yaml                 解決済み設定（実効値 = yaml + sh の上書き）。resume 時は launch_resume_<日時秒>.yaml が追加され、最新のものが次の再開の基準
   dataset_info.yaml           train.py が起動時に書く: 症例分割の実効リスト、症例ごとの入力 / 教師 / ペア枚数（切り捨て）
   loss_log.txt
-  latest/net_G.pth, state.pth            直下に置く重みディレクトリは latest と best だけ
-  best/net_G.pth,   state.pth            自動: 毎 epoch の val で train.yaml log.best_metric が最良を更新したとき（state.pth の best に指標と epoch が入る）
+  latest/net_G.pth, state.pth [, net_D.pth]  直下に置く重みディレクトリは latest と best だけ（net_D.pth は real_eid_branch の run だけ。state.pth に optimizer_D）
+  best/net_G.pth,   state.pth [, net_D.pth]  自動: 毎 epoch の val で train.yaml log.best_metric が最良を更新したとき（state.pth の best に指標と epoch が入る）
   best.txt                               手動: bash start2.sh best <run> <epoch>（weights/epoch_NNN/ をコピー）。どちらも best.txt に epoch・指標・時刻を書く（2026-09-09）
-  weights/epoch_NNN/net_G.pth, state.pth save_epoch_freq ごとの checkpoint（保存は <dir>.tmp → rename で原子的。.tmp / .old が残っていたら中断の痕跡）
+  weights/epoch_NNN/net_G.pth, state.pth [, net_D.pth]  save_epoch_freq ごとの checkpoint（保存は <dir>.tmp → rename で原子的。.tmp / .old が残っていたら中断の痕跡）
   output_images/epoch_NNN/                       生 16bit（stored = HU + 1400、HU が読める）。固定 + ランダム + 実 EID テスト（2026-09-09 ユーザー確定）
       <slice>_eidlike.png, _pcd1024.png, _pcdlike.png      固定（train.yaml log.full_slice）とランダム（log.n_full_random 枚、epoch ごとに別）: 入力 / 教師 / 出力
       <eid_slice>_eid1024.png, _pcdlike.png                実 EID テスト（log.eid_slice、eid_dir の 512 を補間したもの / その出力）
@@ -20,7 +20,7 @@ checkpoint は「重みディレクトリ」単位で扱う（net_G.pth と stat
       epoch_NNN_pcdlike.png, epoch_NNN_eid_pcdlike.png     epoch ごとの出力（固定 / 実 EID テスト）
       epoch_NNN_panel.png                                  [EID-like1024 | PCD-like1024 | PCD1024 | 実 EID → PCD-like1024 | 実 EID1024（元）] の 5 列（並びは 2026-09-10 ユーザー確定。util/panel.py。TB の images/full/fixed と同じ絵）
   output_images/preview_random/epoch_NNN_<slice>.png   ランダムスライスの 3 列パネル [EID-like1024 | PCD-like1024 | PCD1024] だけ（TB の images/full/random と同じ絵）
-  tb/                         TensorBoard（scalar と images/full/fixed|random）
+  tb/                         TensorBoard（scalar と images/*。実 EID 枝なら loss/gan_G, loss/D, loss/D_real, loss/D_fake, diag/gan_ratio, images/current_eid も）
   tensorboard.log
 
 推論の出力は run の下ではなく **リポジトリ直下の output/**（Stage 1 と同じ根。.gitignore 済み、コンテナでは /workspace/output/。2026-09-10）:
@@ -47,7 +47,13 @@ DATASET_INFO_FILE = "dataset_info.yaml"
 LOSS_LOG_FILE = "loss_log.txt"
 TB_DIR = "tb"
 OUTPUT_IMAGES_DIR = "output_images"
-CKPT_KINDS = ("net_G.pth", "state.pth")          # 重みディレクトリの中身
+CKPT_KINDS = ("net_G.pth", "state.pth")          # 重みディレクトリの中身（必須の 2 ファイル）
+CKPT_D = "net_D.pth"                             # 実 EID 枝（mode real_eid_branch: true）の run だけ 3 ファイル目（2026-10-13）
+
+
+def ckpt_kinds(real_eid_branch):
+    """重みディレクトリに揃っているべきファイル名。実 EID 枝なら net_D.pth も。"""
+    return CKPT_KINDS + ((CKPT_D,) if real_eid_branch else ())
 BEST_NOTE = "best.txt"                           # run 直下。best/ の由来（epoch、指標、auto | manual、時刻）
 
 

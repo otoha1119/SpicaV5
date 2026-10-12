@@ -9,3 +9,5 @@ loss: mse               # 論文 Eq. 1（MSE）| l1（ablation）。正規化空
 final_act: linear       # 最終層の活性化。論文の図には 1ch への最終層が描かれておらず記載も無い → 回帰なので「無し」と読んだ（読み。docs/plans §4.3）| tanh（出力を [−1,1] に縛る変種）
 residual: false         # true で 出力 = 入力 + net(入力)（変種。論文は false）
 serial_batches: false   # true で sampler を index 決定的に（再現用）
+real_eid_branch: true   # true で実 EID 枝（2026-10-13。実 EID512 の小片 → ×2 → U-Net → D が対応の無い PCD1024 の小片と見分け、GAN 損失 × train.yaml adv.lambda_gan を U-Net に戻す。net_D.pth を保存）
+                        # false で MSE だけ（Stage 1 評価用プローブ）。resume で変更不可。導入前の run（キー無し）は false 扱い（schema LEGACY_MODE_DEFAULTS）
