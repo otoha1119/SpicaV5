@@ -2,6 +2,9 @@
 
 指定した PCD スライスを 512 のフル推論にかけ、左上 (x, y) から patch 四方を切り出す。EID は別スライスの指定座標から同じ大きさで切る（PCD と EID はペア）。
 保存は表示用のみ（16bit 生データは無し。2026-09-08 ユーザー指示）。preview_fixed_*/ と同じ流儀（表示範囲 display_hu_min..max で線形、preview_bits の深度、R は util/residual_color のカラー）。
+task（run の launch.yaml の mode.task。run_crop.py が --task で渡す）[2026-10-12]: crop.yaml の pcd / eid はモダリティ名のまま、どちらが入力かが task で決まる
+  degrade : 入力 = pcd（pcd_dir = PCD512、座標 pcd_x/y が入力・G(z)・R の切り出し）、参照 = eid（eid_dir = EID512、eid_x/y）。出力 1_EID / 2_EID-like / 3_PCD / 4_R_color
+  sr      : 入力 = eid（eid_dir = EID1024、座標 eid_x/y が入力・G(z)・R の切り出し。1024 の画素で書く）、参照 = pcd（pcd_dir = PCD1024、pcd_x/y）。出力 1_PCD / 2_PCD-like / 3_EID / 4_R_color
 
 出力（<out_dir> = <repo>/output/<run>_<重みディレクトリ名>_crop_<実行時刻>/、run_crop.py が作る）:
   case<N>_<pcd>_<eid>/
@@ -27,6 +30,7 @@ from data.ct_dataset import denormalize, normalize, read_stored, write_png  # no
 from inference_dir import DEVICES, build_generator, infer_full, resolve_device  # noqa: E402
 from util.panel import build_panel  # noqa: E402
 from util.residual_color import residual_rgb01, rgb_to_bgr  # noqa: E402
+from util.task_names import TASKS, names as task_names  # noqa: E402
 
 
 def parse_args():
@@ -42,6 +46,8 @@ def parse_args():
     p.add_argument("--final_norm_act", action="store_true")
     p.add_argument("--residual", action="store_true")
     req("--hu_offset", type=int); req("--hu_min", type=int); req("--hu_max", type=int)
+    req("--task", choices=TASKS, help="run の launch.yaml の mode.task（degrade | sr）。どちらのモダリティが入力かと表示名")
+    p.add_argument("--sr_scale", type=int, default=None); p.add_argument("--sr_interp", type=str, default=None); p.add_argument("--sr_input_size", type=int, default=None)  # run_infer.generator_argv が sr で付ける（crop は 1024 を直接読むので使わない。記録用）
     # 表示（run の launch.yaml の log.*）
     req("--display_hu_min", type=int); req("--display_hu_max", type=int); req("--preview_bits", type=int, choices=(8, 16)); req("--diff_range_hu", type=int)
     # crop.yaml
@@ -76,41 +82,47 @@ def main():
     lin = lambda stored: np.clip((stored.astype(np.float32) - a.hu_offset - a.display_hu_min) / float(a.display_hu_max - a.display_hu_min), 0.0, 1.0)  # noqa: E731
     quant = (lambda x01: (np.clip(x01, 0, 1) * 65535.0).round().astype(np.uint16)) if a.preview_bits == 16 else (lambda x01: (np.clip(x01, 0, 1) * 255.0).round().astype(np.uint8))
     up = lambda img01: cv2.resize(np.ascontiguousarray(img01, dtype=np.float32), None, fx=a.panel_scale, fy=a.panel_scale, interpolation=cv2.INTER_NEAREST)  # noqa: E731
-    labels = ["EID", f"EID-like  G(z)   {weight_name}", "PCD  z", "R = G(z) - z   [HU]"]
-    print(f"[crop] device={device} G={weight_path} patch={a.patch} panel_scale={a.panel_scale} cases={len(a.case)}")
+    nm = task_names(a.task)
+    labels = [nm["B"], f"{nm['GEN']}  G(z)   {weight_name}", f"{nm['A']}  z", "R = G(z) - z   [HU]"]
+    print(f"[crop] task={a.task} device={device} G={weight_path} patch={a.patch} panel_scale={a.panel_scale} cases={len(a.case)}")
 
     # 先に全ケースのファイルと座標を検査する（途中で止まって中途半端な出力を残さないため）
+    # 入力（A、G に通す側）と参照（B、並べるだけ）を task で決める: degrade は pcd が入力、sr は eid が入力
     plan = []
     for i, (pcd_name, px, py, eid_name, ex, ey) in enumerate(a.case, 1):
         px, py, ex, ey = int(px), int(py), int(ex), int(ey)
         pcd_path, eid_path = slice_path(a.pcd_dir, pcd_name), slice_path(a.eid_dir, eid_name)
-        crop(read_stored(pcd_path), px, py, a.patch, f"case{i} PCD {pcd_name}")
-        crop(read_stored(eid_path), ex, ey, a.patch, f"case{i} EID {eid_name}")
-        plan.append((i, pcd_name, px, py, eid_name, ex, ey, pcd_path, eid_path))
+        if a.task == "sr":
+            in_name, ix, iy, in_path, ref_name, rx, ry, ref_path = eid_name, ex, ey, eid_path, pcd_name, px, py, pcd_path
+        else:
+            in_name, ix, iy, in_path, ref_name, rx, ry, ref_path = pcd_name, px, py, pcd_path, eid_name, ex, ey, eid_path
+        crop(read_stored(in_path), ix, iy, a.patch, f"case{i} {nm['A']} {in_name}")
+        crop(read_stored(ref_path), rx, ry, a.patch, f"case{i} {nm['B']} {ref_name}")
+        plan.append((i, in_name, ix, iy, in_path, ref_name, rx, ry, ref_path))
 
-    for i, pcd_name, px, py, eid_name, ex, ey, pcd_path, eid_path in plan:
-        stored = read_stored(pcd_path)
+    for i, in_name, ix, iy, in_path, ref_name, rx, ry, ref_path in plan:
+        stored = read_stored(in_path)
         x_np = normalize(stored, *hu)
         with torch.no_grad():
             y = infer_full(net, torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0).to(device))
-        pcd16 = denormalize(x_np, *hu)                      # 正規化窓でクリップした入力（R の基準。inference_dir と同じ）
-        eid16 = denormalize(y[0, 0].cpu().numpy(), *hu)     # EID-like
-        R = eid16.astype(np.int32) - pcd16.astype(np.int32)  # ΔHU（推論の *_R/ と同じ差）
-        eid_ref = read_stored(eid_path)
-        c_pcd, c_eid_like, c_R = crop(pcd16, px, py, a.patch, f"case{i} PCD {pcd_name}"), crop(eid16, px, py, a.patch, f"case{i} EID-like"), crop(R, px, py, a.patch, f"case{i} R")
-        c_eid = crop(eid_ref, ex, ey, a.patch, f"case{i} EID {eid_name}")
-        g_eid, g_eid_like, g_pcd = lin(c_eid), lin(c_eid_like), lin(c_pcd)
+        in16 = denormalize(x_np, *hu)                       # 正規化窓でクリップした入力 A（R の基準。inference_dir と同じ）
+        gen16 = denormalize(y[0, 0].cpu().numpy(), *hu)     # G(z)
+        R = gen16.astype(np.int32) - in16.astype(np.int32)  # ΔHU（推論の *_R/ と同じ差）
+        ref = read_stored(ref_path)
+        c_in, c_gen, c_R = crop(in16, ix, iy, a.patch, f"case{i} {nm['A']} {in_name}"), crop(gen16, ix, iy, a.patch, f"case{i} {nm['GEN']}"), crop(R, ix, iy, a.patch, f"case{i} R")
+        c_ref = crop(ref, rx, ry, a.patch, f"case{i} {nm['B']} {ref_name}")
+        g_ref, g_gen, g_in = lin(c_ref), lin(c_gen), lin(c_in)
         rgb_R = residual_rgb01(c_R, a.diff_range_hu)
 
-        d = out_root / f"case{i}_{pcd_name}_{eid_name}"
-        tag_p, tag_e = f"{pcd_name}_x{px}_y{py}", f"{eid_name}_x{ex}_y{ey}"
-        write_png(d / f"1_EID_{tag_e}.png", quant(g_eid))
-        write_png(d / f"2_EID-like_{tag_p}.png", quant(g_eid_like))
-        write_png(d / f"3_PCD_{tag_p}.png", quant(g_pcd))
-        write_png(d / f"4_R_color_{tag_p}.png", rgb_to_bgr(quant(rgb_R)))
-        cols = [up(np.repeat(g[..., None], 3, 2)) for g in (g_eid, g_eid_like, g_pcd)] + [up(rgb_R)]
+        d = out_root / f"case{i}_{in_name}_{ref_name}"
+        tag_i, tag_r = f"{in_name}_x{ix}_y{iy}", f"{ref_name}_x{rx}_y{ry}"
+        write_png(d / f"1_{nm['B']}_{tag_r}.png", quant(g_ref))
+        write_png(d / f"2_{nm['GEN']}_{tag_i}.png", quant(g_gen))
+        write_png(d / f"3_{nm['A']}_{tag_i}.png", quant(g_in))
+        write_png(d / f"4_R_color_{tag_i}.png", rgb_to_bgr(quant(rgb_R)))
+        cols = [up(np.repeat(g[..., None], 3, 2)) for g in (g_ref, g_gen, g_in)] + [up(rgb_R)]
         write_png(d / "panel.png", rgb_to_bgr(quant(build_panel(cols, labels, a.diff_range_hu))))
-        print(f"[crop] case{i}: PCD {pcd_name} ({px},{py}) / EID {eid_name} ({ex},{ey}) | ΔHU min {int(c_R.min())} max {int(c_R.max())} mean {float(c_R.mean()):.1f} -> {d}")
+        print(f"[crop] case{i}: {nm['A']} {in_name} ({ix},{iy}) / {nm['B']} {ref_name} ({rx},{ry}) | ΔHU min {int(c_R.min())} max {int(c_R.max())} mean {float(c_R.mean()):.1f} -> {d}")
     print(f"[crop] done: {len(a.case)} cases -> {out_root}")
 
 

@@ -41,6 +41,7 @@ from tqdm import tqdm
 
 from data.ct_dataset import denormalize, residual_stored, write_png
 from util.panel import build_panel, full_labels
+from util.task_names import names as task_names
 from util.residual_color import colorbar_rgb01, residual_rgb01, rgb_to_bgr
 from util.run_paths import epoch_images_dir, preview_dir
 
@@ -71,6 +72,8 @@ class TrainMonitor:
         self.fixed = fixed_batch
         self.eid_ref = eid_ref
         self.eid_stem = Path(eid_ref["path"]).stem if eid_ref is not None else None
+        self.task = getattr(opt, "task", None) or "degrade"
+        self.nm = task_names(self.task)  # ファイル名の接尾辞 a / gen / b（degrade: pcd / eidlike / eid、sr: eid / pcdlike / pcd）
         self.bar = None
         self._sum = {}
         self._n = 0
@@ -172,6 +175,7 @@ class TrainMonitor:
         <run>/output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png を uint16 で保存する（TB にも images/full/fixed|random を 8bit で）。
         表示用は preview_fixed_<slice>/（代表 PCD / EID を 1 回、epoch ごとに EID-like / R カラー / パネル）と preview_random/（パネルだけ）。
         パネルは [EID | EID-like | PCD | R + ゲージ]（util/panel.py。各列の下にラベル、R の右に縦ゲージ。TB の images/full/* も同じ絵）。
+        task: sr では名前が入れ替わる（util/task_names.py）: <slice>_{eid,pcdlike,R}.png、00_eid_ / 01_pcd_ / epoch_NNN_pcdlike、パネル [PCD | PCD-like | EID | R]。並びと中身（A / G(z) / B）は同じ。
         推論は full-image モード（G は全畳み込み + 3 段 Haar なので H, W が 8 の倍数なら一発で通る）。
         uint16 化は inference_dir.py と同じ関数（denormalize / residual_stored）で、eidlike = pcd + (R − 32768) が厳密に成り立つ。"""
         if full is None or full["A"].shape[0] == 0:
@@ -200,24 +204,24 @@ class TrainMonitor:
             stem = Path(path).stem
             pcd16 = denormalize(a[i, 0].detach().cpu().numpy(), *hu)
             eid16 = denormalize(g[i, 0].detach().cpu().numpy(), *hu)
-            write_png(out_dir / f"{stem}_pcd.png", pcd16)
-            write_png(out_dir / f"{stem}_eidlike.png", eid16)
+            write_png(out_dir / f"{stem}_{self.nm['a']}.png", pcd16)      # A = z（degrade: _pcd、sr: _eid）
+            write_png(out_dir / f"{stem}_{self.nm['gen']}.png", eid16)    # G(z)（degrade: _eidlike、sr: _pcdlike）
             write_png(out_dir / f"{stem}_R.png", residual_stored(pcd16, eid16))  # 0 HU = 32768
             hwc = lambda p3: p3.permute(1, 2, 0).numpy()  # (3,H,W) → (H,W,3)  # noqa: E731
             cols = ([hwc(E)] if E is not None else []) + [hwc(lin(G[i])), hwc(lin(A[i])), hwc(col(R[i]))]
-            labels = full_labels(epoch) if E is not None else full_labels(epoch)[1:]
-            panel01 = build_panel(cols, labels, o.diff_range_hu)  # [EID | EID-like | PCD | R + ゲージ]、(Hp,Wp,3) [0,1]
+            labels = full_labels(epoch, self.task) if E is not None else full_labels(epoch, self.task)[1:]
+            panel01 = build_panel(cols, labels, o.diff_range_hu)  # [B の代表 | G(z) | A | R + ゲージ]（degrade: EID | EID-like | PCD | R）、(Hp,Wp,3) [0,1]
             tag = "fixed" if kind == "fixed" else ("random" if full["kinds"].count("random") == 1 else f"random{i}")  # TB のタグは固定（スライダーで epoch を追える）
             self.tb.add_image(f"images/full/{tag}", to_u8(panel01), total_iters, dataformats="HWC")
             # 表示用（HU は読めない。生は epoch_NNN/）。cv2 は BGR なので RGB は変換して書く
             if kind == "fixed":
                 # 固定スライス: 代表（PCD / EID。初回だけ）+ epoch ごとの EID-like / R カラー / パネルを個別に（2026-09-08 ユーザー指示）
                 d = preview_dir(self.run_dir, f"fixed_{stem}")
-                if not (d / f"00_pcd_{stem}.png").is_file():
-                    write_png(d / f"00_pcd_{stem}.png", gray_png(lin(A[i])))
-                if E is not None and not (d / f"01_eid_{self.eid_stem}.png").is_file():
-                    write_png(d / f"01_eid_{self.eid_stem}.png", gray_png(E))
-                write_png(d / f"{ep}_eidlike.png", gray_png(lin(G[i])))
+                if not (d / f"00_{self.nm['a']}_{stem}.png").is_file():
+                    write_png(d / f"00_{self.nm['a']}_{stem}.png", gray_png(lin(A[i])))
+                if E is not None and not (d / f"01_{self.nm['b']}_{self.eid_stem}.png").is_file():
+                    write_png(d / f"01_{self.nm['b']}_{self.eid_stem}.png", gray_png(E))
+                write_png(d / f"{ep}_{self.nm['gen']}.png", gray_png(lin(G[i])))
                 write_png(d / f"{ep}_R_color.png", rgb_png(col(R[i]).permute(1, 2, 0).numpy()))
                 write_png(d / f"{ep}_panel.png", rgb_png(panel01))
             else:

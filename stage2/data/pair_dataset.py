@@ -107,6 +107,8 @@ class PairDataset(Dataset):
         self.patch = train["data.patch_size"]
         self.samples_per_epoch = train["data.samples_per_epoch"]
         self.patch_seed = train["data.patch_seed"]
+        self.k = train["data.patches_per_slice"]  # 1 回読んだペアから連続して切る patch 数（Stage 1 の RandomSampler と同じ仕組み。2026-10-12）
+        self._left, self._cur, self._cur_group = 0, None, None  # worker ごとの状態（DataLoader の worker は fork されるので各 worker で独立に進む）
         self.serial = mode["serial_batches"]
         self.val_max = train["log.val_max_slices_per_case"]
         self.full_slice, self.n_full_random = train["log.full_slice"], train["log.n_full_random"]
@@ -146,7 +148,7 @@ class PairDataset(Dataset):
         n_va = sum(len(v) for v in self.pairs_val.values())
         dropped = sum(i["dropped"] for i in list(info_train.values()) + list(info_val.values()))
         print(f"[PairDataset] train {len(self.train_cases)} cases / {n_tr} pairs, val {len(self.val_cases)} cases / {n_va} pairs, "
-              f"test {len(self.test_cases)} cases（読まない）, image {self.img_hw}, patch {self.patch}, len {len(self)}"
+              f"test {len(self.test_cases)} cases（読まない）, image {self.img_hw}, patch {self.patch}, patches_per_slice {self.k}, len {len(self)}"
               + (f", 名前が片側にしか無いスライス {dropped} 枚は不使用" if dropped else ""))
 
     # --- 乱数 ---
@@ -163,10 +165,24 @@ class PairDataset(Dataset):
         y, x = pos
         return torch.from_numpy(np.ascontiguousarray(img[y : y + self.patch, x : x + self.patch])).unsqueeze(0)
 
+    def _draw_pair(self, rng):
+        case = rng.choice(self.train_cases)
+        return rng.choice(self.pairs_train[case])
+
     def __getitem__(self, index):
         rng = self._rng(index)
-        case = rng.choice(self.train_cases)
-        in_path, pcd_path = rng.choice(self.pairs_train[case])
+        if self.k == 1:
+            in_path, pcd_path = self._draw_pair(rng)
+        elif self.serial:  # 決定的: index // k をグループにして同じペア
+            group = index // self.k
+            if group != self._cur_group:
+                self._cur_group, self._cur = group, self._draw_pair(random.Random(self.patch_seed * 1_000_003 + 977 + group))
+            in_path, pcd_path = self._cur
+        else:  # worker ごとのカウンタで k 回ごとに引き直す（同じ batch に同じペア由来の patch が k 個並ぶ。位置は独立）
+            if self._left <= 0:
+                self._cur, self._left = self._draw_pair(rng), self.k
+            self._left -= 1
+            in_path, pcd_path = self._cur
         h, w = self.img_hw
         pos = (rng.randrange(h - self.patch + 1), rng.randrange(w - self.patch + 1))
         return {"input": self._patch(in_path, pos), "target": self._patch(pcd_path, pos), "path": pcd_path, "y": pos[0], "x": pos[1]}

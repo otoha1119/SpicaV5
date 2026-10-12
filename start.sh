@@ -12,9 +12,11 @@
 #   4. コンテナ内で train_stage1.sh を実行して学習を始める（shell / down のときは除く）
 #
 # ■ 引数の規則
-#   bash start.sh [マシン名] [build|shell|down|tb|infer|crop] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
+#   bash start.sh [マシン名] [build|shell|down|tb|infer|crop|split] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
 #   ・--flag より前の単語を読む。順不同。
-#   ・build / shell / down / tb / infer / crop / resume / best はサブコマンド。それ以外の単語は「マシン名」とみなし、sh 内の MACHINE より優先する。
+#   ・build / shell / down / tb / infer / crop / split / resume / best はサブコマンド。それ以外の単語は「マシン名」とみなし、sh 内の MACHINE より優先する。
+#   ・split は task: sr（一発超解像。stage1/configs/mode.yaml の task）用の症例分割ファイル configs/splits/eid_v5.yaml を作る（split_stage1.sh の比率・seed・FORCE_TEST。
+#     既にあれば止まる。作り直すなら bash start.sh split --overwrite）。学習は mode.yaml の task: sr（または --task sr）で stage1/configs/sr.yaml を読む
 #   ・build は「イメージを（再）ビルドしてコンテナを起動し、torch / cuda の確認を表示して終わる」だけ。学習は始めない（本番機の初期セットアップ用）。
 #   ・resume の直後は run 名（yyyy_mmdd_HHMM）、その次が latest / best / epoch 番号なら checkpoint の tag（省略時 latest）。
 #   ・best の直後は run 名と epoch 番号（両方必須）。best/ は best.tmp/ に揃えてから差し替える。
@@ -44,6 +46,8 @@
 #   bash start.sh infer --output_format both --dicom_dir /workspace/DataSet/PhotonCT512_original   # PNG と DICOM の両方を書く
 #   bash start.sh crop                       # パッチ切り出し（学習中でも可）。crop_stage1.sh の WEIGHT_DIR、stage1/configs/crop.yaml のケース
 #   bash start.sh crop --weight_dir /workspace/stage1/checkpoints/2026_0907_1742/weights/epoch_141 --device cuda
+#   bash start.sh PC3 split                  # task: sr 用の症例分割（EID を 15:15:70、EID-049 を test に固定）を configs/splits/eid_v5.yaml に作る
+#   bash start.sh PC3 --task sr              # 一発超解像（EID1024 → PCD-like1024）で学習。stage1/configs/sr.yaml の分割・除外・patch 256 を使う
 #   bash start.sh mac infer --weight_dir /workspace/stage1/checkpoints/2026_0905_1234/best --input_dir /workspace/DataSet/PCD512_v2
 #                                            # GPU 無しのマシン定義（gpu_gen 0 → cpu）で、重みと入力を引数で指定して推論
 #   bash start.sh tb                         # TensorBoard だけ起動してブラウザを開く（学習はしない）
@@ -168,6 +172,7 @@ while [ $# -gt 0 ]; do
       if [ $# -gt 0 ] && [[ "$1" =~ ^([0-9]+|latest|best)$ ]]; then RESUME_TAG="$1"; shift; fi ;;
     infer) ACTION=infer; shift ;;
     crop)  ACTION=crop; shift ;;
+    split) ACTION=split; shift ;;
     best)
       shift
       [ $# -ge 2 ] && [[ "$1" != --* ]] && [[ "$2" =~ ^[0-9]+$ ]] || { echo "[start] best には run 名と epoch 番号が必要です: bash start.sh best yyyy_mmdd_HHMM <epoch>" >&2; exit 2; }
@@ -330,6 +335,7 @@ case "$ACTION" in
   shell) exec_it spicav5 bash ;;
   infer) exec_it spicav5 bash infer_stage1.sh "$@" ;;
   crop)  exec_it spicav5 bash crop_stage1.sh "$@" ;;
+  split) exec_it spicav5 bash split_stage1.sh "$@" ;;
   best)  exec_it spicav5 python stage1/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
   train)
     tb_kill
