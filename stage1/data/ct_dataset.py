@@ -50,7 +50,7 @@ import torch
 import yaml
 
 from data.base_dataset import BaseDataset
-from configs.schema import check_opt
+from configs.schema import ConfigError, check_crop_cases, check_opt
 
 # --- HU 定数 (option で上書き可。既定は SpicaV3 と同一) ---
 HU_OFFSET = 1400
@@ -342,6 +342,9 @@ class CTDataset(BaseDataset):
         parser.add_argument("--hu_min", type=int, default=None, help="正規化窓の下限 (HU)")
         parser.add_argument("--hu_max", type=int, default=None, help="正規化窓の上限 (HU)")
         parser.add_argument("--align_meta", type=str, default=None, help="sampling=aligned 用の症例メタ (未実装)。空文字可")
+        # 監視用の固定 patch（TB images/fixed）の切り方 [2026-10-13]。train.yaml log.fixed_patches / log.crop_file（run_train.py が渡す）
+        parser.add_argument("--fixed_patches", type=str, default=None, choices=["crop", "random"], help="crop = crop.yaml の cases の位置 | random = patch_seed からランダム n_images 枚")
+        parser.add_argument("--crop_file", type=str, default=None, help="fixed_patches=crop のとき読む crop.yaml（stage1/ からの相対パスか絶対パス）")
         # task（mode.yaml）と sr 用（configs/sr.yaml + eid1024_dir/manifest.yaml。run_train.py が渡す。degrade では渡されない = None のまま）[2026-10-12]
         parser.add_argument("--task", type=str, default=None, choices=["degrade", "sr"], help="degrade（A = PCD512 → B = EID512）| sr（A = EID1024 → B = PCD1024、分割あり）")
         parser.add_argument("--eid1024_dir", type=str, default=None, help="machines.yaml eid1024_dir（記録用。sr では run_train.py が --dir_A にこれを入れる）")
@@ -488,12 +491,56 @@ class CTDataset(BaseDataset):
         a_path, a_pos, b_path, b_pos = self.sampler.sample(self._rng(index), index, group)
         return {"A": self._patch(a_path, a_pos), "B": self._patch(b_path, b_pos), "A_paths": a_path, "B_paths": b_path}
 
+    def _crop_fixed_items(self):
+        """log.fixed_patches=crop: crop.yaml の cases を監視用の固定 patch にする（ユーザー指示 2026-10-13「固定は crop.yaml で見ている場所にしてほしい」）。
+        crop の左上 (x, y) + crop patch の中心に学習の patch_size 四方の中心を合わせる（画像からはみ出す分は内側にずらす）。
+        degrade: A = dir_A/<PCD-nnn>/<pcd>.png に pcd_x/y、B = dir_B/<EID-nnn>/<eid>.png に eid_x/y。sr: A = dir_A（EID1024）に eid_x/y、B = dir_B（PCD1024）に pcd_x/y（座標は 1024 の画素）。
+        戻り値: [(a_path, (y, x), b_path, (y, x)), ...]。crop.yaml の検証は schema.check_crop_cases。ファイルが無い・crop patch が画像からはみ出す・学習 patch が画像より大きい場合はここで止める（学習前）。"""
+        path = Path(self.opt.crop_file)
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parents[1] / path  # stage1/ 基準（run_train.py の --train と同じ流儀）
+        if not path.is_file():
+            raise ConfigError(f"log.crop_file がありません: {path}")
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        cases = check_crop_cases(data.get("cases"))
+        cp = data.get("patch")
+        if not isinstance(cp, int) or cp <= 0:
+            raise ConfigError(f"{path}: patch は正の int: {cp!r}")
+        H, W = self.img_hw
+        P = self.patch
+        if P > H or P > W:
+            raise ConfigError(f"学習 patch {P} が画像 {H}x{W} より大きい（fixed_patches=crop）")
+        def slice_path(root, name):
+            return str(Path(root) / name.rsplit("-", 1)[0] / f"{name}.png")  # PCD-002-236 → <root>/PCD-002/PCD-002-236.png（crop_patches.py と同じ規則）
+        def top_left(x, y):
+            cy, cx = y + cp // 2 - P // 2, x + cp // 2 - P // 2  # crop patch の中心に学習 patch の中心を合わせる
+            return (min(max(cy, 0), H - P), min(max(cx, 0), W - P))
+        items, P_ = [], []
+        for i, c in enumerate(cases, 1):
+            if self.task == "sr":
+                a_path, ax, ay, b_path, bx, by = slice_path(self.opt.dir_A, c["eid"]), c["eid_x"], c["eid_y"], slice_path(self.opt.dir_B, c["pcd"]), c["pcd_x"], c["pcd_y"]
+            else:
+                a_path, ax, ay, b_path, bx, by = slice_path(self.opt.dir_A, c["pcd"]), c["pcd_x"], c["pcd_y"], slice_path(self.opt.dir_B, c["eid"]), c["eid_x"], c["eid_y"]
+            for side, p, x, y in (("A", a_path, ax, ay), ("B", b_path, bx, by)):
+                if not os.path.isfile(p): P_.append(f"case{i} {side}: ファイルがありません: {p}")
+                if x + cp > W or y + cp > H: P_.append(f"case{i} {side}: crop patch {cp} が画像 {H}x{W} からはみ出します: ({x}, {y})")
+            items.append((a_path, top_left(ax, ay), b_path, top_left(bx, by)))
+        if P_:
+            raise ConfigError(f"[fixed_patches=crop] {path}: " + "; ".join(P_))
+        print(f"[CTDataset] images/fixed は {path} の cases {len(items)} 件の位置（学習 patch {P} の中心 = crop patch {cp} の中心）", flush=True)
+        return items
+
     def fixed_batch(self, n):
-        """監視用の固定サンプル。patch_seed から決まる決定的な乱数で index 0..n-1 を引く（学習の乱数列は消費しない、resume 後も同じ）。
-        戻り値: {"A": (n,1,p,p), "B": (n,1,p,p)}。n == 0 なら None（F-17。schema は n ≥ 1 を要求するので防御）"""
-        if n <= 0:
-            return None
-        items = [self.sampler.sample(random.Random(self.opt.patch_seed * 1_000_003 + i), i, group=-1 - i) for i in range(n)]  # 固定サンプルは worker のカウンタを使わず i ごとに決定的（負のグループ番号で学習側と衝突させない）
+        """監視用の固定サンプル（TB images/fixed）。学習の乱数列は消費しない、resume 後も同じ。
+        fixed_patches=random: patch_seed から決まる決定的な乱数で index 0..n-1 を引く。crop: crop.yaml の cases（n は使わない。2026-10-13）。
+        戻り値: {"A": (n,1,p,p), "B": (n,1,p,p)}。random で n == 0 なら None（F-17。schema は n ≥ 1 を要求するので防御）"""
+        if self.opt.fixed_patches == "crop":
+            items = self._crop_fixed_items()
+        else:
+            if n <= 0:
+                return None
+            items = [self.sampler.sample(random.Random(self.opt.patch_seed * 1_000_003 + i), i, group=-1 - i) for i in range(n)]  # 固定サンプルは worker のカウンタを使わず i ごとに決定的（負のグループ番号で学習側と衝突させない）
         return {
             "A": torch.stack([self._patch(a_path, a_pos) for a_path, a_pos, _, _ in items]),
             "B": torch.stack([self._patch(b_path, b_pos) for _, _, b_path, b_pos in items]),

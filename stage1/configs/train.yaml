@@ -44,8 +44,10 @@ noise:                  # 乱数画像 n の振幅（mode.yaml noise_input: true
 log:
   # 単位: print_freq / image_freq は step（iteration。batch_size 枚で 1 step）、save_latest_freq は画像枚数（junyanz 由来）
   print_freq: 100         # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step）
-  image_freq: 1000        # TensorBoard の途中画像の間隔（step）
-  n_images: 4             # TensorBoard の途中画像の枚数（current / fixed それぞれ、128 patch。ディスクには書かない）
+  image_freq: 200         # TensorBoard の途中画像の間隔（step）。1 epoch = 600 step（batch 40）なので 3 回/epoch（sr.yaml と同じ。2026-10-13）
+  n_images: 4             # TensorBoard の途中画像の枚数（current の枚数。fixed は fixed_patches が random のときだけこの枚数。128 patch。ディスクには書かない）
+  fixed_patches: crop     # images/fixed の切り方: crop = crop_file の cases（PCD / EID のスライスと左上座標）に学習 patch の中心を合わせて切る（枚数 = cases の数。bash start.sh crop で見ている場所を学習中にも追う。ユーザー指示 2026-10-13）| random = patch_seed から決まるランダム n_images 枚（導入前の挙動）
+  crop_file: configs/crop.yaml   # fixed_patches が crop のとき読む crop.yaml（stage1/ からの相対パス。cases と patch だけ使う。sr のときは座標は 1024 の画素、A = eid・B = pcd）
   full_slice: PCD-002/PCD-002-215.png   # 毎 epoch フル 512 で書き出す固定スライス（pcd_dir からの相対パス）→ output_images/epoch_NNN/ と preview_fixed_<slice>/。task: sr では sr.yaml の train: が EID 側に差し替える
   eid_slice: EID-001/EID-001-089.png    # パネル右端に並べる EID の代表スライス（eid_dir からの相対パス。固定）→ preview_fixed_<slice>/01_eid_<slice>.png にも 1 枚
   n_full_random: 1        # 加えて epoch ごとに別のランダムスライスを何枚書くか → output_images/epoch_NNN/ と preview_random/

@@ -56,7 +56,9 @@ TRAIN = {
     # log（util/monitor.py）。単位に注意: *_freq のうち print_freq / image_freq は **step（iteration）**、save_latest_freq は junyanz 由来で **画像枚数**
     "log.print_freq":       Key(int,   "--print_freq",     "バー末尾の損失・TensorBoard scalar・loss_log.txt を更新する間隔（step）"),
     "log.image_freq":       Key(int,   "--image_freq",     "TensorBoard に途中画像を出す間隔（step）"),
-    "log.n_images":         Key(int,   "--n_images",       "途中画像の枚数（current / fixed それぞれ、128 patch）"),
+    "log.n_images":         Key(int,   "--n_images",       "途中画像の枚数（current の枚数。fixed は fixed_patches=random のときだけこの枚数、crop のときは cases の数）"),
+    "log.fixed_patches":    Key(str,   "--fixed_patches",  "途中画像の fixed 行の切り方: crop（log.crop_file の cases の位置に学習 patch の中心を合わせる。枚数 = cases の数）| random（patch_seed から決まるランダム n_images 枚。導入前の挙動）[2026-10-13]"),
+    "log.crop_file":        Key(str,   "--crop_file",      "fixed_patches=crop のとき読む crop.yaml（stage1/ からの相対パスか絶対パス。cases と patch を使う）"),
     "log.full_slice":       Key(str,   "--full_slice",     "checkpoint 保存時にフル 512 で書き出す固定スライス（pcd_dir からの相対パス。例 PCD-002/PCD-002-215.png）。毎 epoch 同じ 1 枚"),
     "log.eid_slice":        Key(str,   "--eid_slice",      "パネルの右端に並べる EID の代表スライス（eid_dir からの相対パス。例 EID-001/EID-001-089.png）。固定。preview_fixed_<slice>/01_eid_<slice>.png にも 1 枚保存"),
     "log.n_full_random":    Key(int,   "--n_full_random",  "checkpoint 保存時にフル 512 で書き出すランダムスライスの枚数（epoch ごとに別のスライス。0 で無し）"),
@@ -456,6 +458,8 @@ def check_values(train, mode, machine):
     if not (0.0 < train["noise.sigma_hu_min"] <= train["noise.sigma_hu_max"]): P.append(f"noise.sigma_hu_min / max は 0 < min ≤ max: {train['noise.sigma_hu_min']} / {train['noise.sigma_hu_max']}")
     if train["log.print_freq"] < 1 or train["log.image_freq"] < 1: P.append("log.print_freq / image_freq ≥ 1（step）")
     if train["log.n_images"] < 1: P.append("log.n_images ≥ 1")
+    if train["log.fixed_patches"] not in ("crop", "random"): P.append(f"log.fixed_patches は crop | random: {train['log.fixed_patches']!r}")
+    if train["log.fixed_patches"] == "crop" and not train["log.crop_file"]: P.append("log.fixed_patches=crop のときは log.crop_file（crop.yaml のパス）を指定")
     if train["log.n_full_random"] < 0: P.append("log.n_full_random ≥ 0")
     if not train["log.full_slice"]: P.append("log.full_slice（固定スライスの相対パス）を指定")
     if not train["log.eid_slice"]: P.append("log.eid_slice（EID の代表スライスの相対パス）を指定")
