@@ -1,0 +1,19 @@
+# stage1/configs/modes/n_pacgan.yaml — 2 モデル同時学習（bash start.sh multi）用の mode ファイル。「n あり + PacGAN（d_pack 2）」。n_only.yaml との違いは d_pack だけ。
+# 書き方は n_only.yaml のコメントを参照（MODE のキー全部 + 任意の train:）。run 名の接尾辞は n_pacgan。
+# このモデルだけ λ や lr を変えたいときは（例）:
+# train:
+#   loss:
+#     lambda_fid: 300.0
+#   optim:
+#     lr: 0.0001
+
+sampling: random        # 組で同一必須（DataLoader を共有）
+gan_mode: fgan_kl
+netG: wavelet
+netD: paper
+final_norm_act: false
+residual: true
+serial_batches: false   # 組で同一必須
+task: degrade           # 組で同一必須
+noise_input: true       # 乱数画像 n あり
+d_pack: 2               # PacGAN-2: batch 内の別スライス 2 枚（i と i + B/2）をチャネル連結して D に入れる。batch_size は偶数、B/2 ≥ data.patches_per_slice

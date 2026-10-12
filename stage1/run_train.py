@@ -21,10 +21,20 @@
     設定は launch_resume_<日時秒>.yaml に保存され、次の再開・推論の基準になる。
     residual / task / d_pack / noise_input は checkpoint から変えられない（重みの意味・形が変わる）。d_pack は net_D.pth の 1 層目の入力チャネル、
     noise_input は net_G.pth の 1 層目の入力チャネル（input_nc + 1）とも照合する（2026-10-12）
+
+2 モデル同時学習（bash start.sh multi、2026-10-13、docs/plans/20261012_multi-model-training-plan.md）:
+  python run_train.py --machine PC1 --train configs/train.yaml --multi configs/modes/n_only.yaml configs/modes/n_pacgan.yaml --sr ... --machines ... -- [--flag value]
+  → mode ファイルごとに「モデルの仕様」（train / mode / machine / sr の実効値）を組み、run 名は同じ時刻 + '-' + mode ファイル名（2026_1013_0130-n_only / -n_pacgan）。
+    mode ファイルの `train:` でそのモデルだけ PER_MODEL_TRAIN_KEYS（λ、lr、β、G/D の ch と初期化）を差し替えられる。共有キーを書くとエラー。--flag は全モデルに同じ値。
+    各 run は単独と同じ中身（launch.yaml / latest best weights / loss_log.txt / tb/ / output_images/）+ group.yaml（組の run 名、mode ファイル、起動時刻、共有設定のハッシュ）。
+    train.py には先頭モデルの argv + --co_launch <2 つ目の launch.yaml> を渡し、1 プロセス・DataLoader 1 つで 2 モデルを同じ batch で回す。受け付けるのは 2 つまで（MULTI_MAX_MODELS）
+  組の再開: --resume <runA> <runB> [--resume_tag tag]（各 run の state.pth の実効設定を基準に、共有キーの一致と進捗の一致を再検査。group.yaml の相手と違えば警告して続行）。
+  --resume <run> だけなら単独（組の片方だけでも可。従来どおり）
 """
 
 import argparse
 import datetime
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -33,8 +43,8 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import LEGACY_MODE_DEFAULTS, MACHINE, MODE, SR, SR_UPSAMPLE_KEYS, TRAIN, ConfigError, apply_overrides, check_split, check_sr_values, check_values, to_argv, validate, validate_sr  # noqa: E402
-from util.run_paths import LAUNCH_FILE, ckpt_path, latest_launch, run_name, saved_tags  # noqa: E402
+from configs.schema import LEGACY_MODE_DEFAULTS, MACHINE, MODE, MULTI_MAX_MODELS, PER_MODEL_TRAIN_KEYS, SHARED_MODE_KEYS, SR, SR_UPSAMPLE_KEYS, TRAIN, ConfigError, apply_overrides, check_shared, check_split, check_sr_values, check_values, to_argv, validate, validate_mode_file, validate_sr  # noqa: E402
+from util.run_paths import GROUP_FILE, LAUNCH_FILE, ckpt_path, latest_launch, run_name, saved_tags  # noqa: E402
 
 # Stage 1 で固定の引数（チューニング対象ではないので設定ファイルには置かない）
 FIXED_ARGV = ["--model", "fidelity_gan", "--dataset_mode", "ct"]
@@ -123,9 +133,10 @@ def check_noise_input_weights(weight_path, train, mode):
         raise ConfigError(f"{weight_path} の G の 1 層目 {first[0]} の入力チャネル {first[1].shape[1]} が実効設定 input_nc + (noise_input ? 1 : 0) = {train['network.input_nc']} + {1 if mode['noise_input'] else 0} = {expect} と合いません（noise_input は resume で変えられない）")
 
 
-def start_tensorboard(run_dir, port):
+def start_tensorboard(run_dirs, port):
     """この run の tb/ だけを logdir にして TensorBoard を起動する（start.sh が SPICA_TB_PORT を渡したときだけ）。
-    **同じポート**で動いている前の run の TensorBoard や `bash start.sh tb`（全 run 表示）は止める。別ポート（Stage 2 の stage2_tb_port）のものは触らない（2026-09-08）。ログは <run>/tensorboard.log。"""
+    組（2 モデル同時学習、2026-10-13）では --logdir_spec <nameA>:<runA>/tb,<nameB>:<runB>/tb で 2 run を同時表示する。
+    **同じポート**で動いている前の run の TensorBoard や `bash start.sh tb`（全 run 表示）は止める。別ポート（Stage 2 の stage2_tb_port）のものは触らない（2026-09-08）。ログは <先頭 run>/tensorboard.log。"""
     import shutil
     import signal
     import subprocess
@@ -145,12 +156,17 @@ def start_tensorboard(run_dir, port):
                     os.kill(int(d.name), signal.SIGTERM)
                 except OSError:
                     pass
-    tb_dir = run_dir / "tb"
-    tb_dir.mkdir(parents=True, exist_ok=True)
-    log = open(run_dir / "tensorboard.log", "ab")
-    subprocess.Popen([exe, "--logdir", str(tb_dir), "--port", str(port), "--bind_all", "--reload_interval", "5"],
+    tb_dirs = [Path(d) / "tb" for d in run_dirs]
+    for t in tb_dirs:
+        t.mkdir(parents=True, exist_ok=True)
+    if len(tb_dirs) == 1:
+        logdir_args = ["--logdir", str(tb_dirs[0])]
+    else:
+        logdir_args = ["--logdir_spec", ",".join(f"{Path(d).name}:{t}" for d, t in zip(run_dirs, tb_dirs))]
+    log = open(Path(run_dirs[0]) / "tensorboard.log", "ab")
+    subprocess.Popen([exe] + logdir_args + ["--port", str(port), "--bind_all", "--reload_interval", "5"],
                      stdout=log, stderr=log, start_new_session=True)
-    print(f"[run_train] TensorBoard: http://localhost:{port} → {tb_dir}（この run だけ。全 run は bash start.sh tb）", flush=True)
+    print(f"[run_train] TensorBoard: http://localhost:{port} → {' , '.join(str(t) for t in tb_dirs)}（{'この組だけ' if len(tb_dirs) > 1 else 'この run だけ'}。全 run は bash start.sh tb）", flush=True)
 
 
 def load_yaml(path):
@@ -193,8 +209,13 @@ def finish_sr(train, mode, machine, sr, applied):
     return None
 
 
-def prepare_new(a, train, mode, machine, sr, overrides, now):
-    """新規 run: yaml の値（+ sr.yaml の差し替え）に上書きを反映 → 検証 → run 名と保存先。"""
+def prepare_new(a, train_yaml, mode, train_overlay, machine_yaml, overrides, now, suffix, mode_file):
+    """新規 run の 1 モデル分: yaml の値（+ mode ファイルの train: の差し替え + sr.yaml の差し替え）に上書きを反映 → 検証 → run 名と保存先。
+    戻り値はモデルの仕様 dict（name / out_dir / train / mode / machine / sr / extra / launch_name / applied / base / mode_file / train_overlay / sr_overlay）。"""
+    train, machine = dict(train_yaml), dict(machine_yaml)
+    for k, v in train_overlay.items():  # multi の mode ファイルの train:（PER_MODEL_TRAIN_KEYS だけ。validate_mode_file 済み）。優先順位 train.yaml → mode ファイルの train: → sr.yaml の train: → --flag
+        train[k] = v
+    sr, sr_overlay = (load_sr(a.sr, train, mode) if peek_task(overrides, mode["task"]) == "sr" else (None, {}))  # task: sr なら sr.yaml を読んで train / mode を差し替える（--flag より前）
     applied = apply_overrides(overrides, sections(train, mode, machine, sr))
     if any(f in applied for f in RESUME_ONLY_FLAGS):
         raise ConfigError(f"{' / '.join(RESUME_ONLY_FLAGS)} は再開の内部フラグです。再開は --resume <run> で行ってください")
@@ -202,21 +223,27 @@ def prepare_new(a, train, mode, machine, sr, overrides, now):
         raise ConfigError("新規 run では log.continue_train = false, log.epoch_count = 1 にしてください（再開は --resume <run>）")
     check_values(train, mode, machine)
     sr = finish_sr(train, mode, machine, sr, applied)
-    name = run_name(now)
+    try:
+        name = run_name(now, suffix)
+    except ValueError as e:
+        raise ConfigError(str(e))
     out_dir = Path(machine["checkpoints_dir"]) / name
     if out_dir.exists():
         raise ConfigError(f"run ディレクトリが既に存在します: {out_dir}（同一分の再起動。1 分待つか、不要なら消してから起動）")
-    return name, out_dir, [], LAUNCH_FILE, applied, None, sr
+    return {"name": name, "out_dir": out_dir, "extra": [], "launch_name": LAUNCH_FILE, "applied": applied, "base": None,
+            "train": train, "mode": mode, "machine": machine, "sr": sr, "mode_file": mode_file, "train_overlay": dict(train_overlay), "sr_overlay": sr_overlay,
+            "resume": None, "resume_tag": None, "progress": None}
 
 
-def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, sr_yaml, overrides, now):
-    """再開: 選んだ checkpoint の実効設定を基準に、今回の上書きを反映 → 検証 → 再開フラグ。task（degrade | sr）は checkpoint のものを引き継ぐ（変更不可）。"""
+def prepare_resume(a, run, train_yaml, mode_yaml, machine_yaml, sr_yaml, overrides, now):
+    """再開の 1 run 分: 選んだ checkpoint の実効設定を基準に、今回の上書きを反映 → 検証 → 再開フラグ。task（degrade | sr）は checkpoint のものを引き継ぐ（変更不可）。
+    戻り値は prepare_new と同じ形の仕様 dict（progress に state.pth の epoch / epoch_done / total_iters）。"""
     import torch  # コンテナ内でのみ使う（state.pth の進捗を読む）
 
     # run の場所: 今の machines.yaml の checkpoints_dir に、今回の上書き（--checkpoints_dir があれば）を反映して探す
     probe = (dict(train_yaml), dict(mode_yaml), dict(machine_yaml), dict(sr_yaml) if sr_yaml is not None else None)  # sr のフラグも構文として通す（sections がダミーを足す。実効値は checkpoint 基準）
     apply_overrides(overrides, sections(*probe))
-    run_dir = Path(probe[2]["checkpoints_dir"]) / a.resume
+    run_dir = Path(probe[2]["checkpoints_dir"]) / run
     if not run_dir.is_dir():
         raise ConfigError(f"再開する run が見つかりません: {run_dir}")
     state_path = ckpt_path(run_dir, a.resume_tag, "state.pth")
@@ -293,7 +320,7 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, sr_yaml, overrides, n
         raise ConfigError(f"再開時に d_pack を変えることはできません（D の 1 層目の形が変わる）: checkpoint は d_pack={saved_d_pack}")
     if mode["noise_input"] != saved_noise:
         raise ConfigError(f"再開時に noise_input を変えることはできません（G の 1 層目の形が変わる）: checkpoint は noise_input={saved_noise}")
-    if Path(machine["checkpoints_dir"]) / a.resume != run_dir:
+    if Path(machine["checkpoints_dir"]) / run != run_dir:
         raise ConfigError(f"再開時に checkpoints_dir を変えることはできません: {machine['checkpoints_dir']} != {run_dir.parent}")
     for kind in ("net_G.pth", "net_D.pth"):
         if not ckpt_path(run_dir, a.resume_tag, kind).is_file():
@@ -311,18 +338,50 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, sr_yaml, overrides, n
         if any(sr["upsample"][k] != saved_up[k] for k in SR_UPSAMPLE_KEYS):
             raise ConfigError(f"eid1024_dir の manifest の方式が checkpoint と違います: checkpoint {saved_up} vs 今 {sr['upsample']}")
     extra = ["--epoch", str(a.resume_tag), "--resume_state", str(state_path)]
-    print(f"[run_train] resume {a.resume} from tag '{a.resume_tag}' (base: {'state.pth の config' if base == state_path else base.name}): saved epoch {st['epoch']} (done={st['epoch_done']}), total_iters {st['total_iters']} → epoch_count {epoch_count}, n_epochs {train['optim.n_epochs']}, task {mode['task']}")
-    return a.resume, run_dir, extra, f"launch_resume_{now.strftime('%Y%m%d_%H%M%S')}.yaml", applied, base, train, mode, machine, sr
+    print(f"[run_train] resume {run} from tag '{a.resume_tag}' (base: {'state.pth の config' if base == state_path else base.name}): saved epoch {st['epoch']} (done={st['epoch_done']}), total_iters {st['total_iters']} → epoch_count {epoch_count}, n_epochs {train['optim.n_epochs']}, task {mode['task']}")
+    return {"name": run, "out_dir": run_dir, "extra": extra, "launch_name": f"launch_resume_{now.strftime('%Y%m%d_%H%M%S')}.yaml", "applied": applied, "base": base,
+            "train": train, "mode": mode, "machine": machine, "sr": sr, "mode_file": None, "train_overlay": "(resume: checkpoint の train が基準)", "sr_overlay": None,
+            "resume": run, "resume_tag": a.resume_tag, "progress": {"epoch": int(st["epoch"]), "epoch_done": bool(st["epoch_done"]), "total_iters": int(st["total_iters"])}}
+
+
+def shared_hash(sp):
+    """組で共有する実効値（train の共有キー + mode の共有キー + machine）の sha1（group.yaml の記録用。一致の検査は check_shared）。"""
+    shared = {"train": {k: sp["train"][k] for k in TRAIN if k not in PER_MODEL_TRAIN_KEYS},
+              "mode": {k: sp["mode"][k] for k in SHARED_MODE_KEYS},
+              "machine": {k: sp["machine"][k] for k in MACHINE}}
+    return hashlib.sha1(yaml.safe_dump(shared, sort_keys=True, allow_unicode=True).encode("utf-8")).hexdigest()
+
+
+def check_group(specs, a):
+    """組（2 モデル）の検査: 共有キーの一致（check_shared）、同一内容の警告、resume なら進捗の一致と group.yaml の相手の照合（違えば警告して続行）。"""
+    check_shared([{"name": sp["name"], "train": sp["train"], "mode": sp["mode"], "machine": sp["machine"]} for sp in specs])
+    if all(sp["train"] == specs[0]["train"] and sp["mode"] == specs[0]["mode"] for sp in specs[1:]):
+        print("[run_train] 注意: 組の mode ファイルが同一内容です（mode / train の実効値が全部同じ。比較にならないが続行する。seed も同じなので同じ run が 2 つできる）")
+    if a.resume:
+        prog = [sp["progress"] for sp in specs]
+        if any(p != prog[0] for p in prog[1:]):
+            raise ConfigError("組の各 run の checkpoint の進捗（epoch / epoch_done / total_iters）が一致しません: " + "; ".join(f"{sp['name']}={sp['progress']}" for sp in specs) + "（同じ時点の tag を選ぶ）")
+        names = [sp["name"] for sp in specs]
+        for sp in specs:
+            g = sp["out_dir"] / GROUP_FILE
+            if not g.is_file():
+                print(f"[run_train] 注意: {sp['name']} に {GROUP_FILE} が無い（単独で作られた run）。組として再開する")
+                continue
+            rec = load_yaml(g)
+            runs = rec.get("runs") if isinstance(rec, dict) else None
+            if runs != names:
+                print(f"[run_train] 注意: {sp['name']} の {GROUP_FILE} の組 {runs} と今回の組 {names} が違う。共有キーは一致しているので続行する")
 
 
 def main():
     p = argparse.ArgumentParser(description="Stage 1 (FE-GAN) 学習の起動器")
     p.add_argument("--machine", required=True, help="configs/machines.yaml のエントリ名（PC1, mac, ...）")
     p.add_argument("--train", required=True, help="学習パラメータ YAML")
-    p.add_argument("--mode", required=True, help="モード切替 YAML")
+    p.add_argument("--mode", default=None, help="モード切替 YAML（単独実行・再開のとき。--multi と排他）")
+    p.add_argument("--multi", nargs="+", default=None, metavar="MODE_YAML", help=f"2 モデル同時学習: mode ファイル（configs/modes/<name>.yaml）を 2 つ。run 名は <時刻>-<name>。受け付けるのは {MULTI_MAX_MODELS} つまで（2026-10-13）")
     p.add_argument("--sr", required=True, help="task: sr 用の YAML（configs/sr.yaml）。task が degrade のときは読まない")
     p.add_argument("--machines", required=True, help="マシン定義 YAML")
-    p.add_argument("--resume", default=None, metavar="RUN", help="再開する run 名（yyyy_mmdd_HHMM）。その run の最新 launch の実効設定を基準にし、同じディレクトリに続きを保存する")
+    p.add_argument("--resume", nargs="+", default=None, metavar="RUN", help="再開する run 名（yyyy_mmdd_HHMM[-<name>]）。2 つ並べると組として再開（各 run の state.pth の実効設定を基準に、共有キーと進捗の一致を再検査）。同じディレクトリに続きを保存する")
     p.add_argument("--resume_tag", default="latest", help="再開に使う checkpoint の tag（latest | best | epoch 番号）")
     p.add_argument("overrides", nargs=argparse.REMAINDER, help="'--' の後に train.py の引数（schema にあるフラグのみ。bool は --flag true|false も可）")
     a = p.parse_args()
@@ -332,48 +391,90 @@ def main():
     jst = datetime.timezone(datetime.timedelta(hours=9), name="JST")
     now = datetime.datetime.now(jst)
     try:
-        train = validate("train", load_yaml(a.train), TRAIN)
-        mode = validate("mode", load_yaml(a.mode), MODE)
+        if (a.mode is None) == (a.multi is None):
+            raise ConfigError("--mode（単独）か --multi <modeA> <modeB>（2 モデル同時学習）のどちらか一方を指定してください")
+        if a.multi is not None:
+            if a.resume:
+                raise ConfigError("組の再開は --resume <runA> <runB> だけで指定します（mode は各 run の checkpoint から。--multi は新規用）")
+            if len(a.multi) == 1:
+                raise ConfigError(f"multi は mode ファイルを 2 つ指定します（1 つなら単独: bash start.sh [--flag]）: {a.multi}")
+            if len(a.multi) > MULTI_MAX_MODELS:
+                raise ConfigError(f"multi で受け付けるのは {MULTI_MAX_MODELS} つまでです（ユーザー決定 2026-10-13）: {len(a.multi)} 個 {a.multi}")
+        if a.resume and len(a.resume) > MULTI_MAX_MODELS:
+            raise ConfigError(f"組の再開で受け付けるのは {MULTI_MAX_MODELS} run までです: {a.resume}")
+        if a.resume and len(set(a.resume)) != len(a.resume):
+            raise ConfigError(f"同じ run を 2 回指定しています: {a.resume}")
+        train_yaml = validate("train", load_yaml(a.train), TRAIN)
         machines = load_yaml(a.machines)
         if not isinstance(machines, dict) or a.machine not in machines:
             raise ConfigError(f"machines.yaml にエントリ '{a.machine}' がありません。候補: {list(machines) if isinstance(machines, dict) else '(不正な形式)'}")
-        machine = validate(f"machines.{a.machine}", machines[a.machine], MACHINE)
-        # task: sr なら sr.yaml を読んで train.yaml を差し替える（--flag より前。新規 run のとき。再開は checkpoint の sr を基準にする）
-        sr, overlay = (load_sr(a.sr, train, mode) if peek_task(overrides, mode["task"]) == "sr" else (None, {}))
+        machine_yaml = validate(f"machines.{a.machine}", machines[a.machine], MACHINE)
         if a.resume:
-            name, out_dir, extra, launch_name, applied, base, train, mode, machine, sr = prepare_resume(a, train, mode, machine, sr, overrides, now)
+            mode_yaml = validate("mode", load_yaml(a.mode), MODE)  # 再開は checkpoint の設定が基準。今の yaml は「run 作成後に追加されたキー」の補完にだけ使う
+            sr_yaml = None
+            if peek_task(overrides, mode_yaml["task"]) == "sr":  # sr のフラグを構文として通すため（実効値は checkpoint）
+                sr_yaml = validate_sr(load_yaml(a.sr))[0]
+            specs = [prepare_resume(a, run, train_yaml, mode_yaml, machine_yaml, sr_yaml, overrides, now) for run in a.resume]
+        elif a.multi is not None:
+            stems = [Path(f).stem for f in a.multi]
+            if len(set(stems)) != len(stems):
+                raise ConfigError(f"mode ファイル名（拡張子なし）が重複しています（run 名の接尾辞になるので別名にする）: {stems}")
+            specs = []
+            for f, stem in zip(a.multi, stems):
+                mode, train_overlay = validate_mode_file(load_yaml(f), f"mode({Path(f).name})")
+                specs.append(prepare_new(a, train_yaml, mode, train_overlay, machine_yaml, overrides, now, stem, str(Path(f).resolve())))
         else:
-            name, out_dir, extra, launch_name, applied, base, sr = prepare_new(a, train, mode, machine, sr, overrides, now)
+            mode = validate("mode", load_yaml(a.mode), MODE)
+            specs = [prepare_new(a, train_yaml, mode, {}, machine_yaml, overrides, now, None, str(Path(a.mode).resolve()))]
+        if len(specs) > 1:
+            check_group(specs, a)
     except ConfigError as e:
         print(f"[run_train] 設定エラー: {e}", file=sys.stderr)
         sys.exit(2)
-    sr_record = None
-    if sr is not None:
-        sr_record = dict(sr)
-        sr_record["train_overlay"] = overlay["train"] if not a.resume else "(resume: checkpoint の train が基準)"  # sr.yaml が train.yaml のどのキーを差し替えたか（記録用）
-        sr_record["mode_overlay"] = overlay["mode"] if not a.resume else "(resume: checkpoint の mode が基準)"  # 同じく mode.yaml（noise_input: false。2026-10-12）
 
-    if machine["gpu_gen"] != 0:
-        extra = list(extra) + ["--require_cuda"]  # F-16: GPU マシンの定義で CUDA が無ければ train.py が止める（黙って CPU に落ちない）
-    extra = list(extra) + ["--launch_path", str(out_dir / launch_name)]  # この起動の実効設定を state.pth に写すため（再開の基準。2026-09-09）
-    argv = build_argv(name, train, mode, machine, sr, extra)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    with open(out_dir / launch_name, "w", encoding="utf-8") as f:
-        yaml.safe_dump(
-            {"timestamp": now.isoformat(timespec="seconds"), "machine_name": a.machine,
-             "train": train, "mode": mode, "machine": machine,  # 実効値（yaml + 上書き）。推論・再開はこれを読む
-             "sr": sr_record,  # task: sr のとき（split_file / b_exclude_cases / upsample = manifest の方式 / train_overlay）。degrade では null
-             "overrides": list(overrides), "applied": applied,
-             "resume": a.resume, "resume_tag": a.resume_tag if a.resume else None, "base_launch": str(base) if base else None,
-             "argv": argv},
-            f, allow_unicode=True, sort_keys=False,
-        )
+    names = [sp["name"] for sp in specs]
+    group = None
+    if len(specs) > 1:
+        group = {"runs": names, "mode_files": {sp["name"]: sp["mode_file"] for sp in specs}, "timestamp": now.isoformat(timespec="seconds"),
+                 "shared_hash": shared_hash(specs[0]), "resume": a.resume, "resume_tag": a.resume_tag if a.resume else None}
+    for i, sp in enumerate(specs):
+        sr_record = None
+        if sp["sr"] is not None:
+            sr_record = dict(sp["sr"])
+            sr_record["train_overlay"] = sp["sr_overlay"]["train"] if not a.resume else "(resume: checkpoint の train が基準)"  # sr.yaml が train.yaml のどのキーを差し替えたか（記録用）
+            sr_record["mode_overlay"] = sp["sr_overlay"]["mode"] if not a.resume else "(resume: checkpoint の mode が基準)"  # 同じく mode.yaml（noise_input: false。2026-10-12）
+        extra = list(sp["extra"])
+        if sp["machine"]["gpu_gen"] != 0:
+            extra += ["--require_cuda"]  # F-16: GPU マシンの定義で CUDA が無ければ train.py が止める（黙って CPU に落ちない）
+        extra += ["--launch_path", str(sp["out_dir"] / sp["launch_name"])]  # この起動の実効設定を state.pth に写すため（再開の基準。2026-09-09）
+        sp["argv"] = build_argv(sp["name"], sp["train"], sp["mode"], sp["machine"], sp["sr"], extra)
+        sp["out_dir"].mkdir(parents=True, exist_ok=True)
+        with open(sp["out_dir"] / sp["launch_name"], "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                {"timestamp": now.isoformat(timespec="seconds"), "machine_name": a.machine,
+                 "train": sp["train"], "mode": sp["mode"], "machine": sp["machine"],  # 実効値（yaml + 上書き）。推論・再開はこれを読む
+                 "sr": sr_record,  # task: sr のとき（split_file / b_exclude_cases / upsample = manifest の方式 / train_overlay）。degrade では null
+                 "overrides": list(overrides), "applied": sp["applied"],
+                 "resume": sp["resume"], "resume_tag": sp["resume_tag"], "base_launch": str(sp["base"]) if sp["base"] else None,
+                 "mode_file": sp["mode_file"], "train_overlay": sp["train_overlay"],  # multi の mode ファイルとその train: の差し替え（2026-10-13。単独は mode.yaml と {}）
+                 "group": ({"runs": names, "index": i} if group else None),  # 組の run 名と自分の位置（index 0 の argv に --co_launch が付く）
+                 "argv": sp["argv"]},
+                f, allow_unicode=True, sort_keys=False,
+            )
+        if group and not a.resume:
+            with open(sp["out_dir"] / GROUP_FILE, "w", encoding="utf-8") as f:
+                yaml.safe_dump(group, f, allow_unicode=True, sort_keys=False)
 
-    cmd = [sys.executable, str(HERE / "train.py")] + argv
-    print(f"[run_train] run {name} → {out_dir / launch_name}（全引数はこのファイルの argv）", flush=True)
+    cmd = [sys.executable, str(HERE / "train.py")] + specs[0]["argv"]
+    if len(specs) > 1:
+        cmd += ["--co_launch"] + [str(sp["out_dir"] / sp["launch_name"]) for sp in specs[1:]]  # 2 つ目以降は launch.yaml の argv から train.py が opt を組む
+    for sp in specs:
+        print(f"[run_train] run {sp['name']} → {sp['out_dir'] / sp['launch_name']}（全引数はこのファイルの argv）", flush=True)
+    if len(specs) > 1:
+        print(f"[run_train] multi: {' + '.join(names)}（1 プロセス・DataLoader 1 つで同じ batch を順に。group.yaml に組を記録）", flush=True)
     if os.environ.get("SPICA_TB_PORT"):  # start.sh 経由のとき。手動起動や scratch では起動しない
         try:
-            start_tensorboard(out_dir, int(os.environ["SPICA_TB_PORT"]))
+            start_tensorboard([sp["out_dir"] for sp in specs], int(os.environ["SPICA_TB_PORT"]))
         except ConfigError as e:
             print(f"[run_train] 設定エラー: {e}", file=sys.stderr)
             sys.exit(2)

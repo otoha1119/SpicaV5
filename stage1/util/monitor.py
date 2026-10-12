@@ -25,6 +25,9 @@ junyanz の util/visualizer.py（wandb / HTML）は使わない。train.py は�
                （画像パネルは stored = HU + hu_offset、差分パネルは 32768 + ΔHU。TB は 8bit しか描けないため厳密値はこちら）
   loss_log.txt: print_freq ごとの損失（テキスト。grep 用の保険）
 
+【2 モデル同時学習（bash start.sh multi、2026-10-13）】 TrainMonitor は run ごとに 1 つ（TB / loss_log.txt / 画像は run ごと）。tqdm バーは 1 本だけ:
+   train.py が先頭モデルの monitor の epoch_bar を回し、各 monitor の step() が返す postfix（label 付き）をまとめて set_postfix する。単独（label None）は従来と同じ表示。
+
 【乱数画像 n（mode.yaml noise_input、2026-10-12）】 epoch 末のフル画像（save_full_images）は再現用に **スライス名の seed**（networks.NoiseInputGenerator.slice_noise、sigma_mode random）で n を作って netG(x, n=n) に渡す。
    固定スライスは名前が同じなので毎 epoch 同じ n（epoch 間で比較できる）、ランダムスライスもそのスライス名の seed（推論の sigma_mode random と同じ n になる）。
    学習中の 128 patch グリッド（log_images）は変更なし（netG(x) = n は毎回ランダム）。
@@ -59,14 +62,16 @@ DIAG_KEYS = ("D_real", "D_fake")           # TB で diag/ に分類する損失�
 
 
 class TrainMonitor:
-    def __init__(self, opt, dataset_size, fixed_batch, eid_ref=None):
+    def __init__(self, opt, dataset_size, fixed_batch, eid_ref=None, label=None):
         """
         opt          : junyanz の opt（print_freq / image_freq / n_images / display_hu_* / diff_range_hu / hu_* / lambda_fid / batch_size を使う）
         dataset_size : 1 epoch の画像枚数（バーの total）
         fixed_batch  : {"A": (n,1,p,p), "B": (n,1,p,p)} 監視用の固定サンプル（CTDataset.fixed_batch）。None なら fixed は出さない
         eid_ref      : {"path": str, "B": (1,1,H,W)} フル画像パネルの右端に並べる EID の代表（CTDataset.eid_reference）。None なら列を出さない
+        label        : 2 モデル同時学習でのモデル名（run 名の接尾辞 = mode ファイル名）。バーの postfix と要約行の頭に付ける。単独は None（表示は従来どおり。2026-10-13）
         """
         self.opt = opt
+        self.label = label
         self.bs = opt.batch_size
         self.dataset_size = dataset_size
         self.run_dir = Path(opt.checkpoints_dir) / opt.name
@@ -89,7 +94,7 @@ class TrainMonitor:
         """dataset を包んで yield する。バーは画像枚数で進む（1 step = batch_size 枚）。"""
         # mininterval=0.1 / miniters=1: 1 step ごとに描画する（0.5 だと GPU では表示が数 step 飛ぶ）。10 Hz なら端末 I/O は問題にならない
         self.bar = tqdm(total=self.dataset_size, desc=f"Epoch {epoch}/{total_epochs}", unit="img", leave=False, dynamic_ncols=True, mininterval=0.5, miniters=1)
-        self._sum, self._n = {}, 0
+        self.begin_epoch()
         try:
             for data in dataset:
                 yield data
@@ -97,6 +102,10 @@ class TrainMonitor:
         finally:
             self.bar.close()
             self.bar = None
+
+    def begin_epoch(self):
+        """epoch 要約の積算をリセットする（バーを持つ monitor は epoch_bar が呼ぶ。組の 2 つ目以降は train.py が epoch の頭で呼ぶ。2026-10-13）。"""
+        self._sum, self._n = {}, 0
 
     def write(self, msg):
         """バーを崩さずに 1 行出す（print の代わり）。"""
@@ -109,14 +118,19 @@ class TrainMonitor:
             self._sum[k] = self._sum.get(k, 0.0) + v * n_batch
         self._n += n_batch
 
+    def set_postfix(self, postfix):
+        """バー末尾の表示（train.py が全モデルの step() の戻り値をまとめて渡す）。バーを持たない monitor では何もしない。"""
+        if self.bar is not None:
+            self.bar.set_postfix(postfix, refresh=False)
+
     def step(self, epoch, total_iters, model, t_comp, t_data):
-        """print_freq step ごとに呼ぶ: バー末尾・TB scalar・loss_log.txt を更新。"""
+        """print_freq step ごとに呼ぶ: TB scalar・loss_log.txt を更新し、バー末尾用の postfix（label があればキーに '<label>:' を付ける）を返す。
+        バーへの反映は呼ぶ側の set_postfix（複数モデルの分をまとめるため。2026-10-13）。"""
         losses = model.get_current_losses()
         d_in_hu = float((model.fake_B.detach() - model.real_A).abs().mean()) * self.hu_per_unit
-        if self.bar is not None:
-            postfix = {k: f"{losses[k]:.3f}" for k in LOSS_KEYS_BAR if k in losses}
-            postfix["d_in"] = f"{d_in_hu:.0f}HU"
-            self.bar.set_postfix(postfix, refresh=False)
+        pre = f"{self.label}:" if self.label else ""
+        postfix = {pre + k: f"{losses[k]:.3f}" for k in LOSS_KEYS_BAR if k in losses}
+        postfix[pre + "d_in"] = f"{d_in_hu:.0f}HU"
         for k, v in losses.items():
             self.tb.add_scalar(("diag/" if k in DIAG_KEYS else "loss/") + k, v, total_iters)
         if "G_GAN" in losses and "G_fid" in losses:
@@ -130,10 +144,11 @@ class TrainMonitor:
         with open(self.log_path, "a", encoding="utf-8") as f:
             f.write(f"(epoch: {epoch}, samples: {total_iters}, step: {total_iters // self.bs}, sec/step: {t_comp:.3f}, data: {t_data:.3f}) "
                     + " ".join(f"{k}: {v:.4f}" for k, v in losses.items()) + f" d_in_HU: {d_in_hu:.1f}\n")
+        return postfix
 
     def end_epoch(self, epoch, total_epochs, total_iters, lr, elapsed):
         means = {k: v / max(1, self._n) for k, v in self._sum.items()}  # 全 step のサンプル重み付き平均（F-22）
-        line = f"epoch {epoch}/{total_epochs} | " + " ".join(f"{k} {v:.4f}" for k, v in means.items()) + f" | lr {lr:.2e} | {elapsed:.0f}s"
+        line = (f"[{self.label}] " if self.label else "") + f"epoch {epoch}/{total_epochs} | " + " ".join(f"{k} {v:.4f}" for k, v in means.items()) + f" | lr {lr:.2e} | {elapsed:.0f}s"
         self.write(line)
         with open(self.log_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")

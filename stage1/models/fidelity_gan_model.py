@@ -101,6 +101,7 @@ class FidelityGANModel(BaseModel):
             # 再開用（run_train.py --resume が付ける。設定値ではなく起動器の内部フラグなので schema には無い）
             parser.add_argument("--resume_state", type=str, default=None, help="重みディレクトリの state.pth のパス。--continue_train と併用。optimizer / scheduler / RNG / iteration 数を復元する")
             parser.add_argument("--launch_path", type=str, default=None, help="この起動の実効設定（launch.yaml）。state.pth に train / mode / machine を写し、再開の基準にする（run_train.py が付ける）")
+            parser.add_argument("--co_launch", type=str, nargs="*", default=[], help="2 モデル同時学習（bash start.sh multi）で一緒に回す他モデルの launch.yaml（run_train.py が付ける内部フラグ。train.py がその argv で 2 つ目の opt を組む。2026-10-13）")
         return parser
 
     def __init__(self, opt):
@@ -125,6 +126,14 @@ class FidelityGANModel(BaseModel):
                                       noise_input=opt.noise_input, sigma_hu=(opt.sigma_hu_min, opt.sigma_hu_max), hu=(opt.hu_min, opt.hu_max))
 
         if self.isTrain:
+            # [SpicaV5] モデル側の乱数（重みの初期化、n と sigma）はモデルごとの CPU の torch.Generator（2026-10-13、2 モデル同時学習）。
+            #   seed は共有 seed そのもの（モデルの index に依らない）: 「あるモデルを単独で回した結果と、組で回した同じモデル」が乱数列として一致し、
+            #   組の 2 モデルは同じ初期重み（同じ構造なら）・同じ n の列から出発するので違いが mode / λ 等だけに絞れる。データ側（patch 抽出）はグローバル RNG（train.py の seed）のまま。
+            #   同じ seed で単独実行の CPU 計算は導入前と同じ乱数列になる（グローバル RNG を同じ順で引いていたため）。state.pth の rng.model に状態を保存し、resume で復元する
+            self.rng = torch.Generator(device="cpu").manual_seed(int(opt.seed))
+            nw = networks.noise_wrapper(self.netG)
+            if nw is not None:
+                nw.set_generator(self.rng)
             # D: B 側の判別器 (論文 D: x vs G(z))
             # [SpicaV5] PacGAN（--d_pack、2026-10-12）: D の入力チャネルは output_nc × d_pack（d_pack=1 で論文どおり 1 ch。2 で 2 枚をチャネル連結した 2 ch）。
             #   "PacGAN: The power of two samples in generative adversarial networks" (Zhang et al., NeurIPS 2018)。D の 1 層目以外は不変
@@ -264,6 +273,7 @@ class FidelityGANModel(BaseModel):
                 "python": random.getstate(),
                 "torch": torch.get_rng_state(),
                 "numpy": (np_state[0], torch.from_numpy(np_state[1].astype(np.int64)), int(np_state[2]), int(np_state[3]), float(np_state[4])),
+                "model": self.rng.get_state(),  # モデルごとの generator（重み初期化・n。2026-10-13）。無い旧 state は setup で seed から作り直す
             },
         }
         return state
@@ -295,6 +305,10 @@ class FidelityGANModel(BaseModel):
         torch.set_rng_state(rng["torch"].cpu())
         kind, keys, pos, has_gauss, cached = rng["numpy"]
         np.random.set_state((kind, keys.cpu().numpy().astype(np.uint32), pos, has_gauss, cached))
+        if "model" in rng:  # モデルごとの generator（2026-10-13）
+            self.rng.set_state(rng["model"].cpu())
+        else:  # 導入前の run: モデル側の乱数はグローバル RNG から引かれていた（復元済み）。generator は __init__ の seed 初期化のまま使う（続きの乱数列は導入前とは一致しない）
+            print(f"[resume] 注意: {opt.resume_state} にモデルごとの乱数状態（rng.model）が無い旧 run。モデル側の乱数は seed {opt.seed} の generator で続ける")
         self.resume_total_iters = state["total_iters"]
         print(f"[resume] {opt.resume_state}: epoch {state['epoch']} (done={state['epoch_done']}), total_iters {state['total_iters']}, lr {self.optimizers[0].param_groups[0]['lr']:.7f}")
 

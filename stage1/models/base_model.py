@@ -92,7 +92,7 @@ class BaseModel(ABC):
         for name in self.model_names:
             if isinstance(name, str):
                 net = getattr(self, "net" + name)
-                net = networks.init_net(net, opt.init_type, opt.init_gain)
+                net = networks.init_net(net, opt.init_type, opt.init_gain, generator=getattr(self, "rng", None))  # [SpicaV5] モデルごとの乱数（FidelityGANModel.rng。2026-10-13）
 
                 # Load networks if needed
                 if not self.isTrain or opt.continue_train:

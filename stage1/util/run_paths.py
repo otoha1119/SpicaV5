@@ -1,10 +1,13 @@
 """util/run_paths.py — run ディレクトリ（<checkpoints_dir>/<run>/）のレイアウトの唯一の正。[SpicaV5]
 
 run 名は起動時刻（JST）を yyyy_mmdd_HHMM にしたもの（例 2026_0907_1742）。'/' は使わない（引数や TensorBoard で階層に化けるため）。
+2 モデル同時学習（bash start.sh multi <modeA.yaml> <modeB.yaml>、2026-10-13）では同じ時刻 + '-' + mode ファイル名（拡張子なし。英数と '_' だけ）:
+  2026_1013_0130-n_only / 2026_1013_0130-n_pacgan（区切りは '-' 1 文字。時刻の '_' と混ざらない）。単独の run は接尾辞なし（従来どおり）。
 checkpoint は「重みディレクトリ」単位で扱う（G と D と optimizer state の 3 ファイルが 1 組なので）。
 
 <checkpoints_dir>/<run>/
   launch.yaml                 解決済み設定（実効値 = yaml + sh の上書き）。resume 時は launch_resume_<日時秒>.yaml が追加され、最新のものが次の再開・推論の基準
+  group.yaml                  multi のときだけ: 組の run 名、mode ファイル、起動時刻、共有設定（train の共有キー + mode の共有キー + machine）のハッシュ。中身の形式はそれ以外 単独と同じ
   train_opt.txt, loss_log.txt
   latest/net_G.pth, net_D.pth, state.pth        直下に置く重みディレクトリは latest と best だけ
   best/net_G.pth,   net_D.pth, state.pth        bash start.sh best <run> <epoch> で weights/epoch_NNN/ をコピー
@@ -34,7 +37,9 @@ import re
 from pathlib import Path
 
 RUN_NAME_FORMAT = "%Y_%m%d_%H%M"                 # datetime.strftime 用
-RUN_NAME_RE = re.compile(r"^\d{4}_\d{4}_\d{4}$")  # 2026_0907_1742
+RUN_SUFFIX_RE = re.compile(r"^[A-Za-z0-9_]+$")   # multi の接尾辞（mode ファイル名）。'-' は区切りなので含めない（2026-10-13）
+RUN_NAME_RE = re.compile(r"^\d{4}_\d{4}_\d{4}(-[A-Za-z0-9_]+)?$")  # 2026_0907_1742 | 2026_1013_0130-n_only
+GROUP_FILE = "group.yaml"                        # multi の組の記録（各 run に同じ内容）
 TOP_TAGS = ("latest", "best")                    # run 直下に置く重みディレクトリ。それ以外（epoch 番号、iter_N）は weights/
 WEIGHTS_DIR = "weights"
 OUTPUT_IMAGES_DIR = "output_images"
@@ -44,9 +49,14 @@ LAUNCH_FILE = "launch.yaml"
 CKPT_KINDS = ("net_G.pth", "net_D.pth", "state.pth")  # 重みディレクトリの中身
 
 
-def run_name(now):
-    """起動時刻 → run 名。"""
-    return now.strftime(RUN_NAME_FORMAT)
+def run_name(now, suffix=None):
+    """起動時刻 → run 名。suffix（multi の mode ファイル名）があれば '-' で付ける（RUN_SUFFIX_RE に合わなければ ValueError）。"""
+    stamp = now.strftime(RUN_NAME_FORMAT)
+    if suffix is None:
+        return stamp
+    if not RUN_SUFFIX_RE.match(str(suffix)):
+        raise ValueError(f"run 名の接尾辞（mode ファイル名）は英数と '_' だけにしてください: {suffix!r}")
+    return f"{stamp}-{suffix}"
 
 
 def epoch_dirname(epoch):

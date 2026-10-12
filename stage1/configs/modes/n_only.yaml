@@ -1,0 +1,16 @@
+# stage1/configs/modes/n_only.yaml — 2 モデル同時学習（bash start.sh multi）用の mode ファイル。「n あり・PacGAN なし」= 今の configs/mode.yaml と同じ内容。
+# 唯一の正は configs/schema.py の MODE。mode.yaml のキーを**全部**書く（差分ファイルではない。既定値は無い）。ファイル名（拡張子なし、英数と _）が run 名の接尾辞になる: <時刻>-n_only
+# 任意の `train:` セクションでこのモデルだけ train.yaml を差し替えられる（書けるのは schema.PER_MODEL_TRAIN_KEYS = optim.lr / beta1 / beta2、loss.lambda_fid、
+# network.ngf / ndf / norm / init_type / init_gain だけ。データ・epoch・ログ頻度など組で共有するキーを書くと起動時エラー。例は n_pacgan.yaml のコメント）。
+# 起動: bash start.sh [マシン] multi stage1/configs/modes/n_only.yaml stage1/configs/modes/n_pacgan.yaml [--flag value]（--flag は両方に同じ値で効く）
+
+sampling: random        # random（ケース 1 完全ランダム）| paper | aligned（未実装）。組で同一必須（DataLoader を共有）
+gan_mode: fgan_kl       # fgan_kl（論文 Eq.6）| lsgan | vanilla
+netG: wavelet           # wavelet（論文 Fig.3）| unet_128 | resnet_9blocks ...
+netD: paper             # paper（論文 Fig.3、受容野 22）| basic
+final_norm_act: false
+residual: true          # G(z) = z + F(z)
+serial_batches: false   # 組で同一必須
+task: degrade           # 組で同一必須（データが変わる）
+noise_input: true       # 乱数画像 n あり（段階 5-5）
+d_pack: 1               # PacGAN なし（論文どおり D の入力 1 枚）

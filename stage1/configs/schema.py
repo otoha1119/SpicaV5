@@ -85,6 +85,53 @@ MODE = {
     "noise_input":    Key(bool, "--noise_input",    "true で G の入力に乱数画像 n（1 ch 白色ガウス × sigma、x と同じ大きさ）をチャネル連結する: G(z) = F(cat[z, n])、residual なら z + F(cat[z, n])（networks.NoiseInputGenerator。F の 1 層目は input_nc + 1 ch）。損失は不変。sigma は train.yaml noise.*。task: sr では false にする。resume で変更不可、導入前の run は false 扱い。false = 論文どおり（段階 5-5、2026-10-12）"),
     "d_pack":         Key(int,  "--d_pack",         "D の packing（PacGAN: Zhang et al., NeurIPS 2018）。1 = 論文どおり D の入力 1 枚 | 2 = batch 内の別スライス 2 枚（i と i + B/2）をチャネル連結して D に入れる（D の 1 層目が output_nc × 2 ch、出力 (B/2,1,h,w)。損失式は不変）。batch_size は偶数で、B/2 ≥ data.patches_per_slice（同じスライスの 2 枚を束ねない）。resume で変更不可（段階 5-6 ①、2026-10-12）"),
 }
+# ---------------------------------------------------------------------------
+# 2 モデル同時学習 `bash start.sh multi <modeA.yaml> <modeB.yaml>`（2026-10-13、docs/plans/20261012_multi-model-training-plan.md）
+#   mode ファイル（stage1/configs/modes/<name>.yaml）は MODE のキー全部を持つ完全な mode.yaml（差分ファイルではない。既定値禁止）に加えて、
+#   任意の `train:` セクションでそのモデルだけ train.yaml を差し替えられる。差し替えてよいのは PER_MODEL_TRAIN_KEYS（損失・最適化・G/D の構造の数値）だけで、
+#   データ列・epoch 長・ログ頻度など「組で共有するキー」を書くと起動時エラー（validate_mode_file）。--flag の上書きは全モデルに同じ値で効く。
+#   mode のキーのうち SHARED_MODE_KEYS は DataLoader（1 つを共有）の作り方を決めるので組で同一でなければならない（check_shared）。
+# ---------------------------------------------------------------------------
+PER_MODEL_TRAIN_KEYS = (
+    "optim.lr", "optim.beta1", "optim.beta2",                                   # 最適化
+    "loss.lambda_fid",                                                          # 損失
+    "network.ngf", "network.ndf", "network.norm", "network.init_type", "network.init_gain",  # G / D の構造と初期化（モデルごとに持つ。input_nc / output_nc はデータの ch なので共有）
+)
+SHARED_MODE_KEYS = ("sampling", "serial_batches", "task")  # sampler / dataset を決める mode のキー（DataLoader は 1 つなので同一必須）
+MULTI_TRAIN_SECTION = "train"  # mode ファイルの中で train.yaml を差し替えるセクション名（sr.yaml の train: と同じ書き方）
+MULTI_MAX_MODELS = 2           # 受け付けるモデル数（ユーザー決定 2026-10-13「一旦 2 つに絞る」。内部はリストなので将来広げられる）
+
+
+def validate_mode_file(data, where):
+    """multi の mode ファイル: MODE のキー全部 + 任意の `train:`（PER_MODEL_TRAIN_KEYS だけ）。戻り値 (mode_flat, train_overlay_flat)。"""
+    if not isinstance(data, dict):
+        raise ConfigError(f"[{where}] トップレベルが dict ではありません: {type(data).__name__}")
+    data = dict(data)
+    overlay = data.pop(MULTI_TRAIN_SECTION, None)
+    mode = validate(where, data, MODE)
+    train_overlay = _validate_overlay(overlay, MULTI_TRAIN_SECTION, TRAIN, "train.yaml")
+    shared = [k for k in train_overlay if k not in PER_MODEL_TRAIN_KEYS]
+    if shared:
+        raise ConfigError(f"[{where}] train: で差し替えられるのはモデルごとのキー {list(PER_MODEL_TRAIN_KEYS)} だけです。組で共有するキーが書かれています: {shared}（共有の値は train.yaml か --flag で）")
+    return mode, train_overlay
+
+
+def check_shared(specs):
+    """組の各モデルの実効値（{"name", "train", "mode", "machine"} の dict のリスト）で、共有キー（TRAIN − PER_MODEL_TRAIN_KEYS、SHARED_MODE_KEYS、MACHINE 全部）が
+    先頭のモデルと一致するか。違えば ConfigError（resume で別々の run を組ませたときに効く。新規は構成上 一致する）。"""
+    if len(specs) < 2:
+        return
+    base = specs[0]
+    diffs = []
+    for sp in specs[1:]:
+        for sec, keys in (("train", [k for k in TRAIN if k not in PER_MODEL_TRAIN_KEYS]), ("mode", list(SHARED_MODE_KEYS)), ("machine", list(MACHINE))):
+            for k in keys:
+                if base[sec].get(k) != sp[sec].get(k):
+                    diffs.append(f"{sec}.{k}: {base['name']}={base[sec].get(k)!r} / {sp['name']}={sp[sec].get(k)!r}")
+    if diffs:
+        raise ConfigError("組で共有するキーが一致しません（DataLoader と epoch を共有するため同一が必要）: " + "; ".join(diffs))
+
+
 # 導入前の run の launch.yaml / state.pth に無い mode のキーと、そのとき仮定する値。無い = その機構なしで学習された重みなので、推論・crop・resume では「導入前の意味」で扱う
 # （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の値で補うと旧 run の重みの意味が変わる。2026-09-11 residual、2026-10-12 task / d_pack）
 LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade", "d_pack": 1, "noise_input": False}

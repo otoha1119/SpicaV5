@@ -44,7 +44,7 @@ class NoiseInputGenerator(nn.Module):
     損失は不変（fidelity ‖G(z) − z‖² は n を含む G の出力で自動的に計算される）。state_dict のキーには inner. が付く。
 
     sigma は HU で設定し（train.yaml noise.sigma_hu_min / max）、正規化空間では sigma = sigma_hu / ((hu_max − hu_min) / 2)。
-      学習（forward に n を渡さない）: サンプルごとに sigma_hu を log-uniform [min, max] から引き、n も毎回引く（torch のグローバル RNG。学習は毎回ランダム）
+      学習（forward に n を渡さない）: サンプルごとに sigma_hu を log-uniform [min, max] から引き、n も毎回引く（set_generator で渡されたモデルごとの CPU generator。2026-10-13。学習は毎回ランダム）
       推論・preview（再現性）: 呼ぶ側が slice_noise(name, hw, device, ...) で **スライス名から決まる seed**（zlib.crc32。Python の hash() はプロセスごとに変わるので使わない）
         と、その seed から引いた sigma_hu（sigma_mode random）または固定値（fixed）で n を作り、forward(x, n=n) で渡す。
         n は CPU の torch.Generator で作る（cuda / cpu で同じ n）。draw k（n_draws 用）は seed + k。sigma は draw によらず同じ（n の効きだけを見る）。
@@ -62,6 +62,11 @@ class NoiseInputGenerator(nn.Module):
         self.sigma_hu_max = float(sigma_hu_max)
         self.hu_per_unit = (float(hu_max) - float(hu_min)) / 2.0  # 正規化 [−1,1] の 1.0 が何 HU か
         self.last_sigma_hu = None
+        self.generator = None  # 学習用の n の乱数源（モデルごとの CPU の torch.Generator。FidelityGANModel が set_generator で渡す。2026-10-13）。state_dict には入らない
+
+    def set_generator(self, generator):
+        """学習（forward に n を渡さない）で n と sigma を引く torch.Generator（CPU）を設定する。2 モデル同時学習でモデルごとに分ける（2026-10-13）。"""
+        self.generator = generator
 
     # ---- 再現用 API（推論・preview・crop が使う）----
     @staticmethod
@@ -97,12 +102,17 @@ class NoiseInputGenerator(nn.Module):
         return n.to(device), seed, sigma_hu
 
     def random_noise(self, x):
-        """学習用: x (B,1,H,W) と同じ形の n を、サンプルごとの log-uniform sigma で引く（グローバル RNG、x のデバイス）。sigma_hu を last_sigma_hu に残す。"""
+        """学習用: x (B,1,H,W) と同じ形の n を、サンプルごとの log-uniform sigma で引く。sigma_hu を last_sigma_hu に残す。
+        乱数源は set_generator で渡されたモデルごとの CPU generator（2026-10-13。CPU で引いて x のデバイスへ送る。cuda / cpu で同じ n）。
+        未設定なら止める（推論・preview は n を渡す slice_noise を使うのでここには来ない。グローバル RNG へのフォールバックはしない）。"""
+        if self.generator is None:
+            raise RuntimeError("NoiseInputGenerator.random_noise: generator が未設定です（学習は FidelityGANModel が set_generator で渡す。推論・preview は n を slice_noise で作って forward(x, n=n) に渡す）")
         b = x.shape[0]
         lo, hi = math.log(self.sigma_hu_min), math.log(self.sigma_hu_max)
-        sigma_hu = torch.exp(lo + torch.rand(b, device=x.device, dtype=x.dtype) * (hi - lo))  # (B,)
+        g = self.generator
+        sigma_hu = torch.exp(lo + torch.rand(b, generator=g).to(device=x.device, dtype=x.dtype) * (hi - lo))  # (B,)
         self.last_sigma_hu = sigma_hu.detach()
-        n = torch.randn(b, 1, x.shape[-2], x.shape[-1], device=x.device, dtype=x.dtype) * (sigma_hu / self.hu_per_unit).view(b, 1, 1, 1)
+        n = torch.randn(b, 1, x.shape[-2], x.shape[-1], generator=g).to(device=x.device, dtype=x.dtype) * (sigma_hu / self.hu_per_unit).view(b, 1, 1, 1)
         return n
 
     def forward(self, x, n=None):
@@ -182,13 +192,14 @@ def get_scheduler(optimizer, opt):
     return scheduler
 
 
-def init_weights(net, init_type="normal", init_gain=0.02):
+def init_weights(net, init_type="normal", init_gain=0.02, generator=None):
     """Initialize network weights.
 
     Parameters:
         net (network)   -- network to be initialized
         init_type (str) -- the name of an initialization method: normal | xavier | kaiming | orthogonal
         init_gain (float)    -- scaling factor for normal, xavier and orthogonal.
+        generator (torch.Generator or None) -- [SpicaV5] モデルごとの乱数（2 モデル同時学習で他モデルの乱数消費に影響されないため。2026-10-13）。None なら本家どおりグローバル RNG
 
     We use 'normal' in the original pix2pix and CycleGAN paper. But xavier and kaiming might
     work better for some applications. Feel free to try yourself.
@@ -198,37 +209,39 @@ def init_weights(net, init_type="normal", init_gain=0.02):
         classname = m.__class__.__name__
         if hasattr(m, "weight") and (classname.find("Conv") != -1 or classname.find("Linear") != -1):
             if init_type == "normal":
-                init.normal_(m.weight.data, 0.0, init_gain)
+                init.normal_(m.weight.data, 0.0, init_gain, generator=generator)
             elif init_type == "xavier":
-                init.xavier_normal_(m.weight.data, gain=init_gain)
+                init.xavier_normal_(m.weight.data, gain=init_gain, generator=generator)
             elif init_type == "kaiming":
-                init.kaiming_normal_(m.weight.data, a=0, mode="fan_in")
+                init.kaiming_normal_(m.weight.data, a=0, mode="fan_in", generator=generator)
             elif init_type == "orthogonal":
-                init.orthogonal_(m.weight.data, gain=init_gain)
+                init.orthogonal_(m.weight.data, gain=init_gain, generator=generator)
             else:
                 raise NotImplementedError("initialization method [%s] is not implemented" % init_type)
             if hasattr(m, "bias") and m.bias is not None:
                 init.constant_(m.bias.data, 0.0)
         elif classname.find("BatchNorm2d") != -1:  # BatchNorm Layer's weight is not a matrix; only normal distribution applies.
-            init.normal_(m.weight.data, 1.0, init_gain)
+            init.normal_(m.weight.data, 1.0, init_gain, generator=generator)
             init.constant_(m.bias.data, 0.0)
 
     print("initialize network with %s" % init_type)
     net.apply(init_func)  # apply the initialization function <init_func>
 
 
-def init_net(net, init_type="normal", init_gain=0.02):
+def init_net(net, init_type="normal", init_gain=0.02, generator=None):
     """Initialize a network: 1. register CPU/GPU device; 2. initialize the network weights
     Parameters:
         net (network)      -- the network to be initialized
         init_type (str)    -- the name of an initialization method: normal | xavier | kaiming | orthogonal
         gain (float)       -- scaling factor for normal, xavier and orthogonal.
+        generator          -- [SpicaV5] モデルごとの CPU の torch.Generator（init_weights に渡す。2026-10-13）。None なら本家どおり
 
     Return an initialized network.
+    [SpicaV5] generator が CPU のときは重みを CPU で初期化してからデバイスへ送る（CUDA 上の tensor は CPU generator で初期化できないため。単独実行の乱数列は不変）。
     """
     import os
 
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and generator is None:
         if "LOCAL_RANK" in os.environ:
             local_rank = int(os.environ["LOCAL_RANK"])
             net.to(local_rank)
@@ -236,7 +249,11 @@ def init_net(net, init_type="normal", init_gain=0.02):
         else:
             net.to(0)
             print("Initialized with device cuda:0")
-    init_weights(net, init_type, init_gain=init_gain)
+    init_weights(net, init_type, init_gain=init_gain, generator=generator)
+    if torch.cuda.is_available() and generator is not None:
+        dev = int(os.environ["LOCAL_RANK"]) if "LOCAL_RANK" in os.environ else 0
+        net.to(dev)
+        print(f"Initialized with device cuda:{dev}")
     return net
 
 

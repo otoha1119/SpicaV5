@@ -12,13 +12,19 @@
 #   4. コンテナ内で train_stage1.sh を実行して学習を始める（shell / down のときは除く）
 #
 # ■ 引数の規則
-#   bash start.sh [マシン名] [build|shell|down|tb|infer|crop|split] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
+#   bash start.sh [マシン名] [build|shell|down|tb|infer|crop|split] [multi <modeA.yaml> <modeB.yaml>] [resume <run> [<run2>] [tag]] [best <run> <epoch>] [--flag value ...]
 #   ・--flag より前の単語を読む。順不同。
-#   ・build / shell / down / tb / infer / crop / split / resume / best はサブコマンド。それ以外の単語は「マシン名」とみなし、sh 内の MACHINE より優先する。
+#   ・build / shell / down / tb / infer / crop / split / multi / resume / best はサブコマンド。それ以外の単語は「マシン名」とみなし、sh 内の MACHINE より優先する。
+#   ・multi は 2 モデル同時学習（2026-10-13、docs/plans/20261012_multi-model-training-plan.md）: mode ファイル（stage1/configs/modes/<name>.yaml。mode.yaml のキー全部 +
+#     任意の train: でそのモデルだけ λ / lr / β / G, D の ch と初期化を差し替え）を**ちょうど 2 つ**。1 プロセス・DataLoader 1 つで同じ batch を 2 モデルに順に流す。
+#     run は 2 つ（<時刻>-<name>。例 2026_1013_0130-n_only / 2026_1013_0130-n_pacgan）で中身は単独と同じ + group.yaml。--flag は両方に同じ値で効く。
+#     TensorBoard は 2 run を --logdir_spec で同時表示。片方が NaN / 例外なら両方止まる（各 latest/ は直前の保存のまま）。3 つ以上・1 つはエラー、同一内容は警告して続行。
 #   ・split は task: sr（一発超解像。stage1/configs/mode.yaml の task）用の症例分割ファイル configs/splits/eid_v5.yaml を作る（split_stage1.sh の比率・seed・FORCE_TEST。
 #     既にあれば止まる。作り直すなら bash start.sh split --overwrite）。学習は mode.yaml の task: sr（または --task sr）で stage1/configs/sr.yaml を読む
 #   ・build は「イメージを（再）ビルドしてコンテナを起動し、torch / cuda の確認を表示して終わる」だけ。学習は始めない（本番機の初期セットアップ用）。
-#   ・resume の直後は run 名（yyyy_mmdd_HHMM）、その次が latest / best / epoch 番号なら checkpoint の tag（省略時 latest）。
+#   ・resume の直後は run 名（yyyy_mmdd_HHMM[-<name>]）、その次が latest / best / epoch 番号なら checkpoint の tag（省略時 latest）。
+#     run 名を 2 つ並べる（bash start.sh resume <runA> <runB> [tag]）と組として再開（各 run の state.pth の実効設定を基準に、共有キーと進捗の一致を再検査。
+#     group.yaml の相手と違う run を組ませたら警告して続行）。1 つなら単独（組の片方だけでも可）。
 #   ・best の直後は run 名と epoch 番号（両方必須）。best/ は best.tmp/ に揃えてから差し替える。
 #   ・infer は引数を取らない。重みディレクトリ・入力フォルダ・出力形式・元 DICOM ルートは infer_stage1.sh の変数
 #     （WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR）に書く（同名の --flag で上書き可）。
@@ -40,6 +46,9 @@
 #   bash start.sh PC2 build                  # マシン指定でビルドだけ（本番機で最初にやる）
 #   bash start.sh resume 2026_0905_1234      # その run の latest から学習を再開（同じディレクトリに続きを保存）
 #   bash start.sh resume 2026_0905_1234 30 --n_epochs 400   # epoch 30 の checkpoint（weights/30_*）から、epoch 数を延ばして再開
+#   bash start.sh PC4 multi stage1/configs/modes/n_only.yaml stage1/configs/modes/n_pacgan.yaml   # 2 モデル同時学習（n だけ vs n + PacGAN）。run は <時刻>-n_only / -n_pacgan
+#   bash start.sh PC4 resume 2026_1013_0130-n_only 2026_1013_0130-n_pacgan        # 組として latest から再開（tag は末尾に latest|best|<epoch>）
+#   bash start.sh PC4 resume 2026_1013_0130-n_pacgan                              # 組の片方だけ単独で再開
 #   bash start.sh best 2026_0905_1234 30     # epoch 30 を best にする（weights/epoch_030/ → best/、best.txt に記録。目視で選ぶ）
 #   bash start.sh infer                      # 推論。infer_stage1.sh の WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR、stage1/configs/infer.yaml の方式
 #   bash start.sh infer --mode full --max_slices 4                        # 方式を上書きして推論
@@ -92,7 +101,7 @@
 #   ・改行コードは .gitattributes で LF 固定。古い clone が CRLF なら README の手順で取り直す。
 #
 # ■ TensorBoard（学習開始時に自動）
-#   ・学習（train / resume）のときは、起動器（stage1/run_train.py）が **その run の <run>/tb だけ**を logdir にして TensorBoard を起動する
+#   ・学習（train / resume）のときは、起動器（stage1/run_train.py）が **その run の <run>/tb だけ**を logdir にして TensorBoard を起動する（multi は 2 run を --logdir_spec で同時表示）
 #     （port = machines.yaml の tb_port、ログ <run>/tensorboard.log）。前の run の TensorBoard は止める。start.sh は応答を待ってホストのブラウザで
 #     http://localhost:<tb_port> を開く。学習が終わっても TensorBoard は残る（次の学習か down で止まる）。
 #   ・全 run を並べて比較したいときは  bash start.sh tb （logdir = checkpoints_dir 全体）。ポートが塞がっていたら machines.yaml の tb_port を変える。
@@ -158,17 +167,26 @@ MACHINES="$ROOT/configs/machines.yaml"
 # --- 引数: --flag より前の単語を読む。build / shell / down / tb / resume / infer / crop / best はサブコマンド、それ以外の単語はマシン名（sh 内の MACHINE より優先）。
 #     build はビルドだけで終わる（学習しない）。
 #     --flag 以降は上書き引数として train_stage1.sh / infer_stage1.sh へそのまま渡す ---
-ACTION=train; BUILD=""; MACHINE_ARG=""; RESUME=""; RESUME_TAG="latest"; BEST_RUN=""; BEST_EPOCH=""
+ACTION=train; BUILD=""; MACHINE_ARG=""; RESUME=""; RESUME_TAG="latest"; BEST_RUN=""; BEST_EPOCH=""; MULTI_MODES=()
+RUN_RE='^[0-9]{4}_[0-9]{4}_[0-9]{4}(-[A-Za-z0-9_]+)?$'  # run 名（stage1/util/run_paths.py RUN_NAME_RE と同じ。multi の接尾辞 -<name> 付きも可）
 while [ $# -gt 0 ]; do
   case "$1" in
     build) ACTION=build; BUILD="--build"; shift ;;
     shell) ACTION=shell; shift ;;
     down)  ACTION=down; shift ;;
     tb)    ACTION=tb; shift ;;
+    multi)  # 2 モデル同時学習: 直後の *.yaml を mode ファイルとして全部取る（ちょうど 2 つ。数の検査は下）
+      shift
+      while [ $# -gt 0 ] && [[ "$1" == *.yaml ]]; do
+        [[ "$1" == *" "* ]] && { echo "[start] mode ファイルのパスに空白は使えません: $1" >&2; exit 2; }
+        MULTI_MODES+=("$1"); shift
+      done
+      [ ${#MULTI_MODES[@]} -gt 0 ] || { echo "[start] multi には mode ファイルが必要です: bash start.sh multi stage1/configs/modes/n_only.yaml stage1/configs/modes/n_pacgan.yaml" >&2; exit 2; } ;;
     resume)
       shift
-      [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start] resume には run 名が必要です: bash start.sh resume yyyy_mmdd_HHMM [latest|best|<epoch>]" >&2; exit 2; }
+      [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start] resume には run 名が必要です: bash start.sh resume yyyy_mmdd_HHMM[-<name>] [<run2>] [latest|best|<epoch>]" >&2; exit 2; }
       RESUME="$1"; shift
+      if [ $# -gt 0 ] && [[ "$1" =~ $RUN_RE ]]; then RESUME="$RESUME $1"; shift; fi  # 2 つ目の run 名があれば組として再開（空白区切りで渡す。2026-10-13）
       if [ $# -gt 0 ] && [[ "$1" =~ ^([0-9]+|latest|best)$ ]]; then RESUME_TAG="$1"; shift; fi ;;
     infer) ACTION=infer; shift ;;
     crop)  ACTION=crop; shift ;;
@@ -189,6 +207,13 @@ if [ -n "$MACHINE_ARG" ]; then
 fi
 if [ "$ACTION" = build ] && [ $# -gt 0 ]; then
   echo "[start] build はビルドだけで学習しないので --flag は付けられません: $*  （学習は bash start.sh [--flag ...]）" >&2; exit 2
+fi
+if [ ${#MULTI_MODES[@]} -gt 0 ]; then  # multi の数の検査（起動器 run_train.py でも検査するが、コンテナを起動する前に止める）
+  [ "$ACTION" = train ] || { echo "[start] multi は学習専用です（$ACTION と併用不可）" >&2; exit 2; }
+  [ -z "$RESUME" ] || { echo "[start] multi と resume は併用できません（組の再開は bash start.sh resume <runA> <runB> [tag]）" >&2; exit 2; }
+  if [ ${#MULTI_MODES[@]} -eq 1 ]; then echo "[start] multi は mode ファイルを 2 つ指定します（1 つなら単独の bash start.sh [--flag]）: ${MULTI_MODES[*]}" >&2; exit 2; fi
+  if [ ${#MULTI_MODES[@]} -gt 2 ]; then echo "[start] multi で受け付けるのは 2 つまでです（ユーザー決定 2026-10-13）: ${#MULTI_MODES[@]} 個 ${MULTI_MODES[*]}" >&2; exit 2; fi
+  for m in "${MULTI_MODES[@]}"; do [ -f "$ROOT/$m" ] || [ -f "$m" ] || { echo "[start] mode ファイルがありません: ${m}（リポジトリ直下からの相対パス。例 stage1/configs/modes/n_only.yaml）" >&2; exit 2; }; done
 fi
 
 # --- ホストの python（machines.yaml を読む） ---
@@ -231,7 +256,7 @@ case "$GPU_GEN" in
 esac
 COMPOSE=("docker" "compose" "-f" "$ROOT/docker/compose.$GEN.yaml" "-p" "spicav5")
 export HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT TB_PORT_STAGE2 SPICA_MACHINE="$MACHINE"
-echo "[start] machine=$MACHINE gpu_gen=$GPU_GEN -> $GEN | mount $HOST_DATA_ROOT -> $CONTAINER_DATA_ROOT | action=$ACTION ${BUILD:+(rebuild)}${RESUME:+ resume=$RESUME tag=$RESUME_TAG}${BEST_RUN:+ run=$BEST_RUN epoch=$BEST_EPOCH}"
+echo "[start] machine=$MACHINE gpu_gen=$GPU_GEN -> $GEN | mount $HOST_DATA_ROOT -> $CONTAINER_DATA_ROOT | action=$ACTION ${BUILD:+(rebuild)}${RESUME:+ resume=$RESUME tag=$RESUME_TAG}${BEST_RUN:+ run=$BEST_RUN epoch=$BEST_EPOCH}${MULTI_MODES[*]:+ multi=${MULTI_MODES[*]}}"
 
 if [ "$ACTION" = down ]; then
   "${COMPOSE[@]}" down
@@ -321,13 +346,13 @@ open_when_ready() {  # バックグラウンド: 学習側（run_train.py）が�
   local url="http://localhost:$TB_PORT"
   for _ in $(seq 1 120); do
     if curl -s -o /dev/null "$url"; then
-      echo "[start] TensorBoard: $url（この run だけ。全 run は bash start.sh tb）"
+      echo "[start] TensorBoard: ${url}（この run だけ。全 run は bash start.sh tb）"
       open_browser "$url" || echo "[start] ブラウザを自動で開けませんでした。$url を手で開いてください"
       return
     fi
     sleep 1
   done
-  echo "[start] TensorBoard の応答がありません: $url（<run>/tensorboard.log を確認）"
+  echo "[start] TensorBoard の応答がありません: ${url}（<run>/tensorboard.log を確認）"
 }
 
 case "$ACTION" in
@@ -340,8 +365,10 @@ case "$ACTION" in
   train)
     tb_kill
     if command -v curl >/dev/null 2>&1; then open_when_ready & fi
-    if [ -n "$RESUME" ]; then
+    if [ -n "$RESUME" ]; then  # 単独 or 組（空白区切り 2 つ）の再開
       exec_it -e SPICA_TB_PORT="$TB_PORT" -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash train_stage1.sh "$@"
+    elif [ ${#MULTI_MODES[@]} -gt 0 ]; then  # 2 モデル同時学習（mode ファイルは空白区切りで渡す。train_stage1.sh が絶対パスにする）
+      exec_it -e SPICA_TB_PORT="$TB_PORT" -e SPICA_MULTI_MODES="${MULTI_MODES[*]}" spicav5 bash train_stage1.sh "$@"
     else
       exec_it -e SPICA_TB_PORT="$TB_PORT" spicav5 bash train_stage1.sh "$@"
     fi ;;

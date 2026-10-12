@@ -59,24 +59,25 @@ class BaseOptions:
         self.initialized = True
         return parser
 
-    def gather_options(self):
+    def gather_options(self, argv=None):
         """Initialize our parser with basic options(only once).
         Add additional model-specific and dataset-specific options.
         These options are defined in the <modify_commandline_options> function
         in model and dataset classes.
+        [SpicaV5] argv（list）を渡すと sys.argv の代わりにそれを解析する（2 モデル同時学習で 2 つ目以降の launch.yaml の argv を読むため。2026-10-13）。None なら本家どおり sys.argv
         """
         if not self.initialized:  # check if it has been initialized
             parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
             parser = self.initialize(parser)
 
         # get the basic options
-        opt, _ = parser.parse_known_args()
+        opt, _ = parser.parse_known_args(argv)
 
         # modify model-related parser options
         model_name = opt.model
         model_option_setter = models.get_option_setter(model_name)
         parser = model_option_setter(parser, self.isTrain)
-        opt, _ = parser.parse_known_args()  # parse again with new defaults
+        opt, _ = parser.parse_known_args(argv)  # parse again with new defaults
 
         # modify dataset-related parser options
         dataset_name = opt.dataset_mode
@@ -85,7 +86,7 @@ class BaseOptions:
 
         # save and return the parser
         self.parser = parser
-        return parser.parse_args()
+        return parser.parse_args(argv)
 
     def print_options(self, opt):
         """Print and save options
@@ -113,9 +114,9 @@ class BaseOptions:
             opt_file.write("\n")
         print(f"options saved to {file_name}")
 
-    def parse(self):
-        """Parse our options, create checkpoints directory suffix, and set up gpu device."""
-        opt = self.gather_options()
+    def parse(self, argv=None):
+        """Parse our options, create checkpoints directory suffix, and set up gpu device. [SpicaV5] argv は gather_options を参照（2026-10-13）"""
+        opt = self.gather_options(argv)
         opt.isTrain = self.isTrain  # train or test
 
         # process opt.suffix
