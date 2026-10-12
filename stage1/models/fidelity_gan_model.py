@@ -218,7 +218,10 @@ class FidelityGANModel(BaseModel):
             return None
         with open(path, encoding="utf-8") as f:
             launch = yaml.safe_load(f)
-        return {k: dict(launch[k]) for k in ("train", "mode", "machine")}
+        cfg = {k: dict(launch[k]) for k in ("train", "mode", "machine")}
+        if isinstance(launch.get("sr"), dict):  # task: sr の実効値（split_file / b_exclude_cases / upsample）。resume はこれも基準にする（2026-10-12）
+            cfg["sr"] = dict(launch["sr"])
+        return cfg
 
     def _resume_state(self):
         """state.pth の中身（optimizer / RNG / 進捗）。"""

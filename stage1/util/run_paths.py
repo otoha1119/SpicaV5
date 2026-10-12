@@ -11,6 +11,7 @@ checkpoint は「重みディレクトリ」単位で扱う（G と D と optimi
   best.txt                    best がどの epoch か（判定基準がまだ無いので当面は目視で手動指定）
   weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごとの checkpoint（保存は <dir>.tmp → rename で原子的。.tmp / .old が残っていたら中断の痕跡）
   output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png        checkpoint（毎 epoch）ごとのフル 512（uint16、入力と同じ規約 = HU が読める）
+  （task: sr（mode.yaml、2026-10-12）では名前が入れ替わる: <slice>_{eid,pcdlike,R}.png、00_eid_ / 01_pcd_ / epoch_NNN_pcdlike。util/task_names.py）
   output_images/preview_fixed_<slice>/                       固定スライス（train.yaml log.full_slice）の表示用（表示範囲で線形、log.preview_bits の深度。HU は読めない）
       00_pcd_<slice>.png, 01_eid_<eid_slice>.png             代表: PCD 入力と EID（log.eid_slice）。初回の checkpoint で 1 回だけ（名前順で先頭に来る）
       epoch_NNN_eidlike.png, epoch_NNN_R_color.png           epoch ごとの EID-like（グレー 1ch）と R（カラー RGB: 白 = 0、純青 = −log.diff_range_hu、純赤 = +。util/residual_color.py）

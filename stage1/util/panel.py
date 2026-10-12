@@ -96,6 +96,8 @@ def build_panel(cols, labels, range_hu):
     return np.concatenate([top, panel, top], axis=0)
 
 
-def full_labels(epoch):
-    """フル画像パネルのラベル（並び順 EID → EID-like → PCD → R）。"""
-    return ["EID", f"EID-like  G(z)   epoch {int(epoch)}", "PCD  z", "R = G(z) - z   [HU]"]
+def full_labels(epoch, task="degrade"):
+    """フル画像パネルのラベル（並び順 B の代表 → G(z) → A → R。degrade: EID → EID-like → PCD → R、sr: PCD → PCD-like → EID → R）。util/task_names.py が正。"""
+    from util.task_names import full_labels as _labels
+
+    return _labels(task, f"epoch {int(epoch)}")

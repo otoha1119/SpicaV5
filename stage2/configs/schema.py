@@ -97,6 +97,7 @@ MACHINE = {
     "pcd1024_dir":           Key(str, "--pcd1024_dir",           "Stage 2 の教師 PCD1024（<case>/<slice>.png、1ch uint16、512 と同じ命名）"),
     "eid_dir":               Key(str, "--eid_dir",               "実 EID512（ImageCAS、EID_v5。Stage 1 の x 側と同じキー）。学習では log.eid_slice の 1 枚だけ読む"),
     "eidlike1024_dir":       Key(str, "--eidlike1024_dir",       "Stage 2 の学習入力。bash start2.sh dataset の出力先（EID-like512 を ×2 補間）で、学習はここを読む。container_data_root 配下"),
+    "eid1024_dir":           Key(str, None,                      "実 EID の 1024（Stage 1 の task: sr が使う）。Stage 2 は使わない（machines.yaml は Stage 共通なので宣言だけ。2026-10-12）"),
     "stage2_checkpoints_dir": Key(str, "--stage2_checkpoints_dir", "Stage 2 の run（yyyy_mmdd_HHMM）の保存先ルート。レイアウトは stage2/util/run_paths.py"),
 }
 

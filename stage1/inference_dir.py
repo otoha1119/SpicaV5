@@ -1,4 +1,10 @@
-"""inference_dir.py — 学習済み G で PCD → EID-like をディレクトリ丸ごと書き出す（フェーズ 7、症例丸ごと推論）。[SpicaV5 新規]
+"""inference_dir.py — 学習済み G で A → G(z)（degrade: PCD → EID-like、sr: EID1024 → PCD-like1024）をディレクトリ丸ごと書き出す（フェーズ 7、症例丸ごと推論）。[SpicaV5 新規]
+
+task（run の launch.yaml の mode.task。run_infer.py が --task で渡す）[2026-10-12]
+  degrade : 従来どおり。入力 = PCD512 など、出力 = EID-like
+  sr      : 入力は 1 枚ごとに大きさで判定: 一辺 = sr_input_size（512 = 実 EID_v5）なら launch の sr.upsample の方式（scale / interp = 学習入力 EID1024 の manifest）で
+            補間してから G に通し、その 1024 入力も <mode>_input/<case>/<slice>.png に 16bit で残す。一辺 = input_size × scale（1024）ならそのまま。他の大きさはエラー。
+            出力 = PCD-like1024（<mode>/）。R = G(z) − z は補間後の入力に対する差。DICOM 出力は未対応（参照 DICOM が 512 で行列が変わるため。--output_format png）
 
 通常は run_infer.py（ホストからは bash start.sh infer。重みディレクトリと入力フォルダは infer_stage1.sh の変数）から**全引数明示**で exec される。
 引数はすべて必須（既定値なし）。設計: docs/plans/20260907_inference-plan.md
@@ -46,9 +52,10 @@ from tqdm import tqdm
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from data.ct_dataset import CaseIndex, denormalize, normalize, read_stored, residual_stored, write_png  # noqa: E402
+from data.ct_dataset import CaseIndex, denormalize, normalize, read_stored, residual_stored, upsample, write_png  # noqa: E402
 from util.residual_color import colorbar_filename, colorbar_rgb01, residual_rgb01, residual_rgb8, rgb_to_bgr  # noqa: E402
 from util.panel import build_panel  # noqa: E402
+from util.task_names import TASKS, names as task_names  # noqa: E402
 from models import networks  # noqa: E402
 from util.dicom_io import DicomIndex, check_pixels, check_rescale, check_series_unique, write_like_reference  # noqa: E402
 
@@ -79,6 +86,10 @@ def parse_args():
     req("--hu_offset", type=int)
     req("--hu_min", type=int)
     req("--hu_max", type=int)
+    req("--task", choices=TASKS, help="run の launch.yaml の mode.task（degrade | sr）。表示名と、sr のときの 512 入力の補間を決める")
+    p.add_argument("--sr_scale", type=int, default=None, help="sr: launch の sr.upsample.scale（512 入力をこの倍率で補間）")
+    p.add_argument("--sr_interp", type=str, default=None, help="sr: launch の sr.upsample.interp")
+    p.add_argument("--sr_input_size", type=int, default=None, help="sr: launch の sr.upsample.input_size（この一辺の入力を補間する）")
     req("--diff_range_hu", type=int, help="R のカラー表示の ±範囲 HU（現在の configs/train.yaml の log.diff_range_hu。学習時の TensorBoard と同じ）")
     req("--display_hu_min", type=int, help="表示用の線形範囲の下限 HU（現在の configs/train.yaml の log.display_hu_min）。--save_panel のパネルにだけ使う")
     req("--display_hu_max", type=int, help="表示用の線形範囲の上限 HU（現在の configs/train.yaml の log.display_hu_max）。--save_panel のパネルにだけ使う")
@@ -201,6 +212,15 @@ def main():
         torch.backends.cudnn.benchmark = True  # 入力の形が固定なので cuDNN に最速アルゴリズムを選ばせる（2026-09-09）
     write_png_out = a.output_format in ("png", "both")
     write_dcm = a.output_format in ("dicom", "both")
+    nm = task_names(a.task)
+    sr_up = None
+    if a.task == "sr":
+        if any(getattr(a, k) is None for k in ("sr_scale", "sr_interp", "sr_input_size")):
+            raise ValueError("--task sr には --sr_scale / --sr_interp / --sr_input_size が必要です（run_infer.py が launch の sr.upsample から渡す）")
+        if write_dcm:
+            raise ValueError("task: sr の DICOM 出力は未対応です（参照 DICOM が 512 で出力が 1024。--output_format png）")
+        sr_up = (a.sr_scale, a.sr_interp, a.sr_input_size)
+    n_upsampled = [0]
     dicom_index = DicomIndex(a.dicom_dir) if write_dcm else None  # 無ければここで止まる
     input_dir = Path(a.input_dir)
     out_dir = Path(a.out_dir)
@@ -213,8 +233,8 @@ def main():
     if "patch" in modes and a.patch_size % (2**LEVELS):
         raise ValueError(f"patch_size は {2**LEVELS} の倍数である必要があります: {a.patch_size}")
 
-    # --save_panel: 表示用パネル [EID-like | PCD | R + ゲージ]（crop_patches.py・util/monitor.py と同じ正規化表示）
-    panel_labels = [f"EID-like  G(z)   {Path(a.weight_dir).name}", "PCD  z", "R = G(z) - z   [HU]"]
+    # --save_panel: 表示用パネル [G(z) | A | R + ゲージ]（degrade: EID-like | PCD | R、sr: PCD-like | EID | R。crop_patches.py・util/monitor.py と同じ正規化表示）
+    panel_labels = [f"{nm['GEN']}  G(z)   {Path(a.weight_dir).name}", f"{nm['A']}  z", "R = G(z) - z   [HU]"]
     panel_gray01 = lambda stored: np.repeat(np.clip((stored.astype(np.float32) - a.hu_offset - a.display_hu_min) / float(a.display_hu_max - a.display_hu_min), 0.0, 1.0)[..., None], 3, axis=2)  # noqa: E731
     quant_panel = (  # noqa: E731
         (lambda x01: (np.clip(x01, 0, 1) * 65535.0).round().astype(np.uint16)) if a.preview_bits == 16
@@ -225,7 +245,8 @@ def main():
     paths = idx.all_paths if a.max_slices == 0 else idx.all_paths[: a.max_slices]
     n_patches = None
     print(f"[infer] device={device} G={weight_path}")
-    print(f"[infer] input={input_dir} ({idx.n_cases} cases, {idx.n_slices} slices, 推論 {len(paths)} 枚) mode={a.mode} output={a.output_format} -> {out_dir}")
+    print(f"[infer] task={a.task} input={input_dir} ({idx.n_cases} cases, {idx.n_slices} slices, 推論 {len(paths)} 枚) mode={a.mode} output={a.output_format} -> {out_dir}"
+          + (f" | sr: 一辺 {sr_up[2]} の入力は ×{sr_up[0]} {sr_up[1]} で補間、{sr_up[2] * sr_up[0]} はそのまま" if sr_up is not None else ""))
     if write_dcm:
         rels_by_case = {}
         for p in paths:  # 先に全部の対応と Rescale の一致・症例内の Series 一意性を確認してから回す（途中で止まらないように）
@@ -254,7 +275,15 @@ def main():
 
     def load(p):
         stored = read_stored(p)
-        return stored, normalize(stored, *hu)
+        if sr_up is not None:  # sr: 512（input_size）なら学習入力と同じ方式で補間、1024（input_size × scale）ならそのまま。他はエラー
+            scale, interp, in_size = sr_up
+            if stored.shape == (in_size, in_size):
+                stored = upsample(stored, scale, interp)
+                n_upsampled[0] += 1
+                return stored, normalize(stored, *hu), True
+            if stored.shape != (in_size * scale, in_size * scale):
+                raise ValueError(f"task sr の入力は一辺 {in_size}（補間する）か {in_size * scale}（そのまま）: {stored.shape} {p}")
+        return stored, normalize(stored, *hu), False
 
     def drain(limit):
         t = time.time()
@@ -283,7 +312,7 @@ def main():
                 if p is None:
                     break
                 t = time.time()
-                stored, x_np = load(p)
+                stored, x_np, up = load(p)
                 tm["read"] += time.time() - t
             else:
                 while len(queue) < prefetch:
@@ -295,9 +324,9 @@ def main():
                     break
                 p, fut = queue.popleft()
                 t = time.time()
-                stored, x_np = fut.result()
+                stored, x_np, up = fut.result()
                 tm["read"] += time.time() - t
-            items.append((p, stored, x_np))
+            items.append((p, stored, x_np, up))
         return items
 
     diff_lines = []
@@ -310,7 +339,7 @@ def main():
                 break
             outs_full = None
             if "full" in modes:
-                xs = [torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0) for _, _, x_np in items]
+                xs = [torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0) for _, _, x_np, _ in items]
                 t = time.time()
                 with torch.inference_mode():
                     if all(x.shape == xs[0].shape for x in xs):
@@ -320,7 +349,7 @@ def main():
                 tm["full"] += time.time() - t
             outs_patch = None
             if "patch" in modes:
-                xs = [torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0) for _, _, x_np in items]
+                xs = [torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0) for _, _, x_np, _ in items]
                 if n_patches is None:
                     n_patches = len(grid_positions(xs[0].shape[-2], a.patch_size, a.patch_stride)) * len(grid_positions(xs[0].shape[-1], a.patch_size, a.patch_stride))
                     tqdm.write(f"[infer] patch: {a.patch_size}px stride {a.patch_stride} → {n_patches} patch/枚, blend={a.patch_blend}, patch_batch={a.patch_batch_size}, slices/forward={a.batch_slices}")
@@ -331,7 +360,7 @@ def main():
                     else:
                         outs_patch = [infer_patch(net, x.to(device), a.patch_size, a.patch_stride, window, a.patch_batch_size) for x in xs]
                 tm["patch"] += time.time() - t
-            for k, (p, stored, x_np) in enumerate(items):
+            for k, (p, stored, x_np, up) in enumerate(items):
                 rel = Path(p).relative_to(input_dir)
                 outs = {}
                 if outs_full is not None:
@@ -346,13 +375,15 @@ def main():
                     eid16 = denormalize(y[0, 0].cpu().numpy(), *hu)
                     if write_png_out:
                         put(out_dir / m / rel, eid16)
+                        if up:  # sr: 補間した 1024 入力も残す（学習入力 EID1024 と同じ画像。R の基準）
+                            put(out_dir / f"{m}_input" / rel, stored)
                     if write_dcm:
                         key = (m, rel.parent)
                         if key not in series_uid:
                             series_uid[key] = generate_uid()
                         write_like_reference(dicom_index.reference_for(rel.stem), eid16.astype(np.float64) - a.hu_offset,
                                              out_dir / f"{m}_dicom" / rel.with_suffix(".dcm"), series_uid[key],
-                                             f"SpicaV5 EID-like {run_name}/{Path(a.weight_dir).name} {m}", a.rescale_slope, a.rescale_intercept, ds=ref_ds)
+                                             f"SpicaV5 {nm['GEN']} {run_name}/{Path(a.weight_dir).name} {m}", a.rescale_slope, a.rescale_intercept, ds=ref_ds)
                     if a.save_residual or a.save_panel:
                         delta_hu = eid16.astype(np.int32) - pcd16.astype(np.int32)  # = R_stored − 32768（保存した 16bit と同じ差）
                     if a.save_residual:
@@ -386,6 +417,8 @@ def main():
         if diff_lines:
             print(f"[infer] |full − patch|: mean {np.mean([m for _, m, _ in diff_lines]):.3f} HU, max {max(x for _, _, x in diff_lines):.3f} HU -> {out_dir / 'diff_stats.txt'}")
     print(f"[infer] time: 読み待ち {tm['read']:.1f}s | full {tm['full']:.1f}s | patch {tm['patch']:.1f}s | 書き待ち {tm['write']:.1f}s（先読み {a.read_workers} / 同時スライス {a.batch_slices} / patch_batch {a.patch_batch_size} / 書き {a.write_workers}）")
+    if sr_up is not None:
+        print(f"[infer] sr: 補間した入力 {n_upsampled[0]} 枚（<mode>_input/ に保存）、そのまま {len(paths) - n_upsampled[0]} 枚")
     print(f"[infer] done: {len(paths)} slices, {elapsed:.1f}s ({elapsed / max(len(paths), 1):.2f} s/slice) -> {out_dir}")
 
 

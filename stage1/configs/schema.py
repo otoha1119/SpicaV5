@@ -1,17 +1,18 @@
-"""stage1/configs/schema.py — 設定ファイル 4 つ（train.yaml / mode.yaml / infer.yaml / machines.yaml）の唯一の正。
+"""stage1/configs/schema.py — 設定ファイル（train.yaml / mode.yaml / sr.yaml / infer.yaml / crop.yaml / machines.yaml）の唯一の正。
 
 設計: docs/plans/20260905_config-design-plan.md
 原則: 既定値（フォールバック）は無い。ここに宣言したキーは**必ず**設定ファイルに存在しなければならず、
       未知のキー・型違いはエラー。run_train.py はここを見て train.py の引数列を組み立てる。
 
 各キーの宣言: Key(type, flag, doc)
-  type : int | float | str | bool。float は int の値も受け付ける（10 → 10.0）。bool は YAML の true / false のみ
+  type : int | float | str | bool | list。float は int の値も受け付ける（10 → 10.0）。bool は YAML の true / false のみ。list は文字列のリスト（上書きはカンマ区切り --flag a,b）
   flag : train.py（junyanz 本家の argparse）へ渡すフラグ名。None は train.py に渡さない（Docker 起動などで使う）
          bool のキーは store_true フラグに対応し、true のときだけフラグを付ける
   doc  : 意味と論文（FE-GAN = Park et al. 2019）の出典
 """
 
 from collections import namedtuple
+from pathlib import Path
 
 Key = namedtuple("Key", "type flag doc")
 
@@ -76,10 +77,24 @@ MODE = {
     "final_norm_act": Key(bool, "--final_norm_act", "G 最終 conv に bnorm+LReLU を付ける（確定: false。ablation 用）"),
     "residual":       Key(bool, "--residual",       "true で G を residual 化: G(z) = z + F(z)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変。false = 論文どおり G(z) を直接出力（段階 5-1、2026-09-11）"),
     "serial_batches": Key(bool, "--serial_batches", "true で sampler を index 決定的に（再現用）"),
+    "task":           Key(str,  "--task",           "degrade（論文どおり A = PCD512 → B = EID512 の劣化生成。pcd_dir / eid_dir、分割なし）| sr（一発超解像: A = EID1024（eid1024_dir、EID_v5 を ×2 補間）→ B = PCD1024（pcd1024_dir）。configs/sr.yaml を読む: A の症例分割、B の除外、train.yaml の差し替え。2026-10-12）"),
 }
-# 導入前の run の launch.yaml / state.pth に無い mode のキー。無い = その機構なしで学習された重みなので、推論・crop・resume では false として扱う
-# （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の true で補うと旧 run の重みの意味が変わる。2026-09-11）
-LEGACY_FALSE_MODE_KEYS = ("residual",)
+# 導入前の run の launch.yaml / state.pth に無い mode のキーと、そのとき仮定する値。無い = その機構なしで学習された重みなので、推論・crop・resume では「導入前の意味」で扱う
+# （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の値で補うと旧 run の重みの意味が変わる。2026-09-11 residual、2026-10-12 task）
+LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade"}
+
+# ---------------------------------------------------------------------------
+# stage1/configs/sr.yaml — task: sr（一発超解像）のときだけ読む。degrade では一切読まない（既存の挙動は不変）
+#   split_file / b_exclude_cases はここで宣言（train.py へのフラグ）。`train:` セクションは train.yaml の差し替え表で、書けるのは TRAIN のキーだけ（validate_sr）。
+#   優先順位: train.yaml → sr.yaml の train → sh の --flag（後勝ち）。実効値と由来は launch.yaml に残る（run_train.py）。
+#   補間の方式（scale / interp / input_size）はここに書かない: A = eid1024_dir の manifest.yaml（bash start2.sh dataset が書く）が正で、run_train.py が読んで launch に記録する
+# ---------------------------------------------------------------------------
+SR = {
+    "split_file":      Key(str,  "--split_file",      "A 側（EID）の症例分割 YAML（train / val / test の症例名リスト。stage1/make_split.py が書く）。リポジトリ直下からの相対パスか絶対パス。train = 学習、val = epoch 末のランダムプレビュー、test = 読まない（log.full_slice の 1 枚は例外）"),
+    "b_exclude_cases": Key(list, "--b_exclude_cases", "B 側（PCD1024）から外す症例名のリスト（Stage 2 の test と揃えて holdout にする）。空リスト [] で全症例。ディスクに無い名前はエラー。上書きは --b_exclude_cases PCD-001,PCD-002"),
+}
+SR_TRAIN_SECTION = "train"  # sr.yaml の中で train.yaml を差し替えるセクション名
+SR_UPSAMPLE_KEYS = ("scale", "interp", "input_size")  # eid1024_dir/manifest.yaml の dataset.* から launch の sr.upsample に写すキー（推論が 512 入力を同じ方式で補間するため）
 
 # ---------------------------------------------------------------------------
 # configs/machines.yaml（リポジトリ直上、Stage 共通）— 選択したマシンのエントリに対して検証
@@ -96,7 +111,8 @@ MACHINE = {
     "num_threads":         Key(int, "--num_threads",     "DataLoader の worker 数"),
     "tb_port":             Key(int, None,                "TensorBoard のポート（ホスト側・コンテナ側とも同じ番号で公開）。start.sh が使う"),
     # Stage 2 用（machines.yaml は Stage 共通ファイル。Stage 1 は使わないが、未知キーで落とさないためにここで宣言する。2026-09-08）
-    "pcd1024_dir":         Key(str, None,                "Stage 2 の教師 PCD1024。Stage 1 は使わない"),
+    "pcd1024_dir":         Key(str, "--pcd1024_dir",    "PCD1024（PCD512_v2 と同一スキャンの 1024 再構成）。Stage 2 の教師。Stage 1 は task: sr の B 側（x）に使う（degrade では使わない）"),
+    "eid1024_dir":         Key(str, "--eid1024_dir",    "実 EID の 1024（EID_v5 を bash start2.sh dataset --input_dir <eid_dir> --eidlike1024_dir <ここ> で ×2 補間したもの。manifest.yaml 付き）。Stage 1 は task: sr の A 側（z）に使う（degrade では使わない）。2026-10-12"),
     "eidlike1024_dir":     Key(str, None,                "Stage 2 の学習入力（bash start2.sh dataset の出力先）。Stage 1 は使わない"),
     "stage2_checkpoints_dir": Key(str, None,           "Stage 2 の run の保存先ルート。Stage 1 は使わない"),
     "stage2_tb_port":      Key(int, None,                "Stage 2 の TensorBoard のポート（compose が両方公開するので start.sh も読む）。Stage 1 の TensorBoard は tb_port"),
@@ -134,7 +150,7 @@ CROP = {
 }
 CROP_CASE_KEYS = {"pcd": str, "pcd_x": int, "pcd_y": int, "eid": str, "eid_x": int, "eid_y": int}
 
-FILES = {"train": TRAIN, "mode": MODE, "machine": MACHINE, "infer": INFER, "crop": CROP}
+FILES = {"train": TRAIN, "mode": MODE, "machine": MACHINE, "sr": SR, "infer": INFER, "crop": CROP}
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +181,8 @@ def _type_ok(value, typ):
         return isinstance(value, (int, float)) and not isinstance(value, bool)
     if typ is str:
         return isinstance(value, str)
+    if typ is list:
+        return isinstance(value, list) and all(isinstance(x, str) and x for x in value)
     raise TypeError(typ)
 
 
@@ -188,8 +206,33 @@ def validate(name, data, schema):
     return {k: (float(flat[k]) if schema[k].type is float else flat[k]) for k in schema}
 
 
+def validate_sr(data):
+    """sr.yaml: SR のキー + `train:`（train.yaml の差し替え表）。戻り値 (sr_flat, overlay_flat)。
+    overlay は TRAIN のキー（入れ子は train.yaml と同じ書き方）だけを受け付け、型も TRAIN と同じ検査。無い・空でもよい（差し替え無し）。"""
+    if not isinstance(data, dict):
+        raise ConfigError(f"[sr] トップレベルが dict ではありません: {type(data).__name__}")
+    data = dict(data)
+    overlay = data.pop(SR_TRAIN_SECTION, None)
+    sr = validate("sr", data, SR)
+    if overlay is None:
+        return sr, {}
+    if not isinstance(overlay, dict):
+        raise ConfigError(f"[sr] {SR_TRAIN_SECTION} は train.yaml と同じ入れ子の dict で書いてください")
+    flat = flatten(overlay)
+    unknown = [k for k in flat if k not in TRAIN]
+    bad = [f"{k}: 期待 {TRAIN[k].type.__name__}, 実際 {type(flat[k]).__name__} ({flat[k]!r})" for k in flat if k in TRAIN and not _type_ok(flat[k], TRAIN[k].type)]
+    problems = []
+    if unknown:
+        problems.append("train.yaml に無いキーです（差し替えできるのは TRAIN のキーだけ）: " + ", ".join(unknown))
+    if bad:
+        problems.append("型が違います: " + "; ".join(bad))
+    if problems:
+        raise ConfigError(f"[sr.{SR_TRAIN_SECTION}] " + " / ".join(problems))
+    return sr, {k: (float(v) if TRAIN[k].type is float else v) for k, v in flat.items()}
+
+
 def to_argv(flat, schema):
-    """検証済みの平坦 dict を train.py の引数列にする。bool は true のときだけフラグを付ける。"""
+    """検証済みの平坦 dict を train.py の引数列にする。bool は true のときだけフラグを付ける。list はカンマ区切り 1 語（空リストは空文字）。"""
     argv = []
     for k, key in schema.items():
         if key.flag is None:
@@ -198,6 +241,8 @@ def to_argv(flat, schema):
         if key.type is bool:
             if v:
                 argv.append(key.flag)
+        elif key.type is list:
+            argv += [key.flag, ",".join(v)]
         else:
             argv += [key.flag, str(v)]
     return argv
@@ -237,15 +282,22 @@ def _convert(val, typ, flag):
             return str(val)
         if typ is bool:
             return _parse_bool(val, flag)
+        if typ is list:
+            if str(val).strip() == "":
+                return []
+            items = [x.strip() for x in str(val).split(",")]
+            if any(not x for x in items):
+                raise ValueError
+            return items
     except ValueError:
-        raise ConfigError(f"{flag} の値を {typ.__name__} に変換できません: {val!r}")
+        raise ConfigError(f"{flag} の値を {typ.__name__} に変換できません: {val!r}" + ("（list はカンマ区切り。空要素は不可、空リストは \"\"）" if typ is list else ""))
     raise TypeError(typ)
 
 
 def apply_overrides(tokens, sections):
     """sh からの上書き列を平坦 dict に反映する（後勝ち）。
     sections: {"train": (flat_dict, TRAIN), "mode": (flat_dict, MODE), ...}。flat_dict はその場で書き換わる。
-    受ける形: --flag value / --flag=value。bool は --flag（= true）または --flag true|false / --flag=false。
+    受ける形: --flag value / --flag=value。bool は --flag（= true）または --flag true|false / --flag=false。list は --flag a,b,c（空リストは --flag ""）。
     schema に無いフラグ・値の無いフラグ・余った語・型違いは ConfigError。戻り値は適用した {flag: 値}（記録用）。"""
     index = {}
     for sec, (flat, schema) in sections.items():
@@ -293,6 +345,7 @@ SAMPLINGS = ("random", "paper", "aligned")
 GAN_MODES = ("fgan_kl", "lsgan", "vanilla")
 NETGS = ("wavelet", "unet_128", "unet_256", "resnet_6blocks", "resnet_9blocks")
 NETDS = ("paper", "basic", "n_layers", "pixel")
+TASKS = ("degrade", "sr")
 NORMS = ("batch", "instance", "none")
 INIT_TYPES = ("normal", "xavier", "kaiming", "orthogonal")
 GPU_GENS = (0, 30, 40, 50)
@@ -348,10 +401,59 @@ def check_values(train, mode, machine):
     if mode["gan_mode"] not in GAN_MODES: P.append(f"gan_mode は {GAN_MODES}")
     if mode["netG"] not in NETGS: P.append(f"netG は {NETGS}")
     if mode["netD"] not in NETDS: P.append(f"netD は {NETDS}")
+    if mode["task"] not in TASKS: P.append(f"task は {TASKS}")
     if machine["gpu_gen"] not in GPU_GENS: P.append(f"gpu_gen は {GPU_GENS}")
     if machine["num_threads"] < 0: P.append("num_threads ≥ 0")
     if not (1 <= machine["tb_port"] <= 65535): P.append("tb_port は 1..65535")
     _problems_to_error("values", P)
+
+
+def check_sr_values(sr, root):
+    """sr.yaml の実効値（task: sr のときだけ）。split_file は root（リポジトリ直下）基準で解決して存在を検査し、絶対パスに置き換える。"""
+    P = []
+    sf = Path(sr["split_file"])
+    if not sr["split_file"]:
+        P.append("split_file（症例分割 YAML）を指定。stage1/make_split.py で作る")
+    else:
+        sf = sf if sf.is_absolute() else Path(root) / sf
+        if not sf.is_file():
+            P.append(f"split_file がありません: {sf}（bash start.sh split で作る）")
+        sr["split_file"] = str(sf)
+    if len(set(sr["b_exclude_cases"])) != len(sr["b_exclude_cases"]): P.append("b_exclude_cases に重複があります")
+    _problems_to_error("sr values", P)
+
+
+SPLIT_KEYS = ("train", "val", "test")
+
+
+def check_split(split, where):
+    """split_file の中身: train / val / test の文字列リスト（空リスト可）。重複・他のキー・型違いはエラー。戻り値 {kind: [case, ...]}。"""
+    if not isinstance(split, dict):
+        raise ConfigError(f"[{where}] トップレベルが dict ではありません")
+    P = []
+    missing = [k for k in SPLIT_KEYS if k not in split]
+    if missing:
+        P.append("キーがありません: " + ", ".join(missing))
+    out = {}
+    for k in SPLIT_KEYS:
+        v = split.get(k)
+        if k in split and not (isinstance(v, list) and all(isinstance(x, str) and x for x in v)):
+            P.append(f"{k} は症例名（文字列）のリスト")
+        else:
+            out[k] = list(v or [])
+    if not P:
+        seen = {}
+        for k in SPLIT_KEYS:
+            for c in out[k]:
+                if c in seen:
+                    P.append(f"症例 {c} が {seen[c]} と {k} の両方にあります")
+                seen[c] = k
+        if len(set(out["train"])) != len(out["train"]) or len(set(out["val"])) != len(out["val"]) or len(set(out["test"])) != len(out["test"]):
+            P.append("同じリストの中に重複があります")
+        if not out["train"]:
+            P.append("train が空です")
+    _problems_to_error(where, P)
+    return out
 
 
 def check_infer_values(infer):
