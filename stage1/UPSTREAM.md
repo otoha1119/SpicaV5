@@ -244,3 +244,13 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - `models/fidelity_gan_model.py`: `--launch_path` を追加し、`state.pth` に保存時の実効設定（launch の train / mode / machine）を `config` として入れる
 - `run_train.py`: 再開の基準を「最新の launch_resume_*.yaml」から「選んだ checkpoint の state.pth の config」に変更（失敗した起動の設定を次回に引き継がない）。config の無い古い run は従来どおり最新 launch。argv に `--launch_path` を付ける
 - `../start.sh`: 起動済みコンテナのマシン名（SPICA_MACHINE）・イメージ・データマウントを今回の指定と照合し、違えば止める。全 exec に `-e SPICA_MACHINE` を渡す。`tb` は「同じポートで全 run の logdir」が動いているときだけ起動済み扱いにし、run 単位のものは止めて起動し直す
+
+### G の Residual 化 `mode.yaml residual`（2026-09-11、段階 5-1、ユーザー承認。ブランチ 002-f_main-create_stage1.5）
+- 目的: 論文どおりの G（z → G(z) を直接出力）に対し、`G(z) = z + F(z)` の parameterization に切り替えられるようにする。F は生の generator（wavelet 等、線形出力）で、その出力がそのまま残差 R。損失は不変（fidelity `‖G(z) − z‖² = ‖F(z)‖²`）。論文からの逸脱（独自機構）なので `mode.yaml` で切替、`false` で論文どおり
+- `models/networks.py`: `ResidualGenerator(inner, input_nc, output_nc)`（`forward = x + inner(x)`、`input_nc == output_nc` を検査）。`define_G(..., residual)` が `true` のとき包む。計画書 5-1 は「model の forward で足す」だったが、**G のモジュール自体に入れた**: 学習 / `util/monitor.py`（TB グリッド・epoch 末フル画像）/ `inference_dir.py` `infer_full` `infer_patch` / `crop_patches.py` が `netG(x)` を呼ぶだけで揃うため。state_dict のキーに `inner.` が付くので、非 residual の重みを residual 構成に strict load すると明示的に落ちる
+- `models/fidelity_gan_model.py`: `--residual`（store_true）を `define_G` に渡す。forward / 損失は無変更。表示の R = `fake_B − real_A` は residual のとき F の生出力そのもの
+- `configs/schema.py`: MODE に `residual`（bool）。`LEGACY_FALSE_MODE_KEYS = ("residual",)`: 導入前の run の launch / state.pth に無いキーは「その機構なしで学習された重み」なので **false として扱う**（「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の true で補うと旧 run の重みの意味が変わる）
+- `configs/mode.yaml`: `residual: true`（素の `bash start.sh` は residual。旧方式は `bash start.sh --residual false`）
+- `run_infer.py generator_argv`（`run_crop.py` も共用）: `G_MODE_BOOL_KEYS` に `residual`。launch に無ければ注意を出して false。`inference_dir.py` / `crop_patches.py` に `--residual` を追加し `build_generator` → `define_G` に渡す
+- `run_train.py prepare_resume`: checkpoint の config に `residual` が無ければ false（注意表示）。**再開で `residual` を変えるのは禁止**（ConfigError。重みの意味が変わる）
+- 入れていないもの（1 変更ずつ）: 最終 conv のゼロ初期化、和への soft clamp（値域逸脱で D が勝つ兆候が出てから）、G 構造の変更

@@ -28,7 +28,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import MACHINE, MODE, TRAIN, ConfigError, apply_overrides, check_values, to_argv, validate  # noqa: E402
+from configs.schema import LEGACY_FALSE_MODE_KEYS, MACHINE, MODE, TRAIN, ConfigError, apply_overrides, check_values, to_argv, validate  # noqa: E402
 from util.run_paths import LAUNCH_FILE, ckpt_path, latest_launch, run_name, saved_tags  # noqa: E402
 
 # Stage 1 で固定の引数（チューニング対象ではないので設定ファイルには置かない）
@@ -126,6 +126,12 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
         # run 作成後に schema に追加されたキー（例: optim.seed, log.preview_bits）は run の launch に無い。今の yaml の値で補い、警告する
         for section, cur, schema in (("train", train_yaml, TRAIN), ("mode", mode_yaml, MODE), ("machine", machine_yaml, MACHINE)):
             missing = [k for k in schema if k not in saved[section]]
+            legacy = [k for k in missing if section == "mode" and k in LEGACY_FALSE_MODE_KEYS]  # 導入前の run = その機構なしで学習された重み。今の yaml で補わず false
+            if legacy:
+                print(f"[run_train] 注意: run の mode に無いキー（導入前の run）は false として扱う: " + ", ".join(legacy))
+                for k in legacy:
+                    saved[section][k] = False
+                missing = [k for k in missing if k not in legacy]
             if missing:
                 print(f"[run_train] 注意: run の {section} に無いキー（run 作成後に追加）は今の yaml の値を使う: " + ", ".join(f"{k}={cur[k]!r}" for k in missing))
                 for k in missing:
@@ -144,9 +150,12 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
         diff = {k: (sv.get(k), v) for k, v in cur.items() if sv.get(k) != v and k not in ("log.continue_train", "log.epoch_count")}
         if diff:
             print(f"[run_train] 注意: 今の {section} 設定は checkpoint の実効設定と異なる（checkpoint の値を使う。変えるなら --flag で上書き）: {diff}")
+    saved_residual = mode["residual"]
     applied = apply_overrides(overrides, sections(train, mode, machine))
     if any(f in applied for f in RESUME_ONLY_FLAGS):
         raise ConfigError(f"{' / '.join(RESUME_ONLY_FLAGS)} は再開の内部フラグです（run_train が決めます）")
+    if mode["residual"] != saved_residual:
+        raise ConfigError(f"再開時に residual を変えることはできません（重みの意味が変わる）: checkpoint は residual={saved_residual}")
     if Path(machine["checkpoints_dir"]) / a.resume != run_dir:
         raise ConfigError(f"再開時に checkpoints_dir を変えることはできません: {machine['checkpoints_dir']} != {run_dir.parent}")
     for kind in ("net_G.pth", "net_D.pth"):

@@ -73,6 +73,7 @@ class FidelityGANModel(BaseModel):
             no_dropout=True,  # 論文に dropout の記載なし（構造上の固定。チューニング対象ではない）
         )
         parser.add_argument("--final_norm_act", action="store_true", help="G 最終 conv に bnorm+LReLU を付ける（確定: 付けない。ablation 用）")
+        parser.add_argument("--residual", action="store_true", help="G を residual 化: fake_B = real_A + F(real_A)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変（段階 5-1、2026-09-11）")
         if is_train:
             parser.set_defaults(
                 lr=None, beta1=None, n_epochs=None, n_epochs_decay=None, lr_policy=None,
@@ -114,7 +115,7 @@ class FidelityGANModel(BaseModel):
         self.model_names = ["G", "D"] if self.isTrain else ["G"]
 
         # G: A→B (論文 G: z → G(z))
-        self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain, final_norm_act=opt.final_norm_act)
+        self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain, final_norm_act=opt.final_norm_act, residual=opt.residual)
 
         if self.isTrain:
             # D: B 側の判別器 (論文 D: x vs G(z))
@@ -148,7 +149,7 @@ class FidelityGANModel(BaseModel):
         self.image_paths = input["A_paths" if AtoB else "B_paths"]
 
     def forward(self):
-        """fake_B = G(real_A)。論文 Fig. 3 の generator G の順伝播。"""
+        """fake_B = G(real_A)。論文 Fig. 3 の generator G の順伝播。--residual のときは G = z + F(z)（networks.ResidualGenerator）なので fake_B − real_A が F の生出力 R。"""
         self.fake_B = self.netG(self.real_A)
 
     def backward_D(self):

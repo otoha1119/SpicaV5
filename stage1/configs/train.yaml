@@ -14,7 +14,7 @@ optim:
   seed: 0               # python / numpy / torch の乱数 seed（再現条件）。cudnn.benchmark は本家のままなので完全決定ではない
 
 loss:
-  lambda_fid: 10.0      # 論文 "We empirically choose λ = 10"。範囲 [−1,1] では再調整対象
+  lambda_fid:  100.0      # 論文 "We empirically choose λ = 10"。範囲 [−1,1] では再整対象
 
 network:
   ngf: 32               # Fig. 3 G 最初の段

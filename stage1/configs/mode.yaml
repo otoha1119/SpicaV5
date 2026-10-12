@@ -6,4 +6,5 @@ gan_mode: fgan_kl       # fgan_kl（論文 Eq.6）| lsgan | vanilla（ablation�
 netG: wavelet           # wavelet（論文 Fig.3）| unet_128 | resnet_9blocks ...（ablation）
 netD: paper             # paper（論文 Fig.3、受容野 22）| basic（70×70 PatchGAN）
 final_norm_act: false   # G 最終 conv に bnorm+LReLU（確定: false。ablation 用）
+residual: true          # true: G(z) = z + F(z)（F の生出力が R。段階 5-1、2026-09-11）| false: 論文どおり G(z) を直接出力（旧方式は bash start.sh --residual false）
 serial_batches: false   # true で sampler を index 決定的に（再現用）
