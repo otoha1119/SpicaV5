@@ -74,6 +74,7 @@ class FidelityGANModel(BaseModel):
         )
         parser.add_argument("--final_norm_act", action="store_true", help="G 最終 conv に bnorm+LReLU を付ける（確定: 付けない。ablation 用）")
         parser.add_argument("--residual", action="store_true", help="G を residual 化: fake_B = real_A + F(real_A)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変（段階 5-1、2026-09-11）")
+        parser.add_argument("--d_pack", type=int, default=None, help="D の packing 数（PacGAN）。1 = 論文どおり | 2 = batch の前半と後半（サンプル i と i + B/2）をチャネル連結して D に入れる。D の 1 層目は output_nc × d_pack ch（段階 5-6 ①、2026-10-12）")
         if is_train:
             parser.set_defaults(
                 lr=None, beta1=None, n_epochs=None, n_epochs_decay=None, lr_policy=None,
@@ -119,7 +120,10 @@ class FidelityGANModel(BaseModel):
 
         if self.isTrain:
             # D: B 側の判別器 (論文 D: x vs G(z))
-            self.netD = networks.define_D(opt.output_nc, opt.ndf, opt.netD, opt.n_layers_D, opt.norm, opt.init_type, opt.init_gain)
+            # [SpicaV5] PacGAN（--d_pack、2026-10-12）: D の入力チャネルは output_nc × d_pack（d_pack=1 で論文どおり 1 ch。2 で 2 枚をチャネル連結した 2 ch）。
+            #   "PacGAN: The power of two samples in generative adversarial networks" (Zhang et al., NeurIPS 2018)。D の 1 層目以外は不変
+            self.d_pack = opt.d_pack
+            self.netD = networks.define_D(opt.output_nc * self.d_pack, opt.ndf, opt.netD, opt.n_layers_D, opt.norm, opt.init_type, opt.init_gain)
             self.gan_mode = opt.gan_mode
             if self.gan_mode != "fgan_kl":
                 self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)  # ablation 用 (論文の式ではない)
@@ -152,12 +156,24 @@ class FidelityGANModel(BaseModel):
         """fake_B = G(real_A)。論文 Fig. 3 の generator G の順伝播。--residual のときは G = z + F(z)（networks.ResidualGenerator）なので fake_B − real_A が F の生出力 R。"""
         self.fake_B = self.netG(self.real_A)
 
+    def _pack(self, x):
+        """[SpicaV5] PacGAN の packing（--d_pack、2026-10-12）: (B,C,H,W) → (B/d_pack, C·d_pack, H, W)。
+        batch を d_pack 等分して前から順にチャネル連結する（d_pack=2 ならサンプル i と i + B/2 の組。隣どうしは patches_per_slice で
+        同じスライスなので組にしない。組は real_B は real_B どうし、fake_B は fake_B どうし）。d_pack=1 はそのまま（論文どおり）。
+        B は d_pack の倍数（run_train.py の check_values が起動時に保証。端数 batch は samples_per_epoch が batch_size の倍数なので出ない）。"""
+        if self.d_pack == 1:
+            return x
+        if x.shape[0] % self.d_pack:
+            raise RuntimeError(f"d_pack={self.d_pack} なのに batch {x.shape[0]} が割り切れません（samples_per_epoch / batch_size を確認）")
+        return torch.cat(x.chunk(self.d_pack, dim=0), dim=1)
+
     def backward_D(self):
         """D の損失と勾配。論文 Eq.(12) の D:  max_D  E_x[D(x)] + E_z[log(1 − D(G(z)))]
         → 最小化するのは  loss_D = −( E_x[D(x)] + E_z[log(1 − D(G(z)))] )。係数 0.5 は付けない (Eq.(12) に無い)。
+        --d_pack 2 のときは D の入力が packed（_pack）になるだけで、損失式と loss_D / D_real / D_fake の意味は同じ（組に対する値）。
         """
-        v_real = self.netD(self.real_B)
-        v_fake = self.netD(self.fake_B.detach())
+        v_real = self.netD(self._pack(self.real_B))
+        v_fake = self.netD(self._pack(self.fake_B.detach()))
         if self.gan_mode == "fgan_kl":
             D_real = self._D_from_v(v_real)              # D(x) = 1 − exp(v)
             log1mD_fake = self._log1mD_from_v(v_fake)    # log(1 − D(G(z))) = v
@@ -172,8 +188,9 @@ class FidelityGANModel(BaseModel):
         self.loss_D.backward()
 
     def backward_G(self):
-        """G の損失と勾配。論文 Eq.(12) の G:  min_G  E_z[log(1 − D(G(z)))] + λ E_z[‖G(z) − z‖²]"""
-        v_fake = self.netD(self.fake_B)
+        """G の損失と勾配。論文 Eq.(12) の G:  min_G  E_z[log(1 − D(G(z)))] + λ E_z[‖G(z) − z‖²]。
+        --d_pack 2 では packed した fake の組に対して GAN 損失を取る（勾配は組の 2 枚とも G に戻る）。fidelity は packing と無関係に 1 枚ずつ。"""
+        v_fake = self.netD(self._pack(self.fake_B))
         if self.gan_mode == "fgan_kl":
             self.loss_G_GAN = self._log1mD_from_v(v_fake).mean()   # E[log(1 − D(G(z)))] = E[v]
         else:  # ablation: 本家 GANLoss

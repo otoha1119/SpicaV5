@@ -79,10 +79,11 @@ MODE = {
     "residual":       Key(bool, "--residual",       "true で G を residual 化: G(z) = z + F(z)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変。false = 論文どおり G(z) を直接出力（段階 5-1、2026-09-11）"),
     "serial_batches": Key(bool, "--serial_batches", "true で sampler を index 決定的に（再現用）"),
     "task":           Key(str,  "--task",           "degrade（論文どおり A = PCD512 → B = EID512 の劣化生成。pcd_dir / eid_dir、分割なし）| sr（一発超解像: A = EID1024（eid1024_dir、EID_v5 を ×2 補間）→ B = PCD1024（pcd1024_dir）。configs/sr.yaml を読む: A の症例分割、B の除外、train.yaml の差し替え。2026-10-12）"),
+    "d_pack":         Key(int,  "--d_pack",         "D の packing（PacGAN: Zhang et al., NeurIPS 2018）。1 = 論文どおり D の入力 1 枚 | 2 = batch 内の別スライス 2 枚（i と i + B/2）をチャネル連結して D に入れる（D の 1 層目が output_nc × 2 ch、出力 (B/2,1,h,w)。損失式は不変）。batch_size は偶数で、B/2 ≥ data.patches_per_slice（同じスライスの 2 枚を束ねない）。resume で変更不可（段階 5-6 ①、2026-10-12）"),
 }
 # 導入前の run の launch.yaml / state.pth に無い mode のキーと、そのとき仮定する値。無い = その機構なしで学習された重みなので、推論・crop・resume では「導入前の意味」で扱う
-# （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の値で補うと旧 run の重みの意味が変わる。2026-09-11 residual、2026-10-12 task）
-LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade"}
+# （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の値で補うと旧 run の重みの意味が変わる。2026-09-11 residual、2026-10-12 task / d_pack）
+LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade", "d_pack": 1}
 
 # ---------------------------------------------------------------------------
 # stage1/configs/sr.yaml — task: sr（一発超解像）のときだけ読む。degrade では一切読まない（既存の挙動は不変）
@@ -347,6 +348,7 @@ GAN_MODES = ("fgan_kl", "lsgan", "vanilla")
 NETGS = ("wavelet", "unet_128", "unet_256", "resnet_6blocks", "resnet_9blocks")
 NETDS = ("paper", "basic", "n_layers", "pixel")
 TASKS = ("degrade", "sr")
+D_PACKS = (1, 2)  # PacGAN の packing 数。1 = 論文どおり、2 = PacGAN-2（2026-10-12）
 NORMS = ("batch", "instance", "none")
 INIT_TYPES = ("normal", "xavier", "kaiming", "orthogonal")
 GPU_GENS = (0, 30, 40, 50)
@@ -405,6 +407,11 @@ def check_values(train, mode, machine):
     if mode["netG"] not in NETGS: P.append(f"netG は {NETGS}")
     if mode["netD"] not in NETDS: P.append(f"netD は {NETDS}")
     if mode["task"] not in TASKS: P.append(f"task は {TASKS}")
+    if mode["d_pack"] not in D_PACKS: P.append(f"d_pack は {D_PACKS}")
+    elif mode["d_pack"] == 2:  # PacGAN-2: batch を前半 / 後半で組にする（サンプル i と i + B/2）。フォールバックせず起動時に止める（2026-10-12）
+        if bs % 2: P.append(f"d_pack=2 では optim.batch_size ({bs}) を偶数にする（batch の前半と後半を組にするため）")
+        if bs // 2 < train["data.patches_per_slice"]: P.append(f"d_pack=2 では optim.batch_size/2 ({bs // 2}) ≥ data.patches_per_slice ({train['data.patches_per_slice']}) にする（連続する patches_per_slice 個は同じスライスなので、B/2 離れた組が同じスライスにならないように）")
+        if mode["sampling"] == "paper" and mode["serial_batches"] and bs // 2 < train["data.patches_per_image"]: P.append(f"d_pack=2 と sampling=paper + serial_batches では optim.batch_size/2 ({bs // 2}) ≥ data.patches_per_image ({train['data.patches_per_image']}) にする（固定集合を index 順に走査すると同じ画像の patch が連続するため）")
     if machine["gpu_gen"] not in GPU_GENS: P.append(f"gpu_gen は {GPU_GENS}")
     if machine["num_threads"] < 0: P.append("num_threads ≥ 0")
     if not (1 <= machine["tb_port"] <= 65535): P.append("tb_port は 1..65535")

@@ -18,7 +18,8 @@
   python run_train.py --machine PC1 ... --resume 2026_0905_1234 [--resume_tag latest|best|30] -- [--n_epochs 400] [--lr 0.0001]
   → **選んだ checkpoint の state.pth に入っている実効設定**（その重みを作った設定。古い run は最新の launch）を基準に、今回の上書きを反映し、
     重みディレクトリ（<run>/latest | best | weights/epoch_NNN）の state.pth（optimizer / RNG / 進捗）と net_G/D.pth を復元して同じディレクトリに続きを保存する。
-    設定は launch_resume_<日時秒>.yaml に保存され、次の再開・推論の基準になる
+    設定は launch_resume_<日時秒>.yaml に保存され、次の再開・推論の基準になる。
+    residual / task / d_pack は checkpoint から変えられない（重みの意味・形が変わる）。d_pack は net_D.pth の 1 層目の入力チャネルとも照合する（2026-10-12）
 """
 
 import argparse
@@ -88,6 +89,20 @@ def sr_argv(sr):
     """sr の実効値 → train.py の引数列（SR のフラグ + manifest の方式）。"""
     up = sr["upsample"]
     return to_argv(sr, SR) + ["--sr_scale", str(up["scale"]), "--sr_interp", up["interp"], "--sr_input_size", str(up["input_size"])]
+
+
+def check_d_pack_weights(weight_path, train, mode):
+    """net_D.pth の 1 層目（state_dict で最初の 4 次元 weight）の入力チャネルが実効 mode の output_nc × d_pack と一致するか（launch を書く前に止める。2026-10-12）。
+    strict な load_state_dict でも落ちるが、train.py の起動後（launch_resume を書いた後）になるのでここで先に照合する。"""
+    import torch  # コンテナ内でのみ使う
+
+    sd = torch.load(weight_path, map_location="cpu", weights_only=True)
+    first = next(((k, v) for k, v in sd.items() if k.endswith(".weight") and getattr(v, "dim", lambda: 0)() == 4), None)
+    if first is None:
+        raise ConfigError(f"{weight_path} に畳み込みの weight がありません（形式が不正）")
+    expect = train["network.output_nc"] * mode["d_pack"]
+    if first[1].shape[1] != expect:
+        raise ConfigError(f"{weight_path} の D の 1 層目 {first[0]} の入力チャネル {first[1].shape[1]} が実効設定 output_nc × d_pack = {train['network.output_nc']} × {mode['d_pack']} = {expect} と合いません（d_pack は resume で変えられない）")
 
 
 def start_tensorboard(run_dir, port):
@@ -243,7 +258,7 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, sr_yaml, overrides, n
         diff = {k: (sv.get(k), v) for k, v in cur.items() if sv.get(k) != v and k not in ("log.continue_train", "log.epoch_count")}
         if diff:
             print(f"[run_train] 注意: 今の {section} 設定は checkpoint の実効設定と異なる（checkpoint の値を使う。変えるなら --flag で上書き）: {diff}")
-    saved_residual, saved_task = mode["residual"], mode["task"]
+    saved_residual, saved_task, saved_d_pack = mode["residual"], mode["task"], mode["d_pack"]
     applied = apply_overrides(overrides, sections(train, mode, machine, sr))
     if sr is None:
         used = [k.flag for k in SR.values() if k.flag in applied]
@@ -255,11 +270,14 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, sr_yaml, overrides, n
         raise ConfigError(f"再開時に residual を変えることはできません（重みの意味が変わる）: checkpoint は residual={saved_residual}")
     if mode["task"] != saved_task:
         raise ConfigError(f"再開時に task を変えることはできません（データと G の意味が変わる）: checkpoint は task={saved_task}")
+    if mode["d_pack"] != saved_d_pack:
+        raise ConfigError(f"再開時に d_pack を変えることはできません（D の 1 層目の形が変わる）: checkpoint は d_pack={saved_d_pack}")
     if Path(machine["checkpoints_dir"]) / a.resume != run_dir:
         raise ConfigError(f"再開時に checkpoints_dir を変えることはできません: {machine['checkpoints_dir']} != {run_dir.parent}")
     for kind in ("net_G.pth", "net_D.pth"):
         if not ckpt_path(run_dir, a.resume_tag, kind).is_file():
             raise ConfigError(f"再開用の重みがありません: {ckpt_path(run_dir, a.resume_tag, kind)}")
+    check_d_pack_weights(ckpt_path(run_dir, a.resume_tag, "net_D.pth"), train, mode)  # 旧 run（d_pack 無し = 1）の net_D.pth は 1 ch なので整合する
     epoch_count = st["epoch"] + 1 if st["epoch_done"] else st["epoch"]  # epoch 末保存なら次の epoch から、途中保存ならその epoch を頭から
     train["log.continue_train"] = True
     train["log.epoch_count"] = epoch_count

@@ -9,3 +9,5 @@ final_norm_act: false   # G 最終 conv に bnorm+LReLU（確定: false。ablati
 residual: true          # true: G(z) = z + F(z)（F の生出力が R。段階 5-1、2026-09-11）| false: 論文どおり G(z) を直接出力（旧方式は bash start.sh --residual false）
 serial_batches: false   # true で sampler を index 決定的に（再現用）
 task: degrade           # degrade（論文どおり PCD512 → EID-like512。pcd_dir / eid_dir、分割なし）| sr（一発超解像 EID1024 → PCD-like1024。eid1024_dir / pcd1024_dir、configs/sr.yaml を読む。2026-10-12）。resume で変更不可
+d_pack: 1               # D の packing（PacGAN、Zhang et al. NeurIPS 2018。段階 5-6 ①、2026-10-12）。1 = 論文どおり（D の入力 1 枚）| 2 = batch 内の別スライス 2 枚（i と i + B/2。real は real どうし、fake は fake どうし）をチャネル連結して D に入れる。
+                        # 損失式は不変。batch_size は偶数、B/2 ≥ data.patches_per_slice（同じスライスの 2 枚を束ねない）。resume で変更不可（D の 1 層目の形が変わる）。導入前の run は 1 扱い
