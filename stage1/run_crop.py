@@ -78,11 +78,14 @@ def main():
         run_dir = find_run_dir(weight_dir)
         if run_dir is None:
             raise ConfigError(f"重みディレクトリの上に {LAUNCH_FILE} を持つ run が見つかりません: {weight_dir}")
-        for k in ("pcd_dir", "eid_dir"):
-            if not Path(machine[k]).is_dir():
-                raise ConfigError(f"machines.yaml の {k} がありません: {machine[k]}")
         launch_path = latest_launch(run_dir)
         g_argv, g_cfg = generator_argv(load_yaml(launch_path))
+        # task で参照するデータが変わる（degrade: PCD512 = pcd_dir / EID512 = eid_dir、sr: PCD1024 = pcd1024_dir / EID1024 = eid1024_dir）。crop.yaml の pcd / eid はその中のスライス名
+        dir_keys = ("pcd1024_dir", "eid1024_dir") if g_cfg["task"] == "sr" else ("pcd_dir", "eid_dir")
+        for k in dir_keys:
+            if not Path(machine[k]).is_dir():
+                raise ConfigError(f"machines.yaml の {k} がありません（task {g_cfg['task']}）: {machine[k]}")
+        pcd_root, eid_root = machine[dir_keys[0]], machine[dir_keys[1]]
         disp_argv, disp_cfg = display_argv(validate("train", load_yaml(a.train), TRAIN), DISPLAY_TRAIN_KEYS)
     except ConfigError as e:
         print(f"[run_crop] 設定エラー: {e}", file=sys.stderr)
@@ -95,7 +98,7 @@ def main():
         print(f"[run_crop] 設定エラー: 出力先が既に存在します（同一秒の再実行）: {out_dir}", file=sys.stderr)
         sys.exit(2)
     out_dir.mkdir(parents=True)
-    argv = ["--weight_dir", str(weight_dir), "--pcd_dir", str(machine["pcd_dir"]), "--eid_dir", str(machine["eid_dir"]), "--out_dir", str(out_dir)]
+    argv = ["--weight_dir", str(weight_dir), "--pcd_dir", str(pcd_root), "--eid_dir", str(eid_root), "--out_dir", str(out_dir)]
     argv += g_argv + disp_argv + to_argv(crop, CROP)
     for c in cases:
         argv += ["--case", c["pcd"], str(c["pcd_x"]), str(c["pcd_y"]), c["eid"], str(c["eid_x"]), str(c["eid_y"])]

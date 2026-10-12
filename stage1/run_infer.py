@@ -27,13 +27,13 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import INFER, LEGACY_FALSE_MODE_KEYS, MACHINE, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate  # noqa: E402
+from configs.schema import INFER, LEGACY_MODE_DEFAULTS, MACHINE, SR_UPSAMPLE_KEYS, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate  # noqa: E402
 from util.run_paths import LAUNCH_FILE, find_run_dir, infer_output_dir, latest_launch  # noqa: E402
 
 # launch.yaml の train / mode セクション（平坦キー）→ inference_dir.py のフラグ
 G_TRAIN_KEYS = {"network.ngf": "--ngf", "network.input_nc": "--input_nc", "network.output_nc": "--output_nc", "network.norm": "--norm",
                 "data.hu_offset": "--hu_offset", "data.hu_min": "--hu_min", "data.hu_max": "--hu_max"}
-G_MODE_KEYS = {"netG": "--netG"}
+G_MODE_KEYS = {"netG": "--netG", "task": "--task"}  # task（degrade | sr）は G の構造ではないが、表示名と 512 入力の補間（sr）を決めるので launch から取る（導入前の run は degrade）
 # 表示の設定は「現在の configs/train.yaml の log」から取る（run の launch.yaml ではない）。表示は重みに紐づく値ではないので、古い run でも今の見た目にする（2026-09-08）。
 # display_hu_min/max・preview_bits は --save_panel のパネル生成にだけ使う（run_crop.py と同じキー）
 DISPLAY_TRAIN_KEYS = {"log.display_hu_min": "--display_hu_min", "log.display_hu_max": "--display_hu_max", "log.preview_bits": "--preview_bits", "log.diff_range_hu": "--diff_range_hu"}
@@ -80,18 +80,28 @@ def generator_argv(launch):
         cfg[k] = train[k]
     for k, flag in G_MODE_KEYS.items():
         if k not in mode:
-            raise ConfigError(f"launch.yaml の mode に {k} がありません（古い run?）")
+            if k not in LEGACY_MODE_DEFAULTS:
+                raise ConfigError(f"launch.yaml の mode に {k} がありません（古い run?）")
+            print(f"注意: run の launch の mode に {k} が無い（{k} 導入前の run）。{k}={LEGACY_MODE_DEFAULTS[k]!r} として扱う")
+            mode[k] = LEGACY_MODE_DEFAULTS[k]
         argv += [flag, str(mode[k])]
         cfg[k] = mode[k]
     for k, flag in G_MODE_BOOL_KEYS.items():
         if k not in mode:
-            if k not in LEGACY_FALSE_MODE_KEYS:
+            if k not in LEGACY_MODE_DEFAULTS:
                 raise ConfigError(f"launch.yaml の mode に {k} がありません（古い run?）")
-            print(f"注意: run の launch の mode に {k} が無い（{k} 導入前の run）。{k}=false として G を組む")
-            mode[k] = False
+            print(f"注意: run の launch の mode に {k} が無い（{k} 導入前の run）。{k}={LEGACY_MODE_DEFAULTS[k]!r} として G を組む")
+            mode[k] = LEGACY_MODE_DEFAULTS[k]
         if mode[k]:
             argv.append(flag)
         cfg[k] = mode[k]
+    if mode["task"] == "sr":  # 512 の実 EID を受けたとき、学習入力（EID1024）と同じ方式で補間するための記録（launch の sr.upsample = eid1024_dir/manifest.yaml）
+        sr = launch.get("sr")
+        if not isinstance(sr, dict) or not isinstance(sr.get("upsample"), dict) or any(k not in sr["upsample"] for k in SR_UPSAMPLE_KEYS):
+            raise ConfigError("launch.yaml が task: sr なのに sr.upsample（scale / interp / input_size）がありません")
+        up = sr["upsample"]
+        argv += ["--sr_scale", str(up["scale"]), "--sr_interp", str(up["interp"]), "--sr_input_size", str(up["input_size"])]
+        cfg["sr_upsample"] = {k: up[k] for k in SR_UPSAMPLE_KEYS}
     return argv, cfg
 
 

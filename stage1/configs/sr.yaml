@@ -1,0 +1,27 @@
+# stage1/configs/sr.yaml — task: sr（一発超解像 EID1024 → PCD-like1024）のときだけ読む設定。唯一の正は configs/schema.py の SR + validate_sr。既定値は無い。
+# mode.yaml の task が degrade のときは一切読まない（既存の劣化モードの挙動は不変）。
+#
+# ■ 何が変わるか（task: sr）
+#   A（z、入力）= machines.yaml の eid1024_dir（実 EID_v5 を ×2 補間した 1024。bash start2.sh dataset --input_dir <eid_dir> --eidlike1024_dir <eid1024_dir> で作る。manifest.yaml 付き）
+#   B（x、分布の参照先）= machines.yaml の pcd1024_dir（PCD1024_v1）
+#   G は同解像度（1024 → 1024）。非ペア学習（A と B は症例も位置も独立にサンプリング）。G(z) = z + F(z)（residual のとき）の F が「足した高周波」= R。
+#   補間の方式（scale / interp / input_size）はここに書かない: eid1024_dir/manifest.yaml が正で、run_train.py が読んで launch.yaml の sr.upsample に記録し、
+#   推論（bash start.sh infer）は 512 の実 EID を受けたとき同じ方式で補間してから G に通す。
+#
+# ■ 優先順位: train.yaml → この train: セクション → sh の --flag（後勝ち）。実効値と由来は <run>/launch.yaml の train / sr に残る。resume で task は変えられない。
+
+split_file: configs/splits/eid_v5.yaml   # A 側（EID）の症例分割（train / val / test の症例名リスト）。リポジトリ直下からの相対パス。bash start.sh split で生成（stage1/make_split.py）。
+                                         # train = 学習、val = epoch 末のランダムプレビュー（log.n_full_random）、test = 読まない（例外は log.full_slice の 1 枚 = 目視の holdout）。
+                                         # ディスク上の症例が全部どれかのリストに入っていないと起動前にエラー（Stage 2 と同じ規則）
+
+b_exclude_cases: []     # B 側（PCD1024）から外す症例。ユーザー決定 2026-10-12: **外さない**（SR モードでは PCD は分布の参照先と比較表示にしか使わず、PCD 側で定量評価しないため全 20 症例を B に使う）。
+                        # Stage 2 の test と揃えて holdout にするなら [PCD-001, PCD-002, PCD-019, PCD-020]。ディスクに無い名前はエラー。上書き: --b_exclude_cases PCD-001,PCD-002 / --b_exclude_cases ""
+
+train:                      # train.yaml の差し替え（書けるのは train.yaml にあるキーだけ。入れ子も同じ書き方）。ここに無いキーは train.yaml の値のまま
+  data:
+    patch_size: 256         # 1024 では画素ピッチが半分なので、512 の 128 と同じ解剖スケールにする（案 A: patch 256 × batch 40。ユーザー決定 2026-10-12）
+                            # patches_per_slice は train.yaml の 8 をそのまま使う（1 スライス 2 MB × 66k 枚 = 130 GB で RAM に収まらず、PC1 で SSD 読み + デコードが律速（GPU 60%）だった。8 で大幅高速化。2026-10-12）
+  log:
+    image_freq: 200         # 学習中の patch グリッド（TB images/current, fixed）の間隔（step）。1 epoch = 600 step なので 3 回/epoch（train.yaml の 1000 だと 1.7 epoch に 1 回。256 patch のグリッドは 1 枚 1〜2 MB なので 100 にはしない。2026-10-12）
+    full_slice: EID-049/EID-049-079.png   # 毎 epoch フル 1024 で書き出す固定スライス（eid1024_dir からの相対パス）。test の症例 = holdout を目視用に（Stage 2 の log.eid_slice と同じ 1 枚）
+    eid_slice: PCD-002/PCD-002-236.png    # パネルの参照列に並べる B 側（PCD1024）の代表スライス（pcd1024_dir からの相対パス。固定。キー名は train.yaml と共通で「B 側の代表」の意味）

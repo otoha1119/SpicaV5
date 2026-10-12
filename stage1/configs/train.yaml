@@ -31,6 +31,8 @@ data:
   patches_per_image: 40 # sampling=paper 用。論文 "40 patches"
   patch_seed: 0
   samples_per_epoch: 24000   # sampling=random の epoch 長。論文の patch 集合と同数（batch 40 → 600 iter/epoch）
+  patches_per_slice: 8       # 1 回読んだスライス（A / B それぞれ）から連続して切る patch 数（random のみ。位置は毎回独立）。1 = patch ごとに別スライス（2026-10-12 以前の挙動）。
+                             # 8 で読み出し・デコードが 1/8（PC1 の sr で大幅高速化。degrade にも共通して効くのでユーザー指示で既定を 8 に。2026-10-12）
   hu_offset: 1400       # stored = HU + 1400
   hu_min: -1400         # 正規化窓 [−1400, 4096] → [−1, 1]
   hu_max: 4096
@@ -40,7 +42,7 @@ log:
   print_freq: 100         # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step）
   image_freq: 1000        # TensorBoard の途中画像の間隔（step）
   n_images: 4             # TensorBoard の途中画像の枚数（current / fixed それぞれ、128 patch。ディスクには書かない）
-  full_slice: PCD-002/PCD-002-215.png   # 毎 epoch フル 512 で書き出す固定スライス（pcd_dir からの相対パス）→ output_images/epoch_NNN/ と preview_fixed_<slice>/
+  full_slice: PCD-002/PCD-002-215.png   # 毎 epoch フル 512 で書き出す固定スライス（pcd_dir からの相対パス）→ output_images/epoch_NNN/ と preview_fixed_<slice>/。task: sr では sr.yaml の train: が EID 側に差し替える
   eid_slice: EID-001/EID-001-089.png    # パネル右端に並べる EID の代表スライス（eid_dir からの相対パス。固定）→ preview_fixed_<slice>/01_eid_<slice>.png にも 1 枚
   n_full_random: 1        # 加えて epoch ごとに別のランダムスライスを何枚書くか → output_images/epoch_NNN/ と preview_random/
   display_hu_min: -1400   # 表示の線形範囲（stored 0 = HU −1400）。TB と preview_<slice>/ に共通

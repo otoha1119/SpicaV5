@@ -9,6 +9,7 @@ panel_scale: 4        # 並べたパネルだけ最近傍で拡大（72 → 288�
 device: cpu           # cpu | cuda。学習中は cpu（512 を数枚通すだけなので数秒）
 
 cases:                # PCD と EID のペア。スライス名（PCD-nnn-sss / EID-nnn-sss）と左上座標。ファイルは pcd_dir/<PCD-nnn>/<name>.png、eid_dir/<EID-nnn>/<name>.png
+                      # run の task が sr のときは pcd1024_dir / eid1024_dir のスライスを読み、eid が入力（eid_x/y で入力・G(z)・R を切る）、pcd が参照。座標は 1024 の画素で書く（2026-10-12）
   - pcd: PCD-002-236
     pcd_x: 266
     pcd_y: 222

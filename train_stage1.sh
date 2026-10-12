@@ -30,6 +30,7 @@ python run_train.py \
     --machine "$MACHINE" \
     --train configs/train.yaml \
     --mode configs/mode.yaml \
+    --sr configs/sr.yaml \
     --machines ../configs/machines.yaml \
     "${RESUME_ARGS[@]}" \
     -- "$@"
