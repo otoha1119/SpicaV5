@@ -46,6 +46,7 @@ TRAIN = {
     "data.patches_per_image": Key(int, "--patches_per_image", 'sampling=paper の 1 画像あたり patch 数。論文 "40 patches"'),
     "data.patch_seed":      Key(int,   "--patch_seed",     "sampling=paper の固定集合、--serial_batches 時の再現用 seed"),
     "data.samples_per_epoch": Key(int, "--samples_per_epoch", "sampling=random の 1 epoch のサンプル数。論文の patch 集合 24,000 に合わせる"),
+    "data.patches_per_slice": Key(int, "--patches_per_slice", "sampling=random で 1 回読んだスライス（A / B それぞれ）から連続して切る patch 数。1 = patch ごとに別スライス（従来）。大きいほど読み出し・デコードが 1/k（1024 でデータ律速のとき用、sr.yaml で 8。2026-10-12）。位置は patch ごとに独立"),
     "data.hu_offset":       Key(int,   "--hu_offset",      "stored = HU + hu_offset（1400）"),
     "data.hu_min":          Key(int,   "--hu_min",         "正規化窓の下限 HU（−1400）"),
     "data.hu_max":          Key(int,   "--hu_max",         "正規化窓の上限 HU（4096）"),
@@ -383,6 +384,8 @@ def check_values(train, mode, machine):
     if train["data.patches_per_image"] < 1: P.append("data.patches_per_image ≥ 1")
     spe = train["data.samples_per_epoch"]
     if spe < bs or spe % bs: P.append(f"data.samples_per_epoch ({spe}) は optim.batch_size ({bs}) の倍数で batch_size 以上")
+    if train["data.patches_per_slice"] < 1: P.append("data.patches_per_slice ≥ 1")
+    if mode["sampling"] == "paper" and train["data.patches_per_slice"] != 1: P.append("sampling=paper のときは data.patches_per_slice を 1 にする（paper は固定集合を index で走査するので適用しない）")
     if train["data.hu_min"] >= train["data.hu_max"]: P.append("data.hu_min < data.hu_max")
     if train["log.print_freq"] < 1 or train["log.image_freq"] < 1: P.append("log.print_freq / image_freq ≥ 1（step）")
     if train["log.n_images"] < 1: P.append("log.n_images ≥ 1")

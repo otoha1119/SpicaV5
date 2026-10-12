@@ -22,6 +22,9 @@
 【サンプリング】 `--sampling` で切替。dataset 本体は sampler の返り値 (A のパスと位置、B のパスと位置) しか見ない
   random  : ケース 1 (ユーザー設計)。1 サンプルごとに A/B 独立に 症例一様 → スライス一様 → 位置一様。
             epoch 長は --samples_per_epoch (既定 24,000 = 論文の patch 集合と同じ計算量)
+            --patches_per_slice k > 1 で、引いたスライス（A / B それぞれ）を k サンプル連続して使い回す（位置は毎回独立）。読み出し・デコードが 1/k。
+            DataLoader の worker は 1 batch を丸ごと組むので、同じ batch に同じスライス由来の patch が k 個並ぶ。
+            通常は worker ごとのカウンタ（k 回ごとに引き直す）、--serial_batches のときは index // k をグループにして決定的に引く [2026-10-12]
   paper   : 論文方式。"the patches of size 128 × 128 are extracted with strides of 8 in each direction ...
             Among them, 40 patches are randomly selected, and they are used as training image patches"
             → 学習前に 1 画像 40 位置 (stride 8 グリッド) を seed 付きで選び固定。A を走査、B はランダム
@@ -256,19 +259,33 @@ def _grid_positions(img_hw, patch, stride):
 
 
 class RandomSampler:
-    """ケース 1: 完全ランダム。A/B とも 症例一様 → スライス一様 → 位置一様 (stride 刻み)。A と B は独立。"""
+    """ケース 1: 完全ランダム。A/B とも 症例一様 → スライス一様 → 位置一様 (stride 刻み)。A と B は独立。
+    k = patches_per_slice > 1 のとき、引いたスライス（A / B の組）を k サンプル使い回す（位置は毎回独立）。k = 1 は従来と同じ乱数列。"""
 
-    def __init__(self, idx_a, idx_b, img_hw, patch, stride):
+    def __init__(self, idx_a, idx_b, img_hw, patch, stride, k=1, seed=0):
         self.idx_a, self.idx_b = idx_a, idx_b
         self.ys, self.xs = _grid_positions(img_hw, patch, stride)
+        self.k, self.seed = int(k), int(seed)
+        self._left, self._cur, self._cur_group = 0, None, None  # worker ごとの状態（DataLoader の worker は fork されるので各 worker で独立に進む）
 
     def _pos(self, rng):
         return rng.choice(self.ys), rng.choice(self.xs)
 
     fixed_len = None  # 固定集合を持たない。epoch 長は dataset 側の samples_per_epoch
 
-    def sample(self, rng, index):
-        return self.idx_a.random_slice(rng), self._pos(rng), self.idx_b.random_slice(rng), self._pos(rng)
+    def sample(self, rng, index, group=None):
+        """group: None = worker のカウンタで k 回ごとに引き直す / int = そのグループ番号で決定的にスライスを引く（serial_batches、fixed_batch）。"""
+        if self.k == 1:
+            return self.idx_a.random_slice(rng), self._pos(rng), self.idx_b.random_slice(rng), self._pos(rng)
+        if group is None:
+            if self._left <= 0:
+                self._cur, self._left = (self.idx_a.random_slice(rng), self.idx_b.random_slice(rng)), self.k
+            self._left -= 1
+        elif group != self._cur_group:
+            g = random.Random(self.seed * 1_000_003 + 977 + int(group))
+            self._cur_group, self._cur = group, (self.idx_a.random_slice(g), self.idx_b.random_slice(g))
+        a_path, b_path = self._cur
+        return a_path, self._pos(rng), b_path, self._pos(rng)
 
 
 class PaperSampler:
@@ -316,6 +333,7 @@ class CTDataset(BaseDataset):
         parser.add_argument("--dir_B", type=str, default=None, help="EID（論文の x 側 = B）のディレクトリ。直下に症例フォルダ")
         parser.add_argument("--sampling", type=str, default=None, choices=["random", "paper", "aligned"], help="random=ケース1 完全ランダム | paper=論文の固定 40 patch/画像 | aligned=ケース2 (未実装)")
         parser.add_argument("--samples_per_epoch", type=int, default=None, help="sampling=random のときの 1 epoch のサンプル数")
+        parser.add_argument("--patches_per_slice", type=int, default=None, help="sampling=random で 1 回読んだスライスから連続して切る patch 数（1 = 従来）")
         parser.add_argument("--patch_size", type=int, default=None, help="patch の一辺。0 でフル画像 (テスト・推論用)")
         parser.add_argument("--patch_stride", type=int, default=None, help="patch 左上座標の刻み。1=任意位置、8=論文のグリッド")
         parser.add_argument("--patches_per_image", type=int, default=None, help="sampling=paper のときの 1 画像あたり patch 数 (論文 40)")
@@ -395,7 +413,7 @@ class CTDataset(BaseDataset):
         if self.full_image:
             self.sampler = None
         elif opt.sampling == "random":
-            self.sampler = RandomSampler(self.idx_a, self.idx_b, self.img_hw, self.patch, opt.patch_stride)
+            self.sampler = RandomSampler(self.idx_a, self.idx_b, self.img_hw, self.patch, opt.patch_stride, k=opt.patches_per_slice, seed=opt.patch_seed)
         elif opt.sampling == "paper":
             # 暗黙の置換はしない（F-19）。論文の stride 8 は yaml に明示する（schema.check_values が sampling=paper → patch_stride 8 を要求）
             self.sampler = PaperSampler(self.idx_a, self.idx_b, self.img_hw, self.patch, opt.patch_stride, opt.patches_per_image, opt.patch_seed)
@@ -411,7 +429,8 @@ class CTDataset(BaseDataset):
         else:
             raise ValueError(opt.sampling)
 
-        print(f"[CTDataset] task {self.task}: A: {self.idx_a.n_cases} cases / {self.idx_a.n_slices} slices, B: {self.idx_b.n_cases} cases / {self.idx_b.n_slices} slices, image {self.img_hw}, patch {self.patch}, sampling {'full' if self.full_image else opt.sampling}, len {len(self)}")
+        print(f"[CTDataset] task {self.task}: A: {self.idx_a.n_cases} cases / {self.idx_a.n_slices} slices, B: {self.idx_b.n_cases} cases / {self.idx_b.n_slices} slices, image {self.img_hw}, patch {self.patch}, sampling {'full' if self.full_image else opt.sampling}, len {len(self)}"
+              + (f", patches_per_slice {opt.patches_per_slice}" if not self.full_image and opt.sampling == "random" else ""))
         if self.task == "sr":
             n_val = self.idx_a_val.n_slices if self.idx_a_val is not None else 0
             print(f"[CTDataset] sr split ({opt.split_file}): A train {len(self.split['train'])} / val {len(self.split['val'])} ({n_val} slices, プレビュー専用) / test {len(self.split['test'])} (読まない) cases, "
@@ -465,7 +484,8 @@ class CTDataset(BaseDataset):
             path = self.idx_a.all_paths[index % self.idx_a.n_slices]
             img = torch.from_numpy(_load_normalized(path, *self.hu)).unsqueeze(0)
             return {"A": img, "B": img, "A_paths": path, "B_paths": path}
-        a_path, a_pos, b_path, b_pos = self.sampler.sample(self._rng(index), index)
+        group = (index // self.opt.patches_per_slice) if (self.opt.serial_batches and self.opt.patches_per_slice > 1) else None  # 決定的モードだけ index でグループ化
+        a_path, a_pos, b_path, b_pos = self.sampler.sample(self._rng(index), index, group)
         return {"A": self._patch(a_path, a_pos), "B": self._patch(b_path, b_pos), "A_paths": a_path, "B_paths": b_path}
 
     def fixed_batch(self, n):
@@ -473,7 +493,7 @@ class CTDataset(BaseDataset):
         戻り値: {"A": (n,1,p,p), "B": (n,1,p,p)}。n == 0 なら None（F-17。schema は n ≥ 1 を要求するので防御）"""
         if n <= 0:
             return None
-        items = [self.sampler.sample(random.Random(self.opt.patch_seed * 1_000_003 + i), i) for i in range(n)]
+        items = [self.sampler.sample(random.Random(self.opt.patch_seed * 1_000_003 + i), i, group=-1 - i) for i in range(n)]  # 固定サンプルは worker のカウンタを使わず i ごとに決定的（負のグループ番号で学習側と衝突させない）
         return {
             "A": torch.stack([self._patch(a_path, a_pos) for a_path, a_pos, _, _ in items]),
             "B": torch.stack([self._patch(b_path, b_pos) for _, _, b_path, b_pos in items]),

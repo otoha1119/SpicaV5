@@ -31,6 +31,7 @@ data:
   patches_per_image: 40 # sampling=paper 用。論文 "40 patches"
   patch_seed: 0
   samples_per_epoch: 24000   # sampling=random の epoch 長。論文の patch 集合と同数（batch 40 → 600 iter/epoch）
+  patches_per_slice: 1       # 1 回読んだスライスから連続して切る patch 数（random のみ）。1 = patch ごとに別スライス（従来）。1024 でデータ律速なら sr.yaml が 8 に差し替える（2026-10-12）
   hu_offset: 1400       # stored = HU + 1400
   hu_min: -1400         # 正規化窓 [−1400, 4096] → [−1, 1]
   hu_max: 4096
