@@ -20,7 +20,7 @@ b_exclude_cases: []     # B 側（PCD1024）から外す症例。ユーザー決
 train:                      # train.yaml の差し替え（書けるのは train.yaml にあるキーだけ。入れ子も同じ書き方）。ここに無いキーは train.yaml の値のまま
   data:
     patch_size: 256         # 1024 では画素ピッチが半分なので、512 の 128 と同じ解剖スケールにする（案 A: patch 256 × batch 40。ユーザー決定 2026-10-12）
-    patches_per_slice: 8    # 1 スライス（約 2 MB、66k 枚 = 130 GB で RAM に収まらない）から 8 patch を連続して切る → 1 batch で読むスライス 40 → 5 枚。PC1 で SSD 読み + PNG デコードが律速（GPU 60%）だったため（2026-10-12）
+                            # patches_per_slice は train.yaml の 8 をそのまま使う（1 スライス 2 MB × 66k 枚 = 130 GB で RAM に収まらず、PC1 で SSD 読み + デコードが律速（GPU 60%）だった。8 で大幅高速化。2026-10-12）
   log:
     image_freq: 200         # 学習中の patch グリッド（TB images/current, fixed）の間隔（step）。1 epoch = 600 step なので 3 回/epoch（train.yaml の 1000 だと 1.7 epoch に 1 回。256 patch のグリッドは 1 枚 1〜2 MB なので 100 にはしない。2026-10-12）
     full_slice: EID-049/EID-049-079.png   # 毎 epoch フル 1024 で書き出す固定スライス（eid1024_dir からの相対パス）。test の症例 = holdout を目視用に（Stage 2 の log.eid_slice と同じ 1 枚）

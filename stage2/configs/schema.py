@@ -48,6 +48,7 @@ TRAIN = {
     "data.patch_size":        Key(int,  "--patch_size",        '論文 "Patches of size 128 × 128 pixels"（1024 グリッド上）。ユーザー決定 128。4 の倍数（pool 2 回）'),
     "data.samples_per_epoch": Key(int,  "--samples_per_epoch", "1 epoch のサンプル数（random sampling: 症例一様 → スライス一様 → 位置一様、入力と教師は同じ位置）。論文の 1 epoch ≈ 61,101 組に合わせて 64,000"),
     "data.patch_seed":        Key(int,  "--patch_seed",        "serial_batches=true のときの決定的サンプリング用 seed"),
+    "data.patches_per_slice": Key(int,  "--patches_per_slice", "1 回読んだペア（入力 1024 + 教師 1024）から連続して切る patch 数。1 = patch ごとに別ペア（2026-10-12 以前）。8 で読み出し・デコードが 1/8（Stage 1 と同じ仕組み。位置は patch ごとに独立。2026-10-12）"),
     "data.hu_offset":         Key(int,  "--hu_offset",         "stored = HU + hu_offset（1400）。Stage 1 と同じ"),
     "data.hu_min":            Key(int,  "--hu_min",            "正規化窓の下限 HU（−1400）→ −1。Stage 1 と同じ [−1,1]（final_act=tanh でも使える範囲）"),
     "data.hu_max":            Key(int,  "--hu_max",            "正規化窓の上限 HU（4096）→ +1"),
@@ -344,6 +345,7 @@ def check_train_values(train, mode, machine):
     spe = train["data.samples_per_epoch"]
     if spe < bs or spe % bs: P.append(f"data.samples_per_epoch ({spe}) は optim.batch_size ({bs}) の倍数で batch_size 以上")
     if train["data.patch_seed"] < 0: P.append("data.patch_seed ≥ 0")
+    if train["data.patches_per_slice"] < 1: P.append("data.patches_per_slice ≥ 1")
     if train["data.hu_min"] >= train["data.hu_max"]: P.append("data.hu_min < data.hu_max")
     for k in ("data.train_cases", "data.val_cases"):
         if not train[k]: P.append(f"{k} は 1 症例以上")
