@@ -73,6 +73,11 @@
 - プログレスバーの単位を patch の枚数から step に変えた。1 本 = 1 epoch、左に `epoch e/E | step s/n_iters`
 - 既定の間隔: `log.image_freq` 1000 → 500、`log.full_freq` 5000 → 10000、`log.save_weights_freq` 50000 → 10000
 
+### 2026-10-13 — 固定領域の画像（ユーザー指示。学習の中身は変えない）
+- `train.yaml log.crop_pcd` / `log.crop_eid`（Stage 1 の `crop.yaml` の 4 か所を ×2 して 1024 の座標にしたもの。切り抜きは 72 → 144 画素）と `log.crop_freq`（500 step）で、学習中に固定領域を EMA の重みでサンプリングして TensorBoard `images/crop/<スライス名>` に出す
+- **切り抜きの中心を保ち、周りを含めた今の patch の大きさ（256）の窓全体**を表示する（ユーザー指示: 「クロップの中心はそのままで周り領域を入れた今のパッチサイズに」）。窓は 1 枚のタイルで、合成（重なりの平均）は無い。窓が画像の端にかかるときは端に寄せる。x_T は領域ごとに固定（どの checkpoint でも同じ）
+- PCD は [EID-like | PCD-like | PCD1024]、実 EID は [EID1024（×2 補間）| PCD-like]。PCD-002 は test の症例で、目視用にだけ読む（`full_slice` と同じ扱いを 2 枚目にも広げた）
+
 ### 動作確認（2026-10-13、合成データ・CPU・リポジトリ外の scratch venv、torch 2.x）
 - 縮小設定（`ch 32`, `ch_mult [1, 2]`, `image_size 32`, 128 の合成画像, batch 4）で学習 6 step → `latest/` と `weights/iter_*` の保存、TB、固定 val patch と固定スライス・実 EID のタイル合成サンプル（16 タイル）まで通ることを確認
 - `weights/iter_0000004` からの再開（`--n_iters 8`）が step 5 から続き、`launch_resume_*.yaml` を書くことを確認。`--ch 64` での再開は重みの形の不一致で、`n_iters` 到達済みの再開・未知フラグ・`r > p`・`T` を割り切れない S は起動前にエラーで止まることを確認

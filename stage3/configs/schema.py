@@ -96,6 +96,11 @@ TRAIN = {
     "log.n_val_patches":          Key(int,   "--n_val_patches",     "val の ε 損失（validation_freq ごと）に使う固定 val patch の数。t は [0, T) に等間隔、雑音は patch_seed で固定"),
     "log.full_freq":              Key(int,   "--full_freq",         "固定スライス（full_slice）と実 EID（eid_slice）を 1024 のままタイル合成でサンプリングして保存する間隔（step）。重いので所要時間を見て調整"),
     "log.save_weights_freq":      Key(int,   "--save_weights_freq", "weights/iter_NNNNNNN/（model + ema + state の 1 組）を残す間隔（step）。1 組 ≈ 1.8 GB（本家 128ch 256 で約 1.1 億 param）"),
+    "log.crop_freq":              Key(int,   "--crop_freq",         "固定領域（crop_pcd / crop_eid）を EMA の重みでサンプリングして TB images/crop/* に出す間隔（step）。2026-10-13 ユーザー指示（Stage 1 の crop.yaml の領域を学習中に見る）"),
+    "log.crop_size":              Key(int,   "--crop_size",         "元の切り抜きの一辺（1024 の画素。Stage 1 crop.yaml の 72（512）= 144）。y / x と合わせて**中心**を決めるのにだけ使い、表示は中心を保った ddim.yml data.image_size（256）の窓全体。image_size 以下"),
+    "log.crop_scale":             Key(int,   "--crop_scale",        "TB に出すとき窓を最近傍で何倍にするか（1 = 256 のまま）"),
+    "log.crop_pcd":               Key(rois,  None,                  "PCD 症例の固定領域 [{slice: <case>/<slice>.png, y: 左上の行, x: 左上の列}, ...]（1024 の画素。eidlike1024_dir / pcd1024_dir 相対）。[EID-like | PCD-like | PCD1024] の 3 列で出す。[] で無し。学習・検証に使わない test の症例のスライスでも読む（目視用、full_slice と同じ扱い）"),
+    "log.crop_eid":               Key(rois,  None,                  "実 EID の固定領域（slice は eid_dir = EID_v5 相対の 512。y / x は ×scale 補間後の 1024 の画素）。[EID1024 | PCD-like] の 2 列で出す。[] で無し"),
     "log.full_slice":             Key(str,   "--full_slice",        "固定スライス（eidlike1024_dir / pcd1024_dir からの相対パス。Stage 2 と同じ PCD-002/PCD-002-236.png = test の症例を目視用に）"),
     "log.eid_slice":              Key(str,   "--eid_slice",         "実 EID のテストスライス（eid_dir = EID_v5 からの相対パス。EID-049/EID-049-079.png）。512 を eidlike1024_dir/manifest.yaml の方式で補間してから通す"),
     "log.sample_steps":           Key(int,   "--sample_steps",      "学習中のサンプリングの DDIM step 数 S（本家 main.py --timesteps。決定 7: 50）"),
@@ -437,6 +442,12 @@ def check_train_values(train, ddim, machine):
         for j in range(i + 1, len(names)):
             both = sorted(set(lists[names[i]]) & set(lists[names[j]]))
             if both: P.append(f"{names[i]} と {names[j]} に同じ症例があります: {both}")
+    if train["log.crop_freq"] < 1: P.append("log.crop_freq ≥ 1（step）")
+    if not (8 <= train["log.crop_size"] <= ddim["data.image_size"]): P.append(f"log.crop_size は 8..ddim.yml data.image_size（{ddim['data.image_size']}）。領域を中央に置く 1 枚のタイルから切り出すため")
+    if train["log.crop_scale"] < 1: P.append("log.crop_scale ≥ 1")
+    for k in ("log.crop_pcd", "log.crop_eid"):
+        for r in train[k]:
+            if r["y"] < 0 or r["x"] < 0: P.append(f"{k} の y / x ≥ 0: {r}")
     for k in ("log.steps_per_epoch", "log.print_freq", "log.image_freq", "log.n_images", "log.n_val_patches", "log.full_freq", "log.save_weights_freq"):
         if train[k] < 1: P.append(f"{k} ≥ 1")
     if not train["log.full_slice"]: P.append("log.full_slice（固定スライスの相対パス）を指定")

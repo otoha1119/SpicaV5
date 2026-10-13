@@ -8,6 +8,8 @@ global_step は本家と同じ step（optimizer の更新回数）。stage2 の 
      val/eps_mse_per_pixel, val/eps_mse_per_pixel_ema   validation_freq ごと: 固定 val patch（n_val_patches 枚、t は [0, T) に等間隔、雑音固定）での同じ量。学習中の重み / EMA の重み
      time/sec_per_step, time/data_sec_per_step
      images/val_patch       image_freq ごと: 固定 val patch（n_images 枚）を EMA の重みで DDIM サンプリング（log.sample_steps）。各行 [EID-like (cond) | PCD-like (sample) | PCD1024 (teacher)]
+     images/crop/<スライス名>  crop_freq ごと: 固定領域（train.yaml log.crop_pcd / crop_eid = Stage 1 の crop.yaml の 4 か所を 1024 に直したもの）。切り抜きの中心を保った 256 の窓 1 枚を
+                            EMA の重みでサンプリングして、窓全体を出す（x_T は毎回同じ。合成なし = 重なりの平均は無い）。PCD は [EID-like | PCD-like | PCD1024]、実 EID は [EID1024 | PCD-like]
      images/full/fixed      full_freq ごと: 固定スライス（log.full_slice）と実 EID（log.eid_slice）をタイル合成でサンプリングした 5 列パネル（stage2 と同じ並び・util/panel.py）
      images/full/EID        同: 実 EID だけの 2 列
      time/full_sample_sec   その 2 枚のサンプリングにかかった秒数（full_freq を決める目安。決定 7）
@@ -26,6 +28,7 @@ from tqdm import tqdm
 
 from data.ct_io import denormalize, to_display, write_png
 from util.panel import build_panel, eid_labels, full_labels, label_strip
+from runners.diffusion import slice_seed
 from util.run_paths import LOSS_LOG_FILE, TB_DIR, iter_dirname, iter_images_dir, preview_dir
 
 to_u8 = lambda x01: (np.clip(x01, 0.0, 1.0) * 255.0).round().astype(np.uint8)  # noqa: E731
@@ -146,6 +149,18 @@ class TrainMonitor:
         y = diffusion.sample_patches(fixed["input"], s["steps"], s["eta"], s["skip_type"], seeds, model).cpu()
         self.tb.add_image("images/val_patch", self._patch_grid(fixed["input"], y, fixed["target"]), step, dataformats="HWC")
         self.tb.add_scalar("time/val_patch_sample_sec", time.time() - t0, step)
+
+    def log_crops(self, diffusion, crops, s, step, model, scale):
+        """crop_freq ごと: 固定領域（元の切り出しの中心 + 周りを含めた 256 の窓）を全部まとめて 1 バッチでサンプリングし、窓全体を TB images/crop/<スライス名> に出す。"""
+        t0 = time.time()
+        seeds = [slice_seed(s["seed"], c["key"]) for c in crops]
+        y = diffusion.sample_patches(torch.cat([c["cond"] for c in crops]), s["steps"], s["eta"], s["skip_type"], seeds, model).cpu().clamp(-1.0, 1.0)
+        for c, yi in zip(crops, y):
+            tiles = [c["cond"], yi[None]] + ([c["tgt"]] if c["tgt"] is not None else [])
+            cols = [cv2.resize(self._lin01(self._stored(t)), None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST) for t in tiles]
+            labels = ["EID-like (input)", f"PCD-like (step {step})", "PCD1024 (teacher)"] if c["kind"] == "pcd" else [f"{c['tag']} (real EID, x2)", f"PCD-like (step {step})"]
+            self.tb.add_image(f"images/crop/{c['tag']}", to_u8(build_panel(cols, labels)), step, dataformats="HWC")
+        self.tb.add_scalar("time/crop_sample_sec", time.time() - t0, step)
 
     def save_full_images(self, diffusion, dataset, s, step, model, seed_of):
         """full_freq ごと: 固定スライス（入力 / 教師あり）と実 EID テストを 1024 のままタイル合成でサンプリングし、

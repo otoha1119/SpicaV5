@@ -43,7 +43,22 @@ def check_split_on_disk(train, machine):
     eid = Path(machine["eid_dir"]) / train["log.eid_slice"]
     if not eid.is_file():
         raise RuntimeError(f"train.yaml log.eid_slice がありません: {eid}（machines.yaml の eid_dir からの相対パス）")
-    read_upsample_cfg(machine["eidlike1024_dir"])
+    for r in train["log.crop_pcd"]:  # 固定領域（目視用。症例はどれかのリストに入っていること。test の症例でも読む）
+        if Path(r["slice"]).parts[0] not in assigned:
+            raise RuntimeError(f"train.yaml log.crop_pcd の症例 {Path(r['slice']).parts[0]} が train_cases / val_cases / test_cases のどれにも含まれていません: {r['slice']}")
+        for root in (machine["eidlike1024_dir"], machine["pcd1024_dir"]):
+            if not (Path(root) / r["slice"]).is_file():
+                raise RuntimeError(f"train.yaml log.crop_pcd がありません: {Path(root) / r['slice']}（eidlike1024_dir / pcd1024_dir からの相対パス）")
+    for r in train["log.crop_eid"]:
+        if not (Path(machine["eid_dir"]) / r["slice"]).is_file():
+            raise RuntimeError(f"train.yaml log.crop_eid がありません: {Path(machine['eid_dir']) / r['slice']}（machines.yaml の eid_dir からの相対パス）")
+    scale = read_upsample_cfg(machine["eidlike1024_dir"])[0]
+    size = train["log.crop_size"]
+    for kind, root, mult in (("crop_pcd", machine["eidlike1024_dir"], 1), ("crop_eid", machine["eid_dir"], scale)):  # 固定領域（一辺 crop_size）は画像の中に収まること。run を作る前に止める
+        for r in train[f"log.{kind}"]:
+            h, w = (n * mult for n in read_stored(Path(root) / r["slice"]).shape)
+            if r["y"] + size > h or r["x"] + size > w:
+                raise RuntimeError(f"train.yaml log.{kind} {r}（一辺 {size}）が画像 {h}x{w} をはみ出します")
     return {"input": on_in, "pcd": on_pcd}
 
 
@@ -98,6 +113,7 @@ class PairDataset(Dataset):
         self._left, self._cur = 0, None  # worker ごとの状態（DataLoader の worker は fork されるので各 worker で独立に進む）
         self.full_slice = train["log.full_slice"]
         self.eid_path = str(Path(machine["eid_dir"]) / train["log.eid_slice"])
+        self.dirs = {"eidlike": Path(machine["eidlike1024_dir"]), "pcd": Path(machine["pcd1024_dir"]), "eid": Path(machine["eid_dir"])}
         self.upsample_cfg = read_upsample_cfg(machine["eidlike1024_dir"])
         train_cases, val_cases, test_cases = train["data.train_cases"], train["data.val_cases"], train["data.test_cases"]
 
@@ -185,6 +201,36 @@ class PairDataset(Dataset):
     def load_full(self, path):
         """フル画像を (1,1,H,W) の正規化 tensor で返す。"""
         return torch.from_numpy(load_normalized(path, *self.hu)).unsqueeze(0).unsqueeze(0)
+
+    def build_crops(self, train):
+        """固定領域（train.yaml log.crop_pcd / crop_eid）を学習前に読む。元の切り出し（一辺 crop_size）の**中心を保ったまま**、周りを含めた patch の大きさ（256）の窓を切る。
+        表示もこの窓全体（ユーザー指示 2026-10-13: 切り抜きの中心はそのままで周りの領域を入れた今のパッチサイズに）。窓は画像の端ではずれる（端に寄せる）。
+        戻り値 [{"kind": "pcd" | "eid", "tag": スライス名, "cond": (1,1,p,p) 窓（EID-like / 実 EID 補間後）, "tgt": (1,1,p,p) 窓の教師 | None, "key": seed 用の名前}, ...]"""
+        size, p = train["log.crop_size"], self.patch
+        H, W = self.img_hw
+        out = []
+        for kind, items in (("pcd", train["log.crop_pcd"]), ("eid", train["log.crop_eid"])):
+            for r in items:
+                y, x = r["y"], r["x"]
+                if y + size > H or x + size > W:
+                    raise ValueError(f"固定領域 {r}（一辺 {size}）が画像 {H}x{W} をはみ出します")
+                y0 = min(max(y + size // 2 - p // 2, 0), H - p)
+                x0 = min(max(x + size // 2 - p // 2, 0), W - p)
+                if kind == "pcd":
+                    full = self.load_full(str(self.dirs["eidlike"] / r["slice"]))
+                    tgt = self.load_full(str(self.dirs["pcd"] / r["slice"]))
+                    if full.shape[-2:] != (H, W) or tgt.shape[-2:] != (H, W):
+                        raise ValueError(f"固定領域のスライスの大きさが学習画像 {H}x{W} と違います: {r['slice']}")
+                else:
+                    scale, interp = self.upsample_cfg
+                    full = torch.from_numpy(normalize(upsample(read_stored(str(self.dirs["eid"] / r["slice"])), scale, interp), *self.hu)).unsqueeze(0).unsqueeze(0)
+                    tgt = None
+                    if full.shape[-2:] != (H, W):
+                        raise ValueError(f"実 EID の固定領域 {r['slice']} を ×{scale} 補間した大きさ {tuple(full.shape[-2:])} が学習画像 {H}x{W} と違います")
+                out.append({"kind": kind, "tag": Path(r["slice"]).stem, "key": f"{r['slice']}@{y},{x}",
+                            "cond": full[:, :, y0:y0 + p, x0:x0 + p].contiguous(),
+                            "tgt": None if tgt is None else tgt[:, :, y0:y0 + p, x0:x0 + p].contiguous()})
+        return out
 
     def load_eid_full(self):
         """実 EID テストスライス: eid_dir の 512 を manifest の方式で補間 → (1,1,H,W) の正規化 tensor。"""

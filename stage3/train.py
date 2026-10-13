@@ -96,6 +96,10 @@ def main():
           f"T {ddim['diffusion.num_diffusion_timesteps']} {ddim['diffusion.beta_schedule']}, device {device}")
     print(f"[train] 監視のサンプリング: DDIM η {s['eta']}, {describe_seq(diffusion.num_timesteps, s['steps'], s['skip_type'])}, {h}x{w} は {patch} タイル × {n_tiles} 枚（r {s['stride']}）")
 
+    crops = dataset.build_crops(train)
+    crop_freq, crop_scale = train["log.crop_freq"], train["log.crop_scale"]
+    if crops:
+        print(f"[train] 固定領域 {len(crops)} か所（一辺 {train['log.crop_size']}）を {crop_freq} step ごとに TB images/crop/* へ: " + ", ".join(c["key"] for c in crops))
     val_fixed = dataset.val_patches(train["log.n_val_patches"], VAL_SALT)
     img_fixed = dataset.val_patches(train["log.n_images"], IMG_SALT)
     n_pixels = ddim["data.channels"] * patch * patch
@@ -126,7 +130,7 @@ def main():
             monitor.tick()
             if step % print_freq == 0:
                 monitor.step(diffusion.epoch, step)
-            need_ema = step % vfreq == 0 or step % image_freq == 0 or step % full_freq == 0
+            need_ema = step % vfreq == 0 or step % image_freq == 0 or step % full_freq == 0 or (bool(crops) and step % crop_freq == 0)
             ema = diffusion.ema_model() if need_ema else None
             if step % vfreq == 0:
                 val = {"model": diffusion.eps_loss(val_fixed["input"], val_fixed["target"])}
@@ -135,6 +139,8 @@ def main():
                 monitor.log_val(val, step)
             if step % image_freq == 0:
                 monitor.log_val_patches(diffusion, img_fixed, s, step, ema)
+            if crops and step % crop_freq == 0:
+                monitor.log_crops(diffusion, crops, s, step, ema, crop_scale)
             if step % snap == 0 or step == 1:  # 本家: if step % snapshot_freq == 0 or step == 1
                 diffusion.save(run_dir, "latest")
                 last_saved = step

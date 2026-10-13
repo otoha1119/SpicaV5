@@ -24,6 +24,18 @@ log:
   n_val_patches: 16          # val の ε 損失（ddim.yml validation_freq ごと）に使う固定 val patch の数
   full_freq: 10000           # step。固定スライス + 実 EID を 1024 のままタイル合成でサンプリング（PC1 の 3090 で 2 枚 147 秒。ユーザー決定 2026-10-13: 1 epoch に 1 回 = 10,000）
   save_weights_freq: 10000   # step。weights/iter_NNNNNNN/（model + ema + state ≈ 1.7 GB）を残す間隔（ユーザー決定 2026-10-13: 10,000）。100 万 step まで回すと 100 組 ≈ 170 GB。latest/ は ddim.yml snapshot_freq（5000）ごとに上書き
+  # 固定領域（ユーザー指示 2026-10-13）: Stage 1 の stage1/configs/crop.yaml の 4 か所（512 の座標 × 2、72 → 144）。切り抜きの**中心はそのまま**、周りの領域を含めた
+  # 今の patch の大きさ（256）の窓 1 枚を EMA の重みでサンプリングして、窓全体を TB images/crop/<スライス名> に出す（x_T は毎回同じ）。
+  # PCD は test の症例（PCD-002）のスライスを目視用にだけ読む（full_slice と同じ扱い）
+  crop_freq: 500             # step。1 回 forward 50 回 × 4 か所を 1 バッチで ≈ 数秒
+  crop_size: 144             # 元の切り抜きの一辺（1024 の画素）。y / x と合わせて中心（y + 72, x + 72）を決めるのにだけ使う
+  crop_scale: 1              # TB に出すときの最近傍拡大（1 = 256 のまま。3 列で幅 ≈ 800）
+  crop_pcd:                  # [EID-like | PCD-like | PCD1024]（eidlike1024_dir / pcd1024_dir 相対。y = 左上の行、x = 左上の列）
+    - {slice: PCD-002/PCD-002-236.png, y: 444, x: 532}   # crop.yaml case 1: pcd_x 266, pcd_y 222
+    - {slice: PCD-002/PCD-002-222.png, y: 746, x: 596}   # crop.yaml case 2: pcd_x 298, pcd_y 373
+  crop_eid:                  # [EID1024 (×2 補間) | PCD-like]（eid_dir 相対の 512。y / x は補間後の 1024 の画素）
+    - {slice: EID-049/EID-049-079.png, y: 376, x: 654}   # crop.yaml case 1: eid_x 327, eid_y 188
+    - {slice: EID-001/EID-001-093.png, y: 686, x: 540}   # crop.yaml case 2: eid_x 270, eid_y 343
   full_slice: PCD-002/PCD-002-236.png   # 固定スライス（Stage 2 と同じ。test の症例を目視用に）
   eid_slice: EID-049/EID-049-079.png    # 実 EID のテストスライス（Stage 2 と同じ。eid_dir 相対、512 → manifest の方式で ×2）
   sample_steps: 50           # 学習中のサンプリングの DDIM step 数 S（決定 7）
