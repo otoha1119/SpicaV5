@@ -1,7 +1,7 @@
 """stage3/util/monitor.py — Stage 3 学習の表示: ターミナル進捗バー（tqdm）+ TensorBoard + loss_log.txt。stage2/util/monitor.py から 2026-10-13 に複製して拡散モデル用に変えた。
 
 global_step は本家と同じ step（optimizer の更新回数）。stage2 の total_iters（画像枚数）とは単位が違う。
-  ターミナル : 1 epoch（data.samples_per_epoch 枚）= 1 本の tqdm バー。末尾に loss と ε の画素平均 MSE
+  ターミナル : 1 epoch（train.yaml log.steps_per_epoch = 10,000 step）= 1 本の tqdm バー。単位は step（patch の枚数ではない）。左に epoch e/E と通算 step / n_iters、末尾に loss と ε の画素平均 MSE
   TensorBoard: <run>/tb/
      loss/eps               本家の損失そのもの（ε の二乗誤差の (C,H,W) 和の batch 平均。本家 tb_logger "loss" と同じ量）。print_freq の区間平均
      loss/eps_mse_per_pixel 同じ値を画素数で割ったもの（ε は標準正規なので 1 が「何も分からない」、0 が完全）
@@ -34,14 +34,13 @@ to_u8 = lambda x01: (np.clip(x01, 0.0, 1.0) * 255.0).round().astype(np.uint8)  #
 class TrainMonitor:
     PATCH_LABELS = ("EID-like (cond)", "PCD-like (sample)", "PCD1024 (teacher)")
 
-    def __init__(self, run_dir, train, batch_size, dataset_size, n_pixels):
+    def __init__(self, run_dir, train, batch_size, n_pixels):
         self.run_dir = Path(run_dir)
         self.hu = (train["data.hu_offset"], train["data.hu_min"], train["data.hu_max"])
         self.disp_min, self.disp_max = train["log.display_hu_min"], train["log.display_hu_max"]
         self.bits = train["log.preview_bits"]
         self.tb_size = train["log.tb_full_size"]
         self.batch_size = batch_size
-        self.dataset_size = dataset_size
         self.n_pixels = n_pixels  # C·H·W（本家の損失を画素平均に直す）
         self.tb = SummaryWriter(str(self.run_dir / TB_DIR))
         self.log = open(self.run_dir / LOSS_LOG_FILE, "a", encoding="utf-8")
@@ -52,10 +51,18 @@ class TrainMonitor:
     def _reset_window(self):
         self.win = {"loss": 0.0, "t_comp": 0.0, "t_data": 0.0, "n": 0}
 
-    def epoch_bar(self, loader, epoch, step, n_iters):
-        self.bar = tqdm(loader, total=len(loader), unit="img", unit_scale=self.batch_size, dynamic_ncols=True, mininterval=0.5,
-                        desc=f"epoch {epoch} (step {step}/{n_iters})", leave=True)
-        return self.bar
+    def epoch_bar(self, epoch, n_epochs, steps_per_epoch, offset, step, n_iters):
+        """1 epoch 分のバー（単位 step）。再開で epoch の途中から始めるときは offset（その epoch で済んだ step 数）から。"""
+        self.epoch_info = (epoch, n_epochs, n_iters)
+        self.bar = tqdm(total=steps_per_epoch, initial=offset, unit="step", dynamic_ncols=True, mininterval=0.5, leave=True)
+        self._desc(step)
+
+    def _desc(self, step):
+        epoch, n_epochs, n_iters = self.epoch_info
+        self.bar.set_description_str(f"epoch {epoch}/{n_epochs} | step {step}/{n_iters}", refresh=False)
+
+    def tick(self):
+        self.bar.update(1)
 
     def write(self, msg):
         tqdm.write(msg)
@@ -79,7 +86,8 @@ class TrainMonitor:
         self.tb.add_scalar("time/sec_per_step", w["t_comp"] / n, step)
         self.tb.add_scalar("time/data_sec_per_step", w["t_data"] / n, step)
         if self.bar is not None:
-            self.bar.set_postfix_str(f"step {step} | loss {loss:.2f} | eps mse/px {loss / self.n_pixels:.5f} | {w['t_comp'] / n:.2f} s/step | data {w['t_data'] / n * 1000:.0f} ms", refresh=False)
+            self._desc(step)
+            self.bar.set_postfix_str(f"loss {loss:.2f} | eps mse/px {loss / self.n_pixels:.5f} | {w['t_comp'] / n:.2f} s/step | data {w['t_data'] / n * 1000:.0f} ms", refresh=False)
         self.log.write(f"(epoch: {epoch}, step: {step}, time: {w['t_comp'] / n:.3f}, data: {w['t_data'] / n:.3f}) loss: {loss:.4f} eps_mse_per_pixel: {loss / self.n_pixels:.6f}\n")
         self.log.flush()
         self._reset_window()
@@ -178,10 +186,15 @@ class TrainMonitor:
         self.tb.add_scalar("time/full_sample_sec", elapsed, step)
         self.write(f"[full] step {step}: 固定スライス + 実 EID を {s['steps']} step × タイル {s['n_tiles']} 枚（r {s['stride']}）でサンプリング {elapsed:.0f}s -> {out_dir}")
 
-    def end_epoch(self, epoch, step, lr, elapsed):
+    def end_epoch(self, epoch, step, lr, elapsed, done):
+        """epoch のバーを閉じる。done（その epoch を最後まで回した）なら epoch 末の 1 行を書く。"""
+        if self.bar is not None:
+            self.bar.close()
+            self.bar = None
         self.tb.add_scalar("train/lr", lr, step)
         self.tb.flush()
-        self.write(f"[epoch {epoch}] {elapsed:.0f}s, step {step}, lr {lr:.2e}")
+        epoch_, n_epochs, _ = self.epoch_info
+        self.write(f"[epoch {epoch}/{n_epochs}] " + ("" if done else "（途中で終了）") + f"{elapsed:.0f}s, step {step}, lr {lr:.2e}, batch {self.batch_size}（1 step = {self.batch_size} patch）")
 
     def close(self):
         self.tb.close()

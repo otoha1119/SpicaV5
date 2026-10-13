@@ -6,7 +6,6 @@ optim:
   seed: 1234            # 本家 main.py --seed の既定
 
 data:
-  samples_per_epoch: 64000   # DataLoader を回し直す単位（patch 数。batch 8 → 8,000 step）。学習の長さは ddim.yml training.n_iters（step）で決まる
   patch_seed: 0              # 固定 patch（val の ε 損失・TB の val patch）の位置・t・雑音を決める seed
   patches_per_slice: 8       # 1 回読んだペアから連続して切る patch 数（Stage 2 と同じ 8）
   hu_offset: 1400            # stored = HU + 1400（Stage 1 / 2 と同じ）
@@ -18,12 +17,13 @@ data:
   test_cases: [PCD-001, PCD-002, PCD-019, PCD-020]   # 学習・検証で読まない。例外は log.full_slice の 1 枚（Stage 2 と同じ）
 
 log:
+  steps_per_epoch: 10000     # 1 epoch = 10,000 step（ユーザー決定 2026-10-13）。バー 1 本と epoch 末のログの区切りだけ（データはランダムに切るので「1 周」の意味は無い）。n_iters 1,000,000 → 100 epoch
   print_freq: 100            # step。TB loss/*・バー・loss_log.txt
-  image_freq: 1000           # step。固定 val patch を EMA でサンプリング（S = sample_steps）して TB images/val_patch
+  image_freq: 500            # step。固定 val patch 2 枚を EMA でサンプリング（S = sample_steps、2 枚で数秒）して TB images/val_patch（ユーザー決定 2026-10-13: 1000 → 500）
   n_images: 2                # その grid の行数（各行 [EID-like | PCD-like (sample) | PCD1024]）
   n_val_patches: 16          # val の ε 損失（ddim.yml validation_freq ごと）に使う固定 val patch の数
-  full_freq: 5000            # step。固定スライス + 実 EID を 1024 のままタイル合成でサンプリング（決定 7。所要時間を初回に見て、遅ければ増やす）
-  save_weights_freq: 50000   # step。weights/iter_NNNNNNN/（model + ema + state ≈ 1.8 GB）を残す間隔。latest/ は ddim.yml snapshot_freq ごと
+  full_freq: 10000           # step。固定スライス + 実 EID を 1024 のままタイル合成でサンプリング（PC1 の 3090 で 2 枚 147 秒。ユーザー決定 2026-10-13: 1 epoch に 1 回 = 10,000）
+  save_weights_freq: 10000   # step。weights/iter_NNNNNNN/（model + ema + state ≈ 1.7 GB）を残す間隔（ユーザー決定 2026-10-13: 10,000）。100 万 step まで回すと 100 組 ≈ 170 GB。latest/ は ddim.yml snapshot_freq（5000）ごとに上書き
   full_slice: PCD-002/PCD-002-236.png   # 固定スライス（Stage 2 と同じ。test の症例を目視用に）
   eid_slice: EID-049/EID-049-079.png    # 実 EID のテストスライス（Stage 2 と同じ。eid_dir 相対、512 → manifest の方式で ×2）
   sample_steps: 50           # 学習中のサンプリングの DDIM step 数 S（決定 7）

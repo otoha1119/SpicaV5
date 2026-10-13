@@ -92,7 +92,7 @@ class PairDataset(Dataset):
         self.hu = (train["data.hu_offset"], train["data.hu_min"], train["data.hu_max"])
         self.patch = ddim["data.image_size"]
         self.flip = ddim["data.random_flip"]
-        self.samples_per_epoch = train["data.samples_per_epoch"]
+        self.length = train["log.steps_per_epoch"] * ddim["training.batch_size"]  # DataLoader 1 周 = 1 epoch = steps_per_epoch step 分の patch
         self.patch_seed = train["data.patch_seed"]
         self.k = train["data.patches_per_slice"]
         self._left, self._cur = 0, None  # worker ごとの状態（DataLoader の worker は fork されるので各 worker で独立に進む）
@@ -164,7 +164,7 @@ class PairDataset(Dataset):
         return {"input": self._patch(in_path, pos, flip), "target": self._patch(pcd_path, pos, flip), "path": pcd_path, "y": pos[0], "x": pos[1]}
 
     def __len__(self):
-        return self.samples_per_epoch
+        return self.length
 
     # --- 監視用（学習の乱数列を消費しない。resume 後も同じ） ---
     def val_patches(self, n, salt):

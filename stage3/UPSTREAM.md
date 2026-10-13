@@ -68,6 +68,11 @@
 - `configs/schema.py`: 検証関数は stage2 から複製。int のリスト型（`ch_mult` / `attn_resolutions`）を追加
 - `eval_nps.py`（新規）: 推論の出力で入力・出力・教師の NPS を同じ ROI で比べる（決定 7 の評価 (ii)）
 
+### 2026-10-13 — 監視の区切り（ユーザー決定。学習の中身は変えない）
+- `train.yaml data.samples_per_epoch`（patch 数。stage2 から写した 64000）を廃止し、`log.steps_per_epoch`（step 数、10000）に置き換えた。epoch は step から決まる（`step // steps_per_epoch + 1`）ので、epoch の途中から再開しても数え方は変わらない。廃止キーを持つ旧 run の再開は、そのキーを無視して今の `steps_per_epoch` を使う
+- プログレスバーの単位を patch の枚数から step に変えた。1 本 = 1 epoch、左に `epoch e/E | step s/n_iters`
+- 既定の間隔: `log.image_freq` 1000 → 500、`log.full_freq` 5000 → 10000、`log.save_weights_freq` 50000 → 10000
+
 ### 動作確認（2026-10-13、合成データ・CPU・リポジトリ外の scratch venv、torch 2.x）
 - 縮小設定（`ch 32`, `ch_mult [1, 2]`, `image_size 32`, 128 の合成画像, batch 4）で学習 6 step → `latest/` と `weights/iter_*` の保存、TB、固定 val patch と固定スライス・実 EID のタイル合成サンプル（16 タイル）まで通ることを確認
 - `weights/iter_0000004` からの再開（`--n_iters 8`）が step 5 から続き、`launch_resume_*.yaml` を書くことを確認。`--ch 64` での再開は重みの形の不一致で、`n_iters` 到達済みの再開・未知フラグ・`r > p`・`T` を割り切れない S は起動前にエラーで止まることを確認

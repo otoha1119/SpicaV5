@@ -80,7 +80,6 @@ DDIM = {
 TRAIN = {
     "optim.seed":                 Key(int,   "--seed",              "python / numpy / torch の乱数 seed（本家 main.py --seed の既定 1234）。cudnn.benchmark は本家どおり有効なので完全決定ではない"),
     # data
-    "data.samples_per_epoch":     Key(int,   "--samples_per_epoch", "DataLoader を回し直す単位（patch 数）。学習の長さは ddim.yml training.n_iters（step）で決まる"),
     "data.patch_seed":            Key(int,   "--patch_seed",        "固定 patch（監視の val patch・val の ε 損失の t と雑音）の位置を決める seed"),
     "data.patches_per_slice":     Key(int,   "--patches_per_slice", "1 回読んだペア（入力 1024 + 教師 1024）から連続して切る patch 数（Stage 2 と同じ仕組み。位置は patch ごとに独立）"),
     "data.hu_offset":             Key(int,   "--hu_offset",         "stored = HU + hu_offset（1400）。Stage 1 / 2 と同じ"),
@@ -90,6 +89,7 @@ TRAIN = {
     "data.val_cases":             Key(list,  "--val_cases",         "検証に使う症例（PCD-017, 018）。学習には使わない"),
     "data.test_cases":            Key(list,  "--test_cases",        "最終評価用に避けておく症例（PCD-001, 002, 019, 020）。学習・検証で読まない（例外は log.full_slice の 1 枚）"),
     # log
+    "log.steps_per_epoch":        Key(int,   "--steps_per_epoch",   "1 epoch の step 数（ユーザー決定 2026-10-13: 10000）。データはランダムに patch を切るので「1 周」の意味は無く、バー 1 本と epoch 末のログの区切りだけ。学習の長さは ddim.yml training.n_iters（step）"),
     "log.print_freq":             Key(int,   "--print_freq",        "バー末尾の損失・TB scalar・loss_log.txt の更新間隔（step）"),
     "log.image_freq":             Key(int,   "--image_freq",        "固定 val patch を EMA の重みでサンプリングして TB images/val_patch に出す間隔（step）"),
     "log.n_images":               Key(int,   "--n_images",          "その grid の行数（各行 [EID-like | PCD-like (sample) | PCD1024]）"),
@@ -423,10 +423,7 @@ def check_train_values(train, ddim, machine):
     """train.yaml の値域と相互条件（学習）。症例リストとディスクの照合・画像サイズとタイルの整合は data/pair_dataset.py が行う。"""
     check_ddim_values(ddim)
     P = []
-    bs = ddim["training.batch_size"]
     if train["optim.seed"] < 0: P.append("optim.seed ≥ 0")
-    spe = train["data.samples_per_epoch"]
-    if spe < bs or spe % bs: P.append(f"data.samples_per_epoch ({spe}) は training.batch_size ({bs}) の倍数で batch_size 以上")
     if train["data.patch_seed"] < 0: P.append("data.patch_seed ≥ 0")
     if train["data.patches_per_slice"] < 1: P.append("data.patches_per_slice ≥ 1")
     if train["data.hu_min"] >= train["data.hu_max"]: P.append("data.hu_min < data.hu_max")
@@ -440,7 +437,7 @@ def check_train_values(train, ddim, machine):
         for j in range(i + 1, len(names)):
             both = sorted(set(lists[names[i]]) & set(lists[names[j]]))
             if both: P.append(f"{names[i]} と {names[j]} に同じ症例があります: {both}")
-    for k in ("log.print_freq", "log.image_freq", "log.n_images", "log.n_val_patches", "log.full_freq", "log.save_weights_freq"):
+    for k in ("log.steps_per_epoch", "log.print_freq", "log.image_freq", "log.n_images", "log.n_val_patches", "log.full_freq", "log.save_weights_freq"):
         if train[k] < 1: P.append(f"{k} ≥ 1")
     if not train["log.full_slice"]: P.append("log.full_slice（固定スライスの相対パス）を指定")
     if not train["log.eid_slice"]: P.append("log.eid_slice（実 EID テストスライスの相対パス）を指定")

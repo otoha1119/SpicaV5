@@ -4,7 +4,7 @@
   1. run_train.py が書いた launch.yaml（実効値）を読み、schema で再検証する
   2. seed → device（gpu_gen ≠ 0 なら CUDA 必須）→ PairDataset → DataLoader → CondDiffusion
   3. 再開（--resume_state）なら model / ema / optimizer / RNG / step を復元する
-  4. step ループ（ddim.yml training.n_iters まで。epoch = data.samples_per_epoch 枚で DataLoader を回し直すだけ）:
+  4. step ループ（ddim.yml training.n_iters まで。1 epoch = train.yaml log.steps_per_epoch step（10,000）。バー 1 本と epoch 末のログの区切りだけ）:
        print_freq        TB loss/*・バー・loss_log.txt
        validation_freq   固定 val patch の ε の MSE（学習中の重み / EMA）
        image_freq        固定 val patch を EMA の重みで DDIM サンプリング → TB images/val_patch
@@ -99,23 +99,31 @@ def main():
     val_fixed = dataset.val_patches(train["log.n_val_patches"], VAL_SALT)
     img_fixed = dataset.val_patches(train["log.n_images"], IMG_SALT)
     n_pixels = ddim["data.channels"] * patch * patch
-    monitor = TrainMonitor(run_dir, train, bs, len(dataset), n_pixels)
+    monitor = TrainMonitor(run_dir, train, bs, n_pixels)
     n_iters = ddim["training.n_iters"]
     snap, vfreq = ddim["training.snapshot_freq"], ddim["training.validation_freq"]
     print_freq, image_freq, full_freq, wfreq = train["log.print_freq"], train["log.image_freq"], train["log.full_freq"], train["log.save_weights_freq"]
     seed_of = lambda name: slice_seed(s["seed"], name)  # noqa: E731
     last_saved = None
+    spe = train["log.steps_per_epoch"]
+    n_epochs = -(-n_iters // spe)
+    print(f"[train] 1 epoch = {spe} step（= {spe * bs} patch）、n_iters {n_iters} step = {n_epochs} epoch。"
+          f"監視: val ε {vfreq} / val patch 画像 {image_freq} / latest {snap} / weights {wfreq} / 1024 合成 {full_freq} step ごと")
 
     while diffusion.step < n_iters:
-        diffusion.epoch += 1
+        diffusion.epoch = diffusion.step // spe + 1  # epoch は step から決まる（再開で epoch の途中から始めても数え方が変わらない）
+        offset = diffusion.step % spe
+        todo = min(spe - offset, n_iters - diffusion.step)
         t_epoch = time.time()
+        monitor.epoch_bar(diffusion.epoch, n_epochs, spe, offset, diffusion.step, n_iters)
         iter_data_time = time.time()
-        for batch in monitor.epoch_bar(loader, diffusion.epoch, diffusion.step, n_iters):
+        for k, batch in enumerate(loader):  # DataLoader 1 周 = spe step 分。再開時は残りの todo step だけ回す
             t0 = time.time()
             t_data = t0 - iter_data_time
             losses = diffusion.train_step(batch)
             step = diffusion.step
             monitor.accumulate(losses, time.time() - t0, t_data)
+            monitor.tick()
             if step % print_freq == 0:
                 monitor.step(diffusion.epoch, step)
             need_ema = step % vfreq == 0 or step % image_freq == 0 or step % full_freq == 0
@@ -136,9 +144,9 @@ def main():
                 monitor.save_full_images(diffusion, dataset, s, step, ema, seed_of)
             del ema
             iter_data_time = time.time()
-            if step >= n_iters:
+            if k + 1 >= todo:
                 break
-        monitor.end_epoch(diffusion.epoch, diffusion.step, diffusion.optimizer.param_groups[0]["lr"], time.time() - t_epoch)
+        monitor.end_epoch(diffusion.epoch, diffusion.step, diffusion.optimizer.param_groups[0]["lr"], time.time() - t_epoch, done=diffusion.step % spe == 0)
 
     step = diffusion.step
     if last_saved != step:
