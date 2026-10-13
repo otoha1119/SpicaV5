@@ -71,7 +71,7 @@
 ### 2026-10-13 — 監視の区切り（ユーザー決定。学習の中身は変えない）
 - `train.yaml data.samples_per_epoch`（patch 数。stage2 から写した 64000）を廃止し、`log.steps_per_epoch`（step 数、10000）に置き換えた。epoch は step から決まる（`step // steps_per_epoch + 1`）ので、epoch の途中から再開しても数え方は変わらない。廃止キーを持つ旧 run の再開は、そのキーを無視して今の `steps_per_epoch` を使う
 - プログレスバーの単位を patch の枚数から step に変えた。1 本 = 1 epoch、左に `epoch e/E | step s/n_iters`
-- 既定の間隔: `log.image_freq` 1000 → 500、`log.full_freq` 5000 → 10000、`log.save_weights_freq` 50000 → 10000
+- 既定の間隔: `log.image_freq` 1000 → 500、`log.full_freq` 5000 → 10000、`log.save_weights_freq` 50000 → 10000 → **50000**（同日、ユーザー決定。100 万 step で 100 組 ≈ 170 GB → 20 組 ≈ 34 GB。`latest/` は 5,000 step ごとのまま）
 
 ### 2026-10-13 — 固定領域の画像（ユーザー指示。学習の中身は変えない）
 - `train.yaml log.crop_pcd` / `log.crop_eid`（Stage 1 の `crop.yaml` の 4 か所を ×2 して 1024 の座標にしたもの。切り抜きは 72 → 144 画素）と `log.crop_freq`（500 step）で、学習中に固定領域を EMA の重みでサンプリングして TensorBoard `images/crop/<スライス名>` に出す

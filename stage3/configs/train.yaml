@@ -23,7 +23,7 @@ log:
   n_images: 2                # その grid の行数（各行 [EID-like | PCD-like (sample) | PCD1024]）
   n_val_patches: 16          # val の ε 損失（ddim.yml validation_freq ごと）に使う固定 val patch の数
   full_freq: 10000           # step。固定スライス + 実 EID を 1024 のままタイル合成でサンプリング（PC1 の 3090 で 2 枚 147 秒。ユーザー決定 2026-10-13: 1 epoch に 1 回 = 10,000）
-  save_weights_freq: 10000   # step。weights/iter_NNNNNNN/（model + ema + state ≈ 1.7 GB）を残す間隔（ユーザー決定 2026-10-13: 10,000）。100 万 step まで回すと 100 組 ≈ 170 GB。latest/ は ddim.yml snapshot_freq（5000）ごとに上書き
+  save_weights_freq: 50000   # step。weights/iter_NNNNNNN/（model + ema + state ≈ 1.7 GB）を残す間隔（ユーザー決定 2026-10-13: 10,000 → 50,000）。100 万 step まで回して 20 組 ≈ 34 GB。latest/ は ddim.yml snapshot_freq（5000）ごとに上書き（再開・推論用）
   # 固定領域（ユーザー指示 2026-10-13）: Stage 1 の stage1/configs/crop.yaml の 4 か所（512 の座標 × 2、72 → 144）。切り抜きの**中心はそのまま**、周りの領域を含めた
   # 今の patch の大きさ（256）の窓 1 枚を EMA の重みでサンプリングして、窓全体を TB images/crop/<スライス名> に出す（x_T は毎回同じ）。
   # PCD は test の症例（PCD-002）のスライスを目視用にだけ読む（full_slice と同じ扱い）
