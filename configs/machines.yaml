@@ -15,11 +15,13 @@ PC1:                                   # 研究室 Windows 機
   eidlike1024_dir: /workspace/DataSet/EIDlike1024_v1   # Stage 2 の学習入力 = bash start2.sh dataset の出力先（EID-like512 を ×2 補間）。存在しない状態で dataset を実行する。Stage 1 は使わない
   eid1024_dir: /workspace/DataSet/EID1024_v1           # 実 EID の 1024（EID_v5 を ×2 補間。bash start2.sh dataset --input_dir /workspace/DataSet/EID_v5 --eidlike1024_dir /workspace/DataSet/EID1024_v1 で作る、manifest.yaml 付き）。Stage 1 の task: sr の A 側。degrade と Stage 2 は使わない
   stage2_checkpoints_dir: /workspace/stage2/checkpoints   # Stage 2 の run（yyyy_mmdd_HHMM）の保存先。レイアウトは stage2/util/run_paths.py。Stage 1 は使わない
+  stage3_checkpoints_dir: /workspace/stage3/checkpoints   # Stage 3（条件付き DDIM）の run の保存先。レイアウトは stage3/util/run_paths.py。Stage 1 / 2 は使わない
   align_meta: /workspace/DataSet/align_meta.yaml   # ケース 2 用。sampling=aligned のときだけ存在を検査
   checkpoints_dir: /workspace/stage1/checkpoints   # この下に run（yyyy_mmdd_HHMM）。レイアウトは stage1/util/run_paths.py
   num_threads: 8
   tb_port: 6006            
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
+  stage3_tb_port: 6008     # Stage 3 の TensorBoard のポート（Stage 1 / 2 と別。compose が全 Stage のポートを公開する）
   
 PC2:                                   # 研究室 Windows 機
   gpu_gen: 30                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
@@ -32,11 +34,13 @@ PC2:                                   # 研究室 Windows 機
   eidlike1024_dir: /workspace/DataSet/EIDlike1024_v1   # Stage 2 の学習入力 = bash start2.sh dataset の出力先（EID-like512 を ×2 補間）。存在しない状態で dataset を実行する。Stage 1 は使わない
   eid1024_dir: /workspace/DataSet/EID1024_v1           # 実 EID の 1024（EID_v5 を ×2 補間。bash start2.sh dataset --input_dir /workspace/DataSet/EID_v5 --eidlike1024_dir /workspace/DataSet/EID1024_v1 で作る、manifest.yaml 付き）。Stage 1 の task: sr の A 側。degrade と Stage 2 は使わない
   stage2_checkpoints_dir: /workspace/stage2/checkpoints   # Stage 2 の run（yyyy_mmdd_HHMM）の保存先。レイアウトは stage2/util/run_paths.py。Stage 1 は使わない
+  stage3_checkpoints_dir: /workspace/stage3/checkpoints   # Stage 3（条件付き DDIM）の run の保存先。レイアウトは stage3/util/run_paths.py。Stage 1 / 2 は使わない
   align_meta: /workspace/DataSet/align_meta.yaml   # ケース 2 用。sampling=aligned のときだけ存在を検査
   checkpoints_dir: /workspace/stage1/checkpoints   # この下に run（yyyy_mmdd_HHMM）。レイアウトは stage1/util/run_paths.py
   num_threads: 8
   tb_port: 6006            # TensorBoard（ホスト:コンテナ 同番号で公開）
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
+  stage3_tb_port: 6008     # Stage 3 の TensorBoard のポート（Stage 1 / 2 と別。compose が全 Stage のポートを公開する）
 
 PC3:                                   # 研究室 Windows 機
   gpu_gen: 50                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
@@ -49,11 +53,13 @@ PC3:                                   # 研究室 Windows 機
   eidlike1024_dir: /workspace/DataSet/EIDlike1024_v1   # Stage 2 の学習入力 = bash start2.sh dataset の出力先（EID-like512 を ×2 補間）。存在しない状態で dataset を実行する。Stage 1 は使わない
   eid1024_dir: /workspace/DataSet/EID1024_v1           # 実 EID の 1024（EID_v5 を ×2 補間。bash start2.sh dataset --input_dir /workspace/DataSet/EID_v5 --eidlike1024_dir /workspace/DataSet/EID1024_v1 で作る、manifest.yaml 付き）。Stage 1 の task: sr の A 側。degrade と Stage 2 は使わない
   stage2_checkpoints_dir: /workspace/stage2/checkpoints   # Stage 2 の run（yyyy_mmdd_HHMM）の保存先。レイアウトは stage2/util/run_paths.py。Stage 1 は使わない
+  stage3_checkpoints_dir: /workspace/stage3/checkpoints   # Stage 3（条件付き DDIM）の run の保存先。レイアウトは stage3/util/run_paths.py。Stage 1 / 2 は使わない
   align_meta: /workspace/DataSet/align_meta.yaml   # ケース 2 用。sampling=aligned のときだけ存在を検査
   checkpoints_dir: /workspace/stage1/checkpoints   # この下に run（yyyy_mmdd_HHMM）。レイアウトは stage1/util/run_paths.py
   num_threads: 12
   tb_port: 6006            # TensorBoard（ホスト:コンテナ 同番号で公開）
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
+  stage3_tb_port: 6008     # Stage 3 の TensorBoard のポート（Stage 1 / 2 と別。compose が全 Stage のポートを公開する）
 
 PC4:                                   # 研究室 Windows 機
   gpu_gen: 40                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
@@ -66,11 +72,13 @@ PC4:                                   # 研究室 Windows 機
   eidlike1024_dir: /workspace/DataSet/EIDlike1024_v1   # Stage 2 の学習入力 = bash start2.sh dataset の出力先（EID-like512 を ×2 補間）。存在しない状態で dataset を実行する。Stage 1 は使わない
   eid1024_dir: /workspace/DataSet/EID1024_v1           # 実 EID の 1024（EID_v5 を ×2 補間。bash start2.sh dataset --input_dir /workspace/DataSet/EID_v5 --eidlike1024_dir /workspace/DataSet/EID1024_v1 で作る、manifest.yaml 付き）。Stage 1 の task: sr の A 側。degrade と Stage 2 は使わない
   stage2_checkpoints_dir: /workspace/stage2/checkpoints   # Stage 2 の run（yyyy_mmdd_HHMM）の保存先。レイアウトは stage2/util/run_paths.py。Stage 1 は使わない
+  stage3_checkpoints_dir: /workspace/stage3/checkpoints   # Stage 3（条件付き DDIM）の run の保存先。レイアウトは stage3/util/run_paths.py。Stage 1 / 2 は使わない
   align_meta: /workspace/DataSet/align_meta.yaml   # ケース 2 用。sampling=aligned のときだけ存在を検査
   checkpoints_dir: /workspace/stage1/checkpoints   # この下に run（yyyy_mmdd_HHMM）。レイアウトは stage1/util/run_paths.py
   num_threads: 8
   tb_port: 6006            # TensorBoard（ホスト:コンテナ 同番号で公開）
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
+  stage3_tb_port: 6008     # Stage 3 の TensorBoard のポート（Stage 1 / 2 と別。compose が全 Stage のポートを公開する）
 
 
 mac:                                   # 開発機（Docker、CPU）
@@ -84,8 +92,10 @@ mac:                                   # 開発機（Docker、CPU）
   eidlike1024_dir: /workspace/DataSet/EIDlike1024_v1   # Stage 2 の学習入力 = bash start2.sh dataset の出力先（EID-like512 を ×2 補間）。存在しない状態で dataset を実行する。Stage 1 は使わない
   eid1024_dir: /workspace/DataSet/EID1024_v1           # 実 EID の 1024（EID_v5 を ×2 補間。bash start2.sh dataset --input_dir /workspace/DataSet/EID_v5 --eidlike1024_dir /workspace/DataSet/EID1024_v1 で作る、manifest.yaml 付き）。Stage 1 の task: sr の A 側。degrade と Stage 2 は使わない
   stage2_checkpoints_dir: /workspace/stage2/checkpoints   # Stage 2 の run（yyyy_mmdd_HHMM）の保存先。レイアウトは stage2/util/run_paths.py。Stage 1 は使わない
+  stage3_checkpoints_dir: /workspace/stage3/checkpoints   # Stage 3（条件付き DDIM）の run の保存先。レイアウトは stage3/util/run_paths.py。Stage 1 / 2 は使わない
   align_meta: ""
   checkpoints_dir: /workspace/stage1/checkpoints
   num_threads: 2
   tb_port: 6006
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
+  stage3_tb_port: 6008     # Stage 3 の TensorBoard のポート（Stage 1 / 2 と別。compose が全 Stage のポートを公開する）

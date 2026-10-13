@@ -1,0 +1,13 @@
+# stage3/configs/nps.yaml — NPS（noise power spectrum）評価（bash start3.sh nps）の方式。唯一の正は configs/schema.py の NPS。既定値は無い。
+# 対象は 1 回の推論の出力フォルダ（nps_stage3.sh の INFER_DIR = <repo>/output/<run>_<重み>_<入力名>_<時刻>/）。同じ ROI で次の 3 つを比べる:
+#   input  : 推論の入力 1024（512 入力なら full_input1024/。infer.yaml の save_input1024: true で推論しておくこと）
+#   output : full/（PCD-like1024）
+#   teacher: pcd1024_dir の同名スライス（推論が teacher: true のときだけ）
+# 計算: ROI ごとに detrend → 2D FFT → NPS(fx, fy) = |DFT|² / (N_x N_y)（画素間隔 1 として HU²·px²。PNG に画素間隔が無いので周波数は cycles/pixel、1024 格子）→ ROI 平均 →
+#       radial 平均（n_bins 個のビン、0〜0.5 cycles/pixel）。報告は ピーク周波数、平均周波数（NPS で重み付け）、積分（= ROI 内の分散 HU²）。決定 7 の Go 条件 (b) に使う。
+# ROI は「均一な領域」（例: 大動脈内腔・肝臓・心筋の中央）を目で選んで書く。場所は推測で決めない（空だとエラーで止まる）。
+
+roi_size: 64        # ROI の一辺（1024 の画素）
+detrend: poly2      # mean（平均を引く）| poly2（2 次多項式面を引く。患者画像の緩やかな濃度勾配を除く）
+n_bins: 32          # radial 平均のビン数
+rois: []            # 例: - {slice: PCD-017/PCD-017-120.png, y: 400, x: 520}   （y / x は ROI の左上、1024 の画素）

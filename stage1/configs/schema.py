@@ -117,6 +117,9 @@ MACHINE = {
     "eidlike1024_dir":     Key(str, None,                "Stage 2 の学習入力（bash start2.sh dataset の出力先）。Stage 1 は使わない"),
     "stage2_checkpoints_dir": Key(str, None,           "Stage 2 の run の保存先ルート。Stage 1 は使わない"),
     "stage2_tb_port":      Key(int, None,                "Stage 2 の TensorBoard のポート（compose が両方公開するので start.sh も読む）。Stage 1 の TensorBoard は tb_port"),
+    # Stage 3 用（2026-10-13。Stage 1 は使わないが、未知キーで落とさないためにここで宣言する）
+    "stage3_checkpoints_dir": Key(str, None,           "Stage 3（条件付き DDIM）の run の保存先ルート。Stage 1 は使わない"),
+    "stage3_tb_port":      Key(int, None,                "Stage 3 の TensorBoard のポート（compose が全 Stage のポートを公開するので start.sh も読む）"),
 }
 
 # ---------------------------------------------------------------------------

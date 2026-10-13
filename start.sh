@@ -199,17 +199,17 @@ done
 [ -n "$PY" ] || { echo "[start] python3 と pyyaml がホストに必要です (pip install pyyaml)" >&2; exit 1; }
 
 # --- machines.yaml から gpu_gen / host_data_root / container_data_root を取る（欠落はエラー） ---
-IFS=$'\t' read -r GPU_GEN HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT CHECKPOINTS_DIR TB_PORT_STAGE2 < <("$PY" - "$MACHINES" "$MACHINE" <<'PYEOF'
+IFS=$'\t' read -r GPU_GEN HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT CHECKPOINTS_DIR TB_PORT_STAGE2 TB_PORT_STAGE3 < <("$PY" - "$MACHINES" "$MACHINE" <<'PYEOF'
 import sys, yaml
 path, name = sys.argv[1], sys.argv[2]
 m = yaml.safe_load(open(path, encoding="utf-8"))
 if not isinstance(m, dict) or name not in m:
     sys.exit(f"[start] {path} にエントリ '{name}' がありません。候補: {list(m) if isinstance(m, dict) else '(不正な形式)'}  → start.sh の MACHINE かコマンド引数のマシン名を直してください")
 e = m[name]
-missing = [k for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "checkpoints_dir", "stage2_tb_port") if k not in e]
+missing = [k for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "checkpoints_dir", "stage2_tb_port", "stage3_tb_port") if k not in e]
 if missing:
     sys.exit(f"[start] machines.yaml の '{name}' にキーがありません: {missing}")
-print("\t".join(str(e[k]) for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "checkpoints_dir", "stage2_tb_port")))  # タブ区切り（パスの空白対応。F-24）。stage2_tb_port は compose が両ポートを公開するため
+print("\t".join(str(e[k]) for k in ("gpu_gen", "host_data_root", "container_data_root", "tb_port", "checkpoints_dir", "stage2_tb_port", "stage3_tb_port")))  # タブ区切り（パスの空白対応。F-24）。stage2_tb_port / stage3_tb_port は compose が全 Stage のポートを公開するため
 PYEOF
 )
 
@@ -230,7 +230,7 @@ case "$GPU_GEN" in
   *) echo "[start] gpu_gen=$GPU_GEN は未対応 (30 / 40 / 50 / 0)" >&2; exit 1 ;;
 esac
 COMPOSE=("docker" "compose" "-f" "$ROOT/docker/compose.$GEN.yaml" "-p" "spicav5")
-export HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT TB_PORT_STAGE2 SPICA_MACHINE="$MACHINE"
+export HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT TB_PORT_STAGE2 TB_PORT_STAGE3 SPICA_MACHINE="$MACHINE"
 echo "[start] machine=$MACHINE gpu_gen=$GPU_GEN -> $GEN | mount $HOST_DATA_ROOT -> $CONTAINER_DATA_ROOT | action=$ACTION ${BUILD:+(rebuild)}${RESUME:+ resume=$RESUME tag=$RESUME_TAG}${BEST_RUN:+ run=$BEST_RUN epoch=$BEST_EPOCH}"
 
 if [ "$ACTION" = down ]; then

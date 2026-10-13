@@ -1,0 +1,38 @@
+# stage3/configs/train.yaml — Stage 3（条件付き DDIM）の SpicaV5 側の学習設定。唯一の正は configs/schema.py の TRAIN。既定値は無い。
+# 拡散モデルそのものの設定（本家 church.yml を写したもの）は configs/ddim.yml。実験名（run）は起動時刻 yyyy_mmdd_HHMM（run_train.py が作る）。
+# 決定: docs/decisions/20261013_pivot-stage2-diffusion.md 決定 7。書き方: 小数は点を付ける、真偽値は true / false、リストは [a, b]。
+
+optim:
+  seed: 1234            # 本家 main.py --seed の既定
+
+data:
+  samples_per_epoch: 64000   # DataLoader を回し直す単位（patch 数。batch 8 → 8,000 step）。学習の長さは ddim.yml training.n_iters（step）で決まる
+  patch_seed: 0              # 固定 patch（val の ε 損失・TB の val patch）の位置・t・雑音を決める seed
+  patches_per_slice: 8       # 1 回読んだペアから連続して切る patch 数（Stage 2 と同じ 8）
+  hu_offset: 1400            # stored = HU + 1400（Stage 1 / 2 と同じ）
+  hu_min: -1400              # 正規化窓 [−1400, 4096] → [−1, 1]（Stage 2 と同じ）
+  hu_max: 4096
+  # 症例分割は Stage 2 と同じ（stage2/configs/train.yaml。既存 run と比べるため）。ディスク上の症例は必ずどれかに入っていること
+  train_cases: [PCD-003, PCD-004, PCD-005, PCD-006, PCD-007, PCD-008, PCD-009, PCD-010, PCD-011, PCD-012, PCD-013, PCD-014, PCD-015, PCD-016]
+  val_cases: [PCD-017, PCD-018]
+  test_cases: [PCD-001, PCD-002, PCD-019, PCD-020]   # 学習・検証で読まない。例外は log.full_slice の 1 枚（Stage 2 と同じ）
+
+log:
+  print_freq: 100            # step。TB loss/*・バー・loss_log.txt
+  image_freq: 1000           # step。固定 val patch を EMA でサンプリング（S = sample_steps）して TB images/val_patch
+  n_images: 2                # その grid の行数（各行 [EID-like | PCD-like (sample) | PCD1024]）
+  n_val_patches: 16          # val の ε 損失（ddim.yml validation_freq ごと）に使う固定 val patch の数
+  full_freq: 5000            # step。固定スライス + 実 EID を 1024 のままタイル合成でサンプリング（決定 7。所要時間を初回に見て、遅ければ増やす）
+  save_weights_freq: 50000   # step。weights/iter_NNNNNNN/（model + ema + state ≈ 1.8 GB）を残す間隔。latest/ は ddim.yml snapshot_freq ごと
+  full_slice: PCD-002/PCD-002-236.png   # 固定スライス（Stage 2 と同じ。test の症例を目視用に）
+  eid_slice: EID-049/EID-049-079.png    # 実 EID のテストスライス（Stage 2 と同じ。eid_dir 相対、512 → manifest の方式で ×2）
+  sample_steps: 50           # 学習中のサンプリングの DDIM step 数 S（決定 7）
+  sample_eta: 0.0            # η = 0（決定的 DDIM）
+  skip_type: uniform         # 本家 --skip_type uniform（論文の linear）
+  sample_seed: 1234          # x_T の seed（スライス名と組み合わせ。どの checkpoint でも同じ x_T）
+  tile_stride: 128           # 1024 のタイル合成の stride r（決定 7: 128 = 7 × 7 = 49 タイル）
+  tile_batch: 4              # タイルを何枚ずつ通すか（学習と同じ GPU なので小さめ。推論は infer.yaml）
+  preview_bits: 16           # preview_*/ のビット深度（Stage 2 と同じ）
+  tb_full_size: 512          # TB の images/full/* の一辺（Stage 2 と同じ）
+  display_hu_min: -1400      # 表示の線形範囲（Stage 2 と同じ）
+  display_hu_max: 2100

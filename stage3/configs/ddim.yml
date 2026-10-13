@@ -1,0 +1,50 @@
+# stage3/configs/ddim.yml — 本家 ermongroup/ddim の configs/church.yml（LSUN church 256）を写したもの。唯一の正は configs/schema.py の DDIM。既定値は無い。
+# キー名は本家のまま（runners/diffusion.py が本家と同じ Namespace にして models/diffusion.Model と functions.get_optimizer に渡す）。
+# 本家から変えた点（決定: docs/decisions/20261013_pivot-stage2-diffusion.md 決定 7、変更履歴: stage3/UPSTREAM.md）:
+#   1. training.batch_size 64 → 8（ユーザー決定 2026-10-13）
+#   2. 入力の channel 連結: data.channels 3 → 1、model.in_channels 3 → 2（[EID-like の条件 | x_t]）、model.out_ch 3 → 1（ε）。mirthAI Fast-DDPM / WeatherDiffusion と同じ形
+#   3. データ読み込み: LSUN 用のキー（dataset / category / logit_transform / uniform_dequantization / gaussian_dequantization / rescaled / num_workers）を外し、
+#      1ch 16bit PNG のペアを train.yaml の data.* で読む（HU 窓を [−1, 1] に線形写像 = 本家の rescaled: true と同じ値域）。random_flip true → false（Stage 2 と同じく augmentation なし）
+#   そのほか: training.n_epochs を外し n_iters で止める（本家 train() は n_epochs で止まり n_iters を見ない）。sampling.*（FID 用の batch_size / last_only）は外し、
+#   サンプリングの設定（本家では main.py の --timesteps / --eta / --skip_type）は train.yaml の log.*（学習中の監視）と infer.yaml（推論）に置く。
+#   optim.grad_clip は church.yml に無い（本家は握りつぶして clip しない）ので 0.0 = clip しない を明示した。
+
+data:
+    image_size: 256        # 本家 256。= 学習 patch の一辺（Model.forward の assert はこの大きさだけ通す。1024 は 256 タイルで合成）
+    channels: 1            # 本家 3 → 1
+    random_flip: false     # 本家 true → false
+
+model:
+    type: "simple"
+    in_channels: 2         # 本家 3 → 2（条件 1ch + x_t 1ch）
+    out_ch: 1              # 本家 3 → 1
+    ch: 128
+    ch_mult: [1, 1, 2, 2, 4, 4]
+    num_res_blocks: 2
+    attn_resolutions: [16, ]
+    dropout: 0.0
+    var_type: fixedsmall
+    ema_rate: 0.999
+    ema: true
+    resamp_with_conv: true
+
+diffusion:
+    beta_schedule: linear
+    beta_start: 0.0001
+    beta_end: 0.02
+    num_diffusion_timesteps: 1000
+
+training:
+    batch_size: 8          # 本家 64 → 8（ユーザー）
+    n_iters: 1000000       # 上限（本家 church.yml は 5000000）。snapshot を見ながら止める（ユーザー「回しながら調整」）
+    snapshot_freq: 5000    # 本家 5000。latest/ の保存間隔（step）
+    validation_freq: 2000  # 本家 2000（本家 train() は未使用）。ここでは固定 val patch の ε の MSE を測る間隔（step）
+
+optim:
+    weight_decay: 0.000
+    optimizer: "Adam"
+    lr: 0.00002
+    beta1: 0.9
+    amsgrad: false
+    eps: 0.00000001
+    grad_clip: 0.0         # church.yml に無い = 本家は clip しない → 0.0 で明示（cifar10.yml は 1.0）
