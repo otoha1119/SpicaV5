@@ -79,8 +79,9 @@ def build_D(in_nc=1):
 
 
 class GANLoss(nn.Module):
-    """junyanz networks.GANLoss の lsgan / vanilla だけを写したもの（Stage 1 の ablation 用損失と同じ式。wgangp は持ち込まない）。
-    D の出力（patch map、活性化なし）に対し、lsgan は MSE（本物 1 / 偽物 0）、vanilla は BCEWithLogits。"""
+    """junyanz networks.GANLoss の lsgan / vanilla を写したもの（Stage 1 の ablation 用損失と同じ式。wgangp は持ち込まない）+ hinge（2026-10-13）。
+    D の出力（patch map、活性化なし）に対し、lsgan は MSE（本物 1 / 偽物 0）、vanilla は BCEWithLogits。
+    hinge（Lim & Ye 2017 / SAGAN）: D は max(0, 1 − D(real)) + max(0, 1 + D(fake))、G は −D(fake)。G の勾配が D の出力の大きさに比例しないので、D が勝っても G の勾配が爆発しない。"""
 
     def __init__(self, gan_mode):
         super().__init__()
@@ -88,10 +89,17 @@ class GANLoss(nn.Module):
             self.loss = nn.MSELoss()
         elif gan_mode == "vanilla":
             self.loss = nn.BCEWithLogitsLoss()
+        elif gan_mode == "hinge":
+            self.loss = None
         else:
             raise ValueError(gan_mode)
         self.gan_mode = gan_mode
 
-    def forward(self, prediction, target_is_real):
+    def forward(self, prediction, target_is_real, for_D=True):
+        """for_D: D の損失（True）か G の損失（False）か。lsgan / vanilla では区別しない（junyanz と同じ）。hinge だけ式が違う。"""
+        if self.gan_mode == "hinge":
+            if not for_D:
+                return -prediction.mean()
+            return torch.relu(1.0 - prediction).mean() if target_is_real else torch.relu(1.0 + prediction).mean()
         target = torch.full_like(prediction, 1.0 if target_is_real else 0.0)
         return self.loss(prediction, target)

@@ -131,3 +131,19 @@ def infer_output_dir(run_dir, weight_dir, input_dir, now, root=None):
 def crop_output_dir(run_dir, weight_dir, now, root=None):
     """パッチ切り出し（bash start.sh crop）の出力先: <repo>/output/<run>_<重みディレクトリ名>_crop_<yyyy_mmdd_HHMMSS>/。"""
     return output_root(root) / f"{Path(run_dir).name}_{Path(weight_dir).name}_crop_{now.strftime(INFER_STAMP_FORMAT)}"
+
+
+def replace_retry(src, dst, tries=20, wait=0.5):
+    """os.replace の再試行版（2026-10-13）。Windows では Defender や検索インデックスが書いたばかりの .pth を掴んで
+    PermissionError（WinError 5 / 32）になることがあるので、最大 tries 回 wait 秒おきに繰り返す。最後まで失敗したら例外をそのまま上げる。"""
+    import os
+    import time
+    for i in range(tries):
+        try:
+            os.replace(src, dst)
+            return
+        except (PermissionError, OSError) as e:
+            if i == tries - 1:
+                raise
+            print(f"[replace_retry] {src} → {dst}: {e.__class__.__name__}: {e}（{i + 1}/{tries}。{wait}s 後に再試行）", flush=True)
+            time.sleep(wait)

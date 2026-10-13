@@ -14,6 +14,9 @@ Stage 1 の util/monitor.py に相当する。画像は学習中の 128 patch �
      val/rmse_input, val/ssim_input, val/psnr_input   参照線: 入力そのまま vs 教師（何もしない場合）。出力がこれを超えなければ学習の意味が無い
      loss/gan_G, loss/D, loss/D_real, loss/D_fake, diag/gan_ratio   実 EID 枝（mode real_eid_branch、2026-10-13）だけ。gan_G = U-Net に戻す GAN 損失（λ を掛ける前）、D = ½(D_real + D_fake)。
                                     diag/gan_ratio = adv.lambda_gan · gan_G / mse（区間平均の比。MSE が主役なら ≪ 1。loss/<mse> は mse だけで、U-Net の損失全体ではない）
+     diag/gan_active（0/1）, diag/grad_norm_G, diag/grad_norm_D（区間平均。クリップ前）, diag/grad_norm_mse, diag/grad_norm_gan（print_freq ごとの 1 step の値。別々に backward した勾配ノルム）
+                                    実 EID 枝だけ（崩壊対策 2026-10-13）。λ の目安は grad_norm_gan / grad_norm_mse（損失の比 gan_ratio は勾配の比ではない）
+     警告（loss_log.txt にも [warn] 行）: step の loss が非有限 / mse が直近 print_freq 区間平均の 10 倍超（発散の兆候。区間に 1 回）、epoch 末の val/rmse > val/rmse_input（崩壊。止めない）
      images/current                 image_freq step ごと: いま学習中のバッチ先頭 n_images 枚の 128 patch。各行 [EID-like1024 (input) | PCD-like1024 (output) | PCD1024 (teacher)]
      images/current_eid             実 EID 枝だけ: いまのステップの実 EID 小片先頭 n_images 枚。各行 [EID1024 crop (input, x2) | PCD-like (output)]（教師は無い）
      images/fixed                   同じ間隔: 固定スライス（log.full_slice）から patch_seed で決めた位置の n_images 枚（同じ patch で推移を追う。eval で通す）
@@ -48,6 +51,8 @@ to_u8 = lambda x01: (np.clip(x01, 0.0, 1.0) * 255.0).round().astype(np.uint8)  #
 
 class TrainMonitor:
     GAN_KEYS = ("gan_G", "D", "D_real", "D_fake")  # 実 EID 枝の損失（RegressionModel.optimize の戻り値のキー）
+    DIAG_KEYS = ("gan_active", "grad_norm_G", "grad_norm_D")  # 毎 step 返る診断値（区間平均。gan_active は 0/1）
+    DIAG_ONCE = ("grad_norm_mse", "grad_norm_gan")  # diag の step だけ返る（その step の値をそのまま出す）
 
     def __init__(self, run_dir, train, loss_name, batch_size, dataset_size, real_eid_branch=False):
         """train は launch の実効値（平坦 dict。hu_* と display_hu_* を使う）。real_eid_branch なら GAN 系の scalar と images/current_eid も出す。"""
@@ -66,12 +71,14 @@ class TrainMonitor:
         self.log = open(self.run_dir / LOSS_LOG_FILE, "a", encoding="utf-8")
         self.log.write(f"================ Training ({time.strftime('%Y-%m-%d %H:%M:%S')}) ================\n")
         self.bar = None
+        self.last_mse_avg, self.warned_in_window = None, False
         self._reset_window()
 
     def _reset_window(self):
         self.win = {"loss": 0.0, "mse": 0.0, "ssim": 0.0, "t_comp": 0.0, "t_data": 0.0, "n": 0}
         if self.real_eid_branch:
-            self.win.update({k: 0.0 for k in self.GAN_KEYS})
+            self.win.update({k: 0.0 for k in self.GAN_KEYS + self.DIAG_KEYS})
+            self.win["once"] = {}
 
     def epoch_bar(self, loader, epoch, total_epochs):
         self.bar = tqdm(loader, total=len(loader), unit="img", unit_scale=self.batch_size, dynamic_ncols=True, mininterval=0.5,
@@ -87,8 +94,11 @@ class TrainMonitor:
         w = self.win
         w["loss"] += losses["loss"]; w["mse"] += losses["mse"]; w["ssim"] += losses["ssim"]
         if self.real_eid_branch:
-            for k in self.GAN_KEYS:
+            for k in self.GAN_KEYS + self.DIAG_KEYS:
                 w[k] += losses[k]
+            for k in self.DIAG_ONCE:
+                if k in losses:
+                    w["once"][k] = losses[k]
         w["t_comp"] += t_comp; w["t_data"] += t_data; w["n"] += 1
 
     def step(self, epoch, total_iters):
@@ -111,11 +121,35 @@ class TrainMonitor:
                 self.tb.add_scalar(f"loss/{k}", g[k], total_iters)
             self.tb.add_scalar("diag/gan_ratio", ratio, total_iters)
             gan_txt = f" gan_G: {g['gan_G']:.4f} D: {g['D']:.4f} D_real: {g['D_real']:.4f} D_fake: {g['D_fake']:.4f} gan_ratio: {ratio:.3e}"
+            d = {k: w[k] / n for k in self.DIAG_KEYS}
+            d.update(w["once"])
+            for k, v in d.items():
+                self.tb.add_scalar(f"diag/{k}", v, total_iters)
+            gan_txt += f" gan_active: {d['gan_active']:.0f} grad_norm_G: {d['grad_norm_G']:.3e} grad_norm_D: {d['grad_norm_D']:.3e}" + "".join(f" {k}: {w['once'][k]:.3e}" for k in self.DIAG_ONCE if k in w["once"])
         if self.bar is not None:
             self.bar.set_postfix_str(f"{self.loss_name} {loss:.5f} | rmse {rmse:.4f} | ssim {sim:.4f}" + (f" | gan_G {w['gan_G'] / n:.3f} D {w['D'] / n:.3f}" if self.real_eid_branch else "") + f" | data {w['t_data'] / n * 1000:.0f} ms", refresh=False)
         self.log.write(f"(epoch: {epoch}, iters: {total_iters}, time: {w['t_comp'] / n:.3f}, data: {w['t_data'] / n:.3f}) {self.loss_name}: {loss:.6f} rmse: {rmse:.5f} ssim: {sim:.4f}{gan_txt}\n")
         self.log.flush()
+        self.last_mse_avg = w["mse"] / n  # 発散検出の基準（直近区間の平均 mse）
+        self.warned_in_window = False
         self._reset_window()
+
+    def check_divergence(self, losses, epoch, total_iters):
+        """step ごと: loss が非有限、または mse が直近 print_freq 区間平均の 10 倍超なら警告（止めない。区間に 1 回。2026-10-13）。"""
+        import math
+        if self.warned_in_window:
+            return
+        if not math.isfinite(losses["loss"]):
+            self.write(f"[warn] epoch {epoch} iters {total_iters}: loss が非有限（{losses['loss']}）。発散の疑い（diag/grad_norm_G を確認）")
+            self.warned_in_window = True
+        elif self.last_mse_avg is not None and losses["mse"] > 10.0 * self.last_mse_avg:
+            self.write(f"[warn] epoch {epoch} iters {total_iters}: mse {losses['mse']:.5f} が直近区間平均 {self.last_mse_avg:.5f} の 10 倍超。発散の兆候（diag/grad_norm_G / grad_norm_gan を確認）")
+            self.warned_in_window = True
+
+    def check_collapse(self, val, epoch):
+        """epoch 末: val/rmse が入力そのまま（rmse_input）より悪ければ警告（崩壊。止めない。2026-10-13）。"""
+        if val["rmse"] > val["rmse_input"]:
+            self.write(f"[warn] epoch {epoch}: val/rmse {val['rmse']:.5f} > val/rmse_input {val['rmse_input']:.5f}（出力が入力そのままより悪い = 崩壊の疑い。best は更新されないはず。λ / warmup / lr を見直す）")
 
     def log_val(self, val, total_iters):
         for k, v in val.items():

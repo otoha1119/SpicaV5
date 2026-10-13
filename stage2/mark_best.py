@@ -20,7 +20,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import LEGACY_MODE_DEFAULTS, MACHINE, ConfigError, validate_shared  # noqa: E402
-from util.run_paths import LAUNCH_FILE, ckpt_dir, ckpt_kinds, ckpt_path, latest_launch, saved_tags, write_best_note  # noqa: E402
+from util.run_paths import LAUNCH_FILE, ckpt_dir, ckpt_kinds, ckpt_path, latest_launch, replace_retry, saved_tags, write_best_note  # noqa: E402
 
 
 def run_has_D(run_dir):
@@ -72,8 +72,8 @@ def main():
     if old.exists():
         shutil.rmtree(old)
     if final.exists():
-        os.replace(final, old)
-    os.replace(tmp, final)
+        replace_retry(final, old)  # Windows で掴まれていたら再試行（2026-10-13）
+    replace_retry(tmp, final)
     if old.exists():
         shutil.rmtree(old)
     write_best_note(run_dir, a.epoch, "manual", source=", ".join(str(s.relative_to(run_dir)) for s in srcs))

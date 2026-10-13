@@ -108,15 +108,19 @@ def main():
         t_epoch = time.time()
         iter_data_time = time.time()
         model.cur_epoch, model.epoch_done = epoch, False
+        if mode["real_eid_branch"]:  # 崩壊対策（2026-10-13）: ウォームアップ終了後は lr を落とす（通算 epoch で判定。resume 後も同じ）
+            lr_now = model.apply_epoch_lr()
+            monitor.write(f"[epoch {epoch}] real_eid_branch: GAN {'有効' if model.gan_active() else f'無効（warmup_epochs {model.warmup_epochs}）'}, lr {lr_now:.6f}")
         for batch in monitor.epoch_bar(loader, epoch, n_epochs):
             t0 = time.time()
             t_data = t0 - iter_data_time
             n_batch = int(batch["input"].shape[0])
             total_iters += n_batch
             model.total_iters = total_iters
-            losses = model.optimize(batch, next_eid() if loader_eid is not None else None)
-            monitor.accumulate(losses, time.time() - t0, t_data)
             step = total_iters // bs
+            losses = model.optimize(batch, next_eid() if loader_eid is not None else None, diag=(step % print_freq == 0))  # diag: 勾配ノルムの内訳（print_freq ごと）
+            monitor.accumulate(losses, time.time() - t0, t_data)
+            monitor.check_divergence(losses, epoch, total_iters)
             if step % print_freq == 0:
                 monitor.step(epoch, total_iters)
             if step % image_freq == 0:
@@ -128,6 +132,7 @@ def main():
         model.epoch_done = True
         val = model.evaluate(dataset, val_slices)
         monitor.log_val(val, total_iters)
+        monitor.check_collapse(val, epoch)
         improved = model.update_best(run_dir, best_metric, val, epoch, total_iters)  # val が最良なら best/ + best.txt（save_epoch_freq とは独立）
         monitor.log_best(model.best, improved, epoch, total_iters)
         if epoch % save_epoch == 0:

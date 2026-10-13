@@ -14,6 +14,11 @@
               D の損失   = ½ [ gan(D(t), real) + gan(D(pred_eid.detach()), fake) ]。**本物側 = このステップのペア枝の教師 t**（PCD1024 の patch。追加 I/O なし。実 EID とは対応が無い）
               更新順は G → D（junyanz / Stage 1 fidelity_gan_model と同じ。G の backward 中は D の requires_grad を切る）
   checkpoint: net_D.pth を追加（3 ファイル 1 組）。state.pth に optimizer_D。resume で両方復元。false の run には net_D.pth が無い
+  崩壊対策（2026-10-13。PC4 run 2026_1013_0143 で λ 0.001・lr 1e-3 の U-Net が epoch 3 付近で発散 → D が勝ち切り出力が定数化）:
+    adv.warmup_epochs   通算 epoch ≤ warmup の間は U-Net を MSE だけで更新（gan_G は計算・記録するが戻さない）。D はその間も学習する
+    adv.lr_after_warmup ウォームアップ終了後の epoch 開始時に U-Net の lr を落とす（apply_epoch_lr。resume 後も通算 epoch で判定）
+    adv.clip_grad_norm / clip_grad_norm_D  step 前に clip_grad_norm_。クリップ前のノルムを grad_norm_G / grad_norm_D として返す（0 = 無効でもノルムは測る）
+    diag=True の step（log.print_freq ごと。train.py が渡す）だけ MSE 由来と λ·GAN 由来の勾配ノルムを別々に測る（autograd.grad を 2 回。grad_norm_mse / grad_norm_gan）
 """
 
 import os
@@ -28,7 +33,7 @@ import torch.nn as nn
 from util.metrics import mse, psnr, ssim
 from models.discriminator import D_MIN_INPUT, GANLoss, build_D
 from models.unet import build_net
-from util.run_paths import CKPT_D, ckpt_dir, write_best_note
+from util.run_paths import CKPT_D, ckpt_dir, replace_retry, write_best_note
 
 BETTER = {"rmse": lambda new, old: new < old, "ssim": lambda new, old: new > old, "psnr": lambda new, old: new > old}  # log.best_metric ごとの「更新」の向き
 
@@ -70,6 +75,27 @@ class RegressionModel:
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=self.lr_D, betas=self.betas_D)
             self.criterionGAN = GANLoss(train["adv.gan_mode"]).to(device)
             self.n_params_D = sum(p.numel() for p in self.netD.parameters())
+            self.warmup_epochs = train["adv.warmup_epochs"]
+            self.lr_after_warmup = train["adv.lr_after_warmup"]
+            self.clip_G, self.clip_D = train["adv.clip_grad_norm"], train["adv.clip_grad_norm_D"]
+
+    # --- 崩壊対策（2026-10-13） ---
+    def gan_active(self):
+        """この epoch で GAN 損失を U-Net に戻すか（通算 epoch > adv.warmup_epochs）。枝なしなら False。"""
+        return bool(self.real_eid_branch and self.cur_epoch > self.warmup_epochs)
+
+    def apply_epoch_lr(self):
+        """epoch 開始時（train.py が cur_epoch を設定した後）に呼ぶ: ウォームアップ終了後なら U-Net の lr を adv.lr_after_warmup に（0 なら optim.lr のまま）。resume 後も通算 epoch で判定。戻り値は実効 lr。"""
+        lr = self.lr
+        if self.gan_active() and self.lr_after_warmup > 0:
+            lr = self.lr_after_warmup
+        for g in self.optimizer.param_groups:
+            g["lr"] = lr
+        return lr
+
+    @staticmethod
+    def _grad_norm(grads):
+        return float(torch.sqrt(sum((g.detach().float() ** 2).sum() for g in grads if g is not None)))
 
     # --- 前向き ---
     def forward(self, x):
@@ -81,9 +107,10 @@ class RegressionModel:
         for p in net.parameters():
             p.requires_grad = flag
 
-    def optimize(self, batch, batch_eid=None):
+    def optimize(self, batch, batch_eid=None, diag=False):
         """1 step。戻り値は表示用の dict: loss（U-Net の損失全体）、mse（出力 vs 教師。monitor が √ を取って train/rmse に。0 へ）、ssim（1 へ）。
-        実 EID 枝のときは batch_eid（{"input": (B,1,p,p)}）が必須で、gan_G / D / D_real / D_fake も返す（loss = mse + lambda_gan · gan_G）。"""
+        実 EID 枝のときは batch_eid（{"input": (B,1,p,p)}）が必須で、gan_G / D / D_real / D_fake / gan_active / grad_norm_G / grad_norm_D も返す
+        （loss = mse + lambda_gan · gan_G。ウォームアップ中は loss = mse）。diag=True なら grad_norm_mse / grad_norm_gan（別々に backward した勾配ノルム）も。"""
         x = batch["input"].to(self.device, non_blocking=True)
         t = batch["target"].to(self.device, non_blocking=True)
         self.net.train()
@@ -102,27 +129,37 @@ class RegressionModel:
         if min(x_eid.shape[-2:]) < D_MIN_INPUT or min(t.shape[-2:]) < D_MIN_INPUT:
             raise ValueError(f"D の入力が小さすぎます（一辺 ≥ {D_MIN_INPUT}）: 実 EID 小片 {tuple(x_eid.shape)}, 教師 patch {tuple(t.shape)}")
         self.netD.train()
-        # --- G（U-Net）: mse + lambda_gan · gan_G。D は固定（requires_grad を切る。junyanz の流儀） ---
+        active = self.gan_active()
+        params = list(self.net.parameters())
+        # --- G（U-Net）: mse + lambda_gan · gan_G（ウォームアップ中は mse だけ。gan_G は記録用に計算する）。D は固定（requires_grad を切る。junyanz の流儀） ---
         pred_eid = self.forward(x_eid)
         self._set_requires_grad(self.netD, False)
-        loss_gan_G = self.criterionGAN(self.netD(pred_eid), True)
-        loss_G = loss_mse + self.lambda_gan * loss_gan_G
+        loss_gan_G = self.criterionGAN(self.netD(pred_eid), True, for_D=False)
+        loss_G = loss_mse + self.lambda_gan * loss_gan_G if active else loss_mse
+        out = {}
+        if diag:  # MSE 由来と λ·GAN 由来の勾配ノルムを別々に（print_freq ごとだけ。ウォームアップ中も「戻したらどれだけか」が分かる）
+            out["grad_norm_mse"] = self._grad_norm(torch.autograd.grad(loss_mse, params, retain_graph=True, allow_unused=True))
+            out["grad_norm_gan"] = self._grad_norm(torch.autograd.grad(self.lambda_gan * loss_gan_G, params, retain_graph=True, allow_unused=True))
         self.optimizer.zero_grad(set_to_none=True)
         loss_G.backward()
+        grad_norm_G = float(torch.nn.utils.clip_grad_norm_(params, self.clip_G if self.clip_G > 0 else float("inf")))  # クリップ前のノルム（0 = 無効なら inf で測るだけ）
         self.optimizer.step()
-        # --- D: 本物 = ペア枝の教師 t（PCD1024 patch）、偽物 = 実 EID 小片の出力（detach） ---
+        # --- D: 本物 = ペア枝の教師 t（PCD1024 patch）、偽物 = 実 EID 小片の出力（detach）。ウォームアップ中も学習する ---
         self._set_requires_grad(self.netD, True)
-        loss_D_real = self.criterionGAN(self.netD(t), True)
-        loss_D_fake = self.criterionGAN(self.netD(pred_eid.detach()), False)
+        loss_D_real = self.criterionGAN(self.netD(t), True, for_D=True)
+        loss_D_fake = self.criterionGAN(self.netD(pred_eid.detach()), False, for_D=True)
         loss_D = 0.5 * (loss_D_real + loss_D_fake)
         self.optimizer_D.zero_grad(set_to_none=True)
         loss_D.backward()
+        grad_norm_D = float(torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.clip_D if self.clip_D > 0 else float("inf")))
         self.optimizer_D.step()
         with torch.no_grad():
             self.last = (x.detach(), pred.detach(), t.detach())
             self.last_eid = (x_eid.detach(), pred_eid.detach())  # TB の images/current_eid 用
-            return {"loss": float(loss_G), "mse": mse(pred, t), "ssim": ssim(pred, t),
-                    "gan_G": float(loss_gan_G), "D": float(loss_D), "D_real": float(loss_D_real), "D_fake": float(loss_D_fake)}
+            out.update({"loss": float(loss_G), "mse": mse(pred, t), "ssim": ssim(pred, t),
+                        "gan_G": float(loss_gan_G), "D": float(loss_D), "D_real": float(loss_D_real), "D_fake": float(loss_D_fake),
+                        "gan_active": int(active), "grad_norm_G": grad_norm_G, "grad_norm_D": grad_norm_D})
+            return out
 
     @torch.no_grad()
     def predict(self, x):
@@ -191,8 +228,8 @@ class RegressionModel:
         if old.exists():
             shutil.rmtree(old)
         if final.exists():
-            os.replace(final, old)
-        os.replace(tmp, final)
+            replace_retry(final, old)  # Windows で掴まれていたら再試行（2026-10-13）
+        replace_retry(tmp, final)
         if old.exists():
             shutil.rmtree(old)
 

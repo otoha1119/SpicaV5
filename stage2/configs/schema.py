@@ -72,8 +72,12 @@ TRAIN = {
     "log.display_hu_min":          Key(int, "--display_hu_min",          "TensorBoard 画像の線形表示範囲の下限 HU（この値以下を黒）。Stage 1 と同じ −1400"),
     "log.display_hu_max":          Key(int, "--display_hu_max",          "同上の上限 HU（この値以上を白）。Stage 1 と同じ 2100（stored 3500）"),
     # adv — 実 EID 枝（mode.yaml real_eid_branch: true のときだけ使う。false なら読まない。2026-10-13。docs/plans/20260908_stage2-unet-implementation-spec.md §9）
-    "adv.lambda_gan":             Key(float, "--lambda_gan",             "U-Net に戻す GAN 損失の重み（U-Net の損失 = mse + lambda_gan · gan_G）。MSE が主役になる小さい値（仮 0.001）。TB diag/gan_ratio = lambda_gan · gan_G / mse を見て決める"),
-    "adv.gan_mode":               Key(str,   "--gan_mode",               "GAN 損失: lsgan（最小二乗。単純で安定）| vanilla（BCE with logits）。D の最終層に活性化は無い"),
+    "adv.lambda_gan":             Key(float, "--lambda_gan",             "U-Net に戻す GAN 損失の重み（U-Net の損失 = mse + lambda_gan · gan_G）。MSE が主役になる小さい値。0.001 で崩壊（PC4 2026-10-13）→ 0.0001。TB diag/gan_ratio = lambda_gan · gan_G / mse は損失の比で勾配の比ではない（diag/grad_norm_mse / gan を見る）"),
+    "adv.gan_mode":               Key(str,   "--gan_mode",               "GAN 損失: lsgan（最小二乗）| vanilla（BCE with logits）| hinge（D: max(0,1−D(real)) + max(0,1+D(fake))、G: −D(fake)。G の勾配が D の出力の大きさに比例しない。2026-10-13 追加）。D の最終層に活性化は無い"),
+    "adv.warmup_epochs":          Key(int,   "--warmup_epochs",          "この epoch 数の間（通算 epoch ≤ warmup_epochs）は U-Net を MSE だけで更新し GAN 損失を戻さない。D はその間も学習する（本物 = 教師、偽物 = 実 EID 枝の出力）。resume 後も通算（state の epoch）で数える。TB diag/gan_active。2026-10-13（崩壊対策）"),
+    "adv.lr_after_warmup":        Key(float, "--lr_after_warmup",        "ウォームアップ終了後（GAN が有効な epoch）の U-Net の lr（SRGAN 系の慣行 1e-4）。0 = 変えない（optim.lr のまま）。resume 時も通算 epoch で判定して適用。2026-10-13"),
+    "adv.clip_grad_norm":         Key(float, "--clip_grad_norm",         "U-Net の optimizer.step 前の clip_grad_norm_ の max_norm。0 で無効。クリップ前のノルムは常に TB diag/grad_norm_G。2026-10-13"),
+    "adv.clip_grad_norm_D":       Key(float, "--clip_grad_norm_D",       "D 側の clip_grad_norm_ の max_norm。0 で無効。クリップ前のノルムは TB diag/grad_norm_D。2026-10-13"),
     "adv.lr_D":                   Key(float, "--lr_D",                   "D の Adam の学習率（仮 1e-4。U-Net の 1e-3 より小さく）"),
     "adv.beta1_D":                Key(float, "--beta1_D",                "D の Adam β1（GAN 慣行 0.5）"),
     "adv.beta2_D":                Key(float, "--beta2_D",                "D の Adam β2（0.999）"),
@@ -146,7 +150,7 @@ ARCHS = ("unet_ilumenate",)
 INIT_TYPES = ("xavier_uniform", "torch")
 LOSSES = ("mse", "l1")
 FINAL_ACTS = ("linear", "tanh")
-GAN_MODES = ("lsgan", "vanilla")   # adv.gan_mode（実 EID 枝）
+GAN_MODES = ("lsgan", "vanilla", "hinge")   # adv.gan_mode（実 EID 枝）
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +404,9 @@ def check_train_values(train, mode, machine):
         if train["adv.lambda_gan"] <= 0: P.append("adv.lambda_gan は正（実 EID 枝を使わないなら mode.yaml real_eid_branch: false）")
         if train["adv.gan_mode"] not in GAN_MODES: P.append(f"adv.gan_mode は {GAN_MODES}")
         if train["adv.lr_D"] <= 0: P.append("adv.lr_D は正")
+        if train["adv.warmup_epochs"] < 0: P.append("adv.warmup_epochs ≥ 0")
+        if train["adv.lr_after_warmup"] < 0: P.append("adv.lr_after_warmup ≥ 0（0 = 変えない）")
+        if train["adv.clip_grad_norm"] < 0 or train["adv.clip_grad_norm_D"] < 0: P.append("adv.clip_grad_norm / clip_grad_norm_D ≥ 0（0 = 無効）")
         if not (0.0 <= train["adv.beta1_D"] < 1.0 and 0.0 <= train["adv.beta2_D"] < 1.0): P.append("adv.beta1_D / beta2_D は [0, 1)")
         if train["adv.batch_eid"] < 1: P.append("adv.batch_eid ≥ 1")
         if train["adv.crop_eid"] < 1: P.append("adv.crop_eid ≥ 1（crop_eid × scale が 2^n_pool の倍数かは manifest の scale を読んでから data/eid_dataset.py が検査）")

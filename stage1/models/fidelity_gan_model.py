@@ -40,6 +40,8 @@ import shutil
 
 import numpy as np
 import yaml
+
+from util.run_paths import replace_retry  # Windows の rename 再試行（2026-10-13）
 import torch
 import torch.distributed as dist
 from .base_model import BaseModel
@@ -206,8 +208,8 @@ class FidelityGANModel(BaseModel):
         if old.exists():
             shutil.rmtree(old)
         if final.exists():
-            os.replace(final, old)
-        os.replace(tmp, final)
+            replace_retry(final, old)  # Windows で掴まれていたら再試行（2026-10-13。Stage 2 と同じヘルパを各自の util/run_paths に置く）
+        replace_retry(tmp, final)
         if old.exists():
             shutil.rmtree(old)
 

@@ -20,7 +20,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import MACHINE, ConfigError, validate  # noqa: E402
-from util.run_paths import BEST_NOTE, CKPT_KINDS, LAUNCH_FILE, ckpt_dir, ckpt_path, saved_tags  # noqa: E402
+from util.run_paths import BEST_NOTE, CKPT_KINDS, LAUNCH_FILE, ckpt_dir, ckpt_path, replace_retry, saved_tags  # noqa: E402
 
 KINDS = CKPT_KINDS
 
@@ -62,8 +62,8 @@ def main():
     if old.exists():
         shutil.rmtree(old)
     if final.exists():
-        os.replace(final, old)
-    os.replace(tmp, final)
+        replace_retry(final, old)  # Windows で掴まれていたら再試行（2026-10-13）
+    replace_retry(tmp, final)
     if old.exists():
         shutil.rmtree(old)
     jst = datetime.timezone(datetime.timedelta(hours=9), name="JST")

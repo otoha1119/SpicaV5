@@ -7,7 +7,7 @@ optim:
   lr: 0.001             # 論文 "Adam optimizer with a learning rate of 0.001"。減衰なし（一定）
   beta1: 0.9            # 論文は Keras の Adam を lr 以外既定で使用 → Keras 既定 (0.9, 0.999)。Stage 1 の 0.5 は GAN 慣行なので採らない
   beta2: 0.999
-  batch_size: 16        # 論文未記載。ユーザー決定 2026-09-08: まず 16、様子を見て変える
+  batch_size: 25        # 論文未記載。ユーザー決定 2026-09-08: まず 16 → 2026-10-13 に 25（PC4 4060 Ti 16 GB で VRAM に余裕、実 EID 枝との計算比で 1 epoch 27 → 22 分。64,000 は 25 で割り切れる = 2,560 step/epoch。D なしの旧 run 2026_0914_0946 は 16）
   n_epochs: 100         # 論文 "Training consisted of 100 epochs"
   seed: 0               # python / numpy / torch の乱数 seed（再現条件）
 
@@ -45,12 +45,17 @@ log:
   display_hu_max: 2100    # stored 3500 = HU 2100 を白。窓は掛けない
 
 adv:                      # 実 EID 枝（mode.yaml real_eid_branch: true のときだけ使う。false なら読まない。2026-10-13。docs/plans/20260908_stage2-unet-implementation-spec.md §9）
-  lambda_gan: 0.001       # U-Net の損失 = mse + lambda_gan · gan_G。**仮**（MSE が主役になる値。TB diag/gan_ratio = lambda_gan · gan_G / mse を見て決める。目安 0.01〜0.1）
-  gan_mode: lsgan         # lsgan（最小二乗。単純で安定）| vanilla（BCE with logits）
+  lambda_gan: 0.0001      # U-Net の損失 = mse + lambda_gan · gan_G。0.001 で崩壊（PC4 run 2026_1013_0143: 175k 枚で mse が先に 0.15 超へ跳ね、以後 D 0 / gan_G 1 に張り付き。2026-10-13）→ 0.0001。
+                          # diag/gan_ratio（損失の比）ではなく diag/grad_norm_mse と diag/grad_norm_gan（勾配ノルムの比）で λ を決める
+  gan_mode: lsgan         # lsgan（最小二乗）| vanilla（BCE with logits）| hinge（G の勾配が D の出力の大きさに比例しない。2026-10-13 追加。崩壊が続くなら hinge を推奨）
+  warmup_epochs: 5        # この epoch 数は U-Net を MSE だけで更新（GAN を戻さない）。D はその間も学習する。resume 後も通算で数える。TB diag/gan_active（2026-10-13 崩壊対策）
+  lr_after_warmup: 0.0001 # ウォームアップ終了後の U-Net の lr（SRGAN 系の慣行 1e-4。BN の無い ReLU U-Net + Adam 1e-3 に GAN の勾配ノイズが乗って発散した推定）。0 = 変えない
+  clip_grad_norm: 1.0     # U-Net の勾配ノルムの上限（clip_grad_norm_）。0 で無効。クリップ前の値は diag/grad_norm_G
+  clip_grad_norm_D: 1.0   # D の勾配ノルムの上限。0 で無効。diag/grad_norm_D
   lr_D: 0.0001            # D の Adam。**仮**（U-Net の 1e-3 より小さく）
   beta1_D: 0.5            # GAN 慣行（Stage 1 と同じ）
   beta2_D: 0.999
-  batch_eid: 16           # 1 step に U-Net → D に通す実 EID 小片の数。**仮** = optim.batch_size
+  batch_eid: 8            # 1 step に U-Net → D に通す実 EID 小片の数。**仮**。2026-10-13 に 16 → 8（U-Net の往復を 25 + 8 = 33 枚/step に抑え 60 img/s = 18 分/epoch。D は 1 step に本物 25 枚・偽物 8 枚を見る）
   crop_eid: 64            # 実 EID512 上の小片の一辺。×2 → 128 = 学習 patch と同じ大きさ（D は PatchGAN なので違ってもよい）
   patches_per_slice_eid: 8   # 1 回読んだ実 EID512 から連続して切る小片の数（data.patches_per_slice と同じ仕組み。512 は 0.5 MB なので読みは軽いが同じ 8）
   eid_split_file: configs/splits/eid_v5.yaml   # 実 EID の症例分割（train / val / test。bash start.sh split が作る Stage 1 と同じファイル）。実 EID 枝は train の症例だけから引く。
