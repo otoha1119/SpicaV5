@@ -162,6 +162,20 @@ NPS = {
     "rois":     Key(rois, None,         "ROI の表 [{slice: <case>/<slice>.png, y: 左上の行, x: 左上の列}, ...]（1024 の画素）。推論の出力に含まれるスライスであること"),
 }
 
+# ---------------------------------------------------------------------------
+# stage3/configs/crop.yaml — 学習中の images/crop と同じ固定領域を checkpoint 指定で単独実行
+# 領域・crop_size は現在の train.yaml log.crop_* を読むので、ここにはサンプリング方式だけを書く。
+# ---------------------------------------------------------------------------
+CROP = {
+    "panel_scale": Key(int,   "--panel_scale", "保存する144pxパネルの最近傍拡大倍率"),
+    "device":      Key(str,   "--device",      "cpu | cuda"),
+    "use_ema":     Key(bool,  "--use_ema",     "EMA の重みを使う（本家 sample と同じ）"),
+    "sample_steps": Key(int,  "--sample_steps", "DDIM の step 数 S"),
+    "eta":          Key(float,"--eta",          "DDIM eta"),
+    "skip_type":    Key(str,  "--skip_type",    "uniform | quad"),
+    "seed":         Key(int,  "--seed",         "固定領域ごとの x_T seed の基準"),
+}
+
 GPU_GENS = (0, 30, 40, 50)
 INFER_INPUTS = ("eidlike", "eid")
 SKIP_TYPES = ("uniform", "quad")
@@ -472,6 +486,22 @@ def check_infer_values(infer, machine, T):
     _check_sampling(infer["sample_steps"], infer["eta"], infer["skip_type"], infer["tile_stride"], infer["tile_batch"], T, P, "infer")
     _check_machine(machine, P)
     _problems_to_error("infer values", P)
+
+
+def check_crop_values(crop, train, machine, ddim):
+    P = []
+    p, n = ddim["data.image_size"], train["log.crop_size"]
+    if not (1 <= n <= p): P.append(f"train.log.crop_size は 1..data.image_size ({p})")
+    if (p - n) % 2: P.append("data.image_size - crop_size は偶数（中心を一致させるため）")
+    if crop["panel_scale"] < 1: P.append("panel_scale >= 1")
+    if crop["device"] not in ("cpu", "cuda"): P.append("device は cpu | cuda")
+    if crop["device"] == "cuda" and machine["gpu_gen"] == 0: P.append("device=cuda だが machine は gpu_gen 0")
+    if crop["use_ema"] and not ddim["model.ema"]: P.append("run は EMA なしなので use_ema false")
+    if crop["seed"] < 0: P.append("seed >= 0")
+    _check_sampling(crop["sample_steps"], crop["eta"], crop["skip_type"], 1, 1,
+                    ddim["diffusion.num_diffusion_timesteps"], P, "crop", patch=p)
+    _check_machine(machine, P)
+    _problems_to_error("crop values", P)
 
 
 def check_nps_values(nps):

@@ -129,6 +129,10 @@ def infer_output_dir(run_dir, weight_dir, input_dir, now, root=None):
     return output_root(root) / f"{Path(run_dir).name}_{Path(weight_dir).name}_{Path(input_dir).name}_{now.strftime(INFER_STAMP_FORMAT)}"
 
 
+def crop_output_dir(run_dir, weight_dir, now, root=None):
+    return output_root(root) / f"{Path(run_dir).name}_{Path(weight_dir).name}_stage3_crop_{now.strftime(INFER_STAMP_FORMAT)}"
+
+
 def replace_retry(src, dst, tries=20, wait=0.5):
     """os.replace の再試行版。Windows では Defender や検索インデックスが書いたばかりの .pth を掴んで PermissionError（WinError 5 / 32）に
     なることがあるので、最大 tries 回 wait 秒おきに繰り返す。最後まで失敗したら例外をそのまま上げる（stage2 と同じ、2026-10-13）。"""

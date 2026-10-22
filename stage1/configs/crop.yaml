@@ -4,21 +4,34 @@
 # 出力は <run>/infer/<重みディレクトリ名>/crop/<実行時刻>/case<N>_<pcd>_<eid>/（レイアウトは util/run_paths.py）。
 # 学習中に同じコンテナで走らせてよい（start.sh は起動済みコンテナに exec するだけ。device: cpu なら VRAM も取り合わない）。
 
-patch: 72             # 切り出す正方形の一辺（画素）。座標は左上
-panel_scale: 4        # 並べたパネルだけ最近傍で拡大（72 → 288）。個別画像は等倍。余白・ラベル・ゲージは列の高さに比例（preview_*/ の 512 パネルと相似形。2026-09-10）ので、等倍で文字まで読みたければ 7（→ 504 ≈ 512）
+patch: 144            # Stage 3 の crop_size と同じ 144px。座標は左上
+panel_scale: 2        # 並べたパネルだけ最近傍で拡大（144 → 288）。個別画像は等倍
 device: cpu           # cpu | cuda。学習中は cpu（512 を数枚通すだけなので数秒）
 
-cases:                # PCD と EID のペア。スライス名（PCD-nnn-sss / EID-nnn-sss）と左上座標。ファイルは pcd_dir/<PCD-nnn>/<name>.png、eid_dir/<EID-nnn>/<name>.png
-                      # run の task が sr のときは pcd1024_dir / eid1024_dir のスライスを読み、eid が入力（eid_x/y で入力・G(z)・R を切る）、pcd が参照。座標は 1024 の画素で書く（2026-10-12）
+cases_degrade:        # 512 座標系。旧 72px 領域の中心を保った 144px 窓
   - pcd: PCD-002-236
-    pcd_x: 266
-    pcd_y: 222
+    pcd_x: 230
+    pcd_y: 186
     eid: EID-049-079
-    eid_x: 327
-    eid_y: 188
+    eid_x: 291
+    eid_y: 152
   - pcd: PCD-002-222
-    pcd_x: 298
-    pcd_y: 373
+    pcd_x: 262
+    pcd_y: 337
     eid: EID-001-093
-    eid_x: 270
-    eid_y: 343
+    eid_x: 234
+    eid_y: 307
+
+cases_sr:             # 1024 座標系。Stage 3 train.yaml の crop_pcd / crop_eid と同じ 144px 領域
+  - pcd: PCD-002-236
+    pcd_x: 532
+    pcd_y: 444
+    eid: EID-049-079
+    eid_x: 654
+    eid_y: 376
+  - pcd: PCD-002-222
+    pcd_x: 596
+    pcd_y: 746
+    eid: EID-001-093
+    eid_x: 540
+    eid_y: 686

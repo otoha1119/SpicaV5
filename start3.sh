@@ -7,7 +7,7 @@
 #   OS 共通。リポジトリ直下でホストのシェルから実行する。コンテナ内では動かない（/.dockerenv があれば即エラー）。
 #
 # ■ 引数の規則（start2.sh と同じ）
-#   bash start3.sh [マシン名] [infer|nps|build|shell|down|tb] [resume <run> [tag]] [best <run> <step>] [--flag value ...]
+#   bash start3.sh [マシン名] [infer|crop|nps|build|shell|down|tb] [resume <run> [tag]] [best <run> <step>] [--flag value ...]
 #   ・サブコマンド無し = 学習（train_stage3.sh → stage3/run_train.py → train.py）。設定は stage3/configs/ddim.yml（本家 church.yml を写したもの）と train.yaml（SpicaV5 側）、
 #     保存先は machines.yaml の stage3_checkpoints_dir/<run>（run = 起動時刻 yyyy_mmdd_HHMM）。--flag で上書き（stage3/configs/schema.py のフラグだけ）。
 #     学習開始時にその run の TensorBoard を machines.yaml の stage3_tb_port で起動する（Stage 1 の tb_port、Stage 2 の stage2_tb_port とは別）。
@@ -16,6 +16,7 @@
 #   ・tb    : Stage 3 の全 run を並べた TensorBoard（stage3_tb_port）
 #   ・infer : 推論（infer_stage3.sh → stage3/run_infer.py → inference_dir.py）。重み・入力は infer_stage3.sh の WEIGHT_DIR / INPUT_DIR、方式は stage3/configs/infer.yaml。
 #             1024 は 256 タイルに分けて毎ステップ重なりの ε を平均する（WeatherDiffusion 型）。所要時間はタイル数 × sample_steps に比例
+#   ・crop  : train.yaml の images/crop と同じ固定プラーク領域を checkpoint 指定で単独サンプリングし、中央144pxだけを保存
 #   ・nps   : NPS 評価（nps_stage3.sh → stage3/eval_nps.py）。対象は推論の出力フォルダ（nps_stage3.sh の INFER_DIR）、ROI は stage3/configs/nps.yaml
 #   ・データ作成は Stage 2 と同じデータ（eidlike1024_dir）を使うので Stage 3 には無い（必要なら bash start2.sh dataset）
 #   ・build / shell / down : start.sh / start2.sh と同じ（コンテナは共用なので down は Stage 1 / 2 も止める）
@@ -29,6 +30,7 @@
 #   bash start3.sh infer --cases PCD-017,PCD-018 --slices_per_case 10            # 決定 7 の 1 本目の評価（val 2 症例 × 10 枚、教師あり → metrics.txt）
 #   bash start3.sh infer --input_dir /workspace/DataSet/EID_v5 --input eid --teacher false --cases EID-049 --max_slices 10   # 実 EID
 #   bash start3.sh infer --sample_steps 10           # S を振る（10 / 20 / 50 / 100）
+#   bash start3.sh crop --weight_dir /workspace/stage3/checkpoints/<run>/best
 #   bash start3.sh nps --infer_dir /workspace/output/<推論の出力フォルダ>
 #
 # ■ 設定ファイル（既定値は無い。無いキーはエラー）
@@ -80,6 +82,7 @@ while [ $# -gt 0 ]; do
     tb)      ACTION=tb; shift ;;
     train)   ACTION=train; shift ;;
     infer)   ACTION=infer; shift ;;
+    crop)    ACTION=crop; shift ;;
     resume)
       shift
       [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start3] resume には run 名が必要です: bash start3.sh resume yyyy_mmdd_HHMM [latest|best|<step>]" >&2; exit 2; }
@@ -243,6 +246,7 @@ case "$ACTION" in
   tb)      start_tensorboard ;;
   shell)   exec_it spicav5 bash ;;
   infer)   exec_it spicav5 bash infer_stage3.sh "$@" ;;
+  crop)    exec_it spicav5 bash crop_stage3.sh "$@" ;;
   nps)     exec_it spicav5 bash nps_stage3.sh "$@" ;;
   best)    exec_it spicav5 python stage3/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --step "$BEST_EPOCH" ;;
   train)
