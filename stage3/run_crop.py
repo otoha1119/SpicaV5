@@ -52,12 +52,13 @@ def main():
         launch_path = latest_launch(run_dir)
         ddim, hu = run_config(load_yaml(launch_path), launch_path)
         scale, interp, image_size = upsample_config(run_dir)
-        check_crop_values(crop, train, machine, ddim)
+        pcd_cases, eid_cases = train["log.crop_pcd"], train["log.crop_eid"]
+        check_crop_values(crop, train, machine, ddim, len(pcd_cases), len(eid_cases))
+        selected_pcd = [(crop["pcd_index"], pcd_cases[crop["pcd_index"] - 1])]
+        selected_eid = [(len(pcd_cases) + crop["eid_index"], eid_cases[crop["eid_index"] - 1])]
         for k in ("eidlike1024_dir", "pcd1024_dir", "eid_dir"):
             if not Path(machine[k]).is_dir(): raise ConfigError(f"machines.yaml の {k} がありません: {machine[k]}")
         display = {k: train[k] for k in DISPLAY_KEYS}
-        pcd_cases, eid_cases = train["log.crop_pcd"], train["log.crop_eid"]
-        if not pcd_cases and not eid_cases: raise ConfigError("train.yaml log.crop_pcd / crop_eid が両方空です")
     except ConfigError as e:
         print(f"[run_crop] 設定エラー: {e}", file=sys.stderr); sys.exit(2)
 
@@ -68,15 +69,16 @@ def main():
     argv = ["--weight_dir", str(weight_dir), "--launch", str(launch_path), "--out_dir", str(out_dir),
             "--eidlike1024_dir", machine["eidlike1024_dir"], "--pcd1024_dir", machine["pcd1024_dir"], "--eid_dir", machine["eid_dir"],
             "--hu_offset", str(hu["data.hu_offset"]), "--hu_min", str(hu["data.hu_min"]), "--hu_max", str(hu["data.hu_max"]),
-            "--scale", str(scale), "--interp", interp, "--image_size", str(image_size), "--patch_size", str(ddim["data.image_size"]),
+            "--scale", str(scale), "--interp", interp, "--image_size", str(image_size),
             "--crop_size", str(train["log.crop_size"]),
             "--display_hu_min", str(display["log.display_hu_min"]), "--display_hu_max", str(display["log.display_hu_max"]), "--preview_bits", str(display["log.preview_bits"])]
     argv += to_argv(crop, CROP)
-    for c in pcd_cases: argv += ["--pcd_case", c["slice"], str(c["x"]), str(c["y"])]
-    for c in eid_cases: argv += ["--eid_case", c["slice"], str(c["x"]), str(c["y"])]
+    for tag, c in selected_pcd: argv += ["--pcd_case", f"{tag:02d}", c["slice"], str(c["x"]), str(c["y"])]
+    for tag, c in selected_eid: argv += ["--eid_case", f"{tag:02d}", c["slice"], str(c["x"]), str(c["y"])]
     with open(out_dir / "crop.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump({"timestamp": now.isoformat(timespec="seconds"), "machine_name": a.machine, "run_dir": str(run_dir), "launch": str(launch_path),
                         "weight_dir": str(weight_dir), "crop": crop, "crop_size": train["log.crop_size"], "pcd_cases": pcd_cases, "eid_cases": eid_cases,
+                        "selected_pcd": selected_pcd, "selected_eid": selected_eid,
                         "ddim": ddim, "hu": hu, "upsample": {"scale": scale, "interp": interp, "image_size": image_size}, "display": display,
                         "overrides": overrides, "applied": applied, "argv": argv}, f, allow_unicode=True, sort_keys=False)
     print(f"[run_crop] {weight_dir} -> {out_dir}（全引数は crop.yaml）", flush=True)

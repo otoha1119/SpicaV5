@@ -1,4 +1,4 @@
-"""Stage 3 DDIM の固定プラーク領域。256px文脈でサンプルし、指定144pxだけを保存する。"""
+"""Stage 3 DDIM の評価出力。選択した01/03を全体推論し、全体と144px局所を同じ列で保存する。"""
 
 import argparse
 import sys
@@ -18,23 +18,26 @@ from util.panel import build_panel  # noqa: E402
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Stage 3 固定プラーク領域の単独サンプリング")
+    p = argparse.ArgumentParser(description="Stage 3 固定プラーク領域の全体・局所評価")
     req = lambda *x, **k: p.add_argument(*x, required=True, **k)  # noqa: E731
     req("--weight_dir"); req("--launch"); req("--out_dir"); req("--eidlike1024_dir"); req("--pcd1024_dir"); req("--eid_dir")
     req("--hu_offset", type=int); req("--hu_min", type=int); req("--hu_max", type=int)
-    req("--scale", type=int); req("--interp"); req("--image_size", type=int); req("--patch_size", type=int); req("--crop_size", type=int)
+    req("--scale", type=int); req("--interp"); req("--image_size", type=int); req("--crop_size", type=int)
     req("--display_hu_min", type=int); req("--display_hu_max", type=int); req("--preview_bits", type=int, choices=(8, 16))
     req("--device", choices=("cpu", "cuda")); req("--panel_scale", type=int)
     p.add_argument("--use_ema", action="store_true")
     req("--sample_steps", type=int); req("--eta", type=float); req("--skip_type", choices=("uniform", "quad")); req("--seed", type=int)
-    p.add_argument("--pcd_case", nargs=3, action="append", default=[], metavar=("SLICE", "X", "Y"))
-    p.add_argument("--eid_case", nargs=3, action="append", default=[], metavar=("SLICE", "X", "Y"))
+    req("--tile_stride", type=int); req("--tile_batch", type=int)
+    req("--pcd_index", type=int); req("--eid_index", type=int); req("--diff_max_hu", type=int)
+    p.add_argument("--pcd_case", nargs=4, action="append", default=[], metavar=("TAG", "SLICE", "X", "Y"))
+    p.add_argument("--eid_case", nargs=4, action="append", default=[], metavar=("TAG", "SLICE", "X", "Y"))
     return p.parse_args()
 
 
 def resolve_device(name):
     if name == "cuda":
-        if not torch.cuda.is_available(): raise RuntimeError("--device cuda ですが CUDA が使えません")
+        if not torch.cuda.is_available():
+            raise RuntimeError("--device cuda ですが CUDA が使えません")
         return torch.device("cuda:0")
     return torch.device("cpu")
 
@@ -45,62 +48,79 @@ def cut(a, x, y, n, what):
     return a[y:y+n, x:x+n]
 
 
-def context(a, x, y, crop_size, patch_size, what):
-    margin = (patch_size - crop_size) // 2
-    cx = min(max(x - margin, 0), a.shape[1] - patch_size)
-    cy = min(max(y - margin, 0), a.shape[0] - patch_size)
-    return cut(a, cx, cy, patch_size, what + " context"), x - cx, y - cy
+def heatmap_abs(a, b, max_hu):
+    """|a-b|: 0 HU=青、max_hu以上=赤の anomaly-map 風 RGB float01。"""
+    u8 = np.clip(np.abs(a.astype(np.int32) - b.astype(np.int32)) / float(max_hu), 0, 1)
+    u8 = np.rint(u8 * 255).astype(np.uint8)
+    return cv2.applyColorMap(u8, cv2.COLORMAP_JET)[..., ::-1].astype(np.float32) / 255.0
 
 
 def main():
     a = parse_args(); device = resolve_device(a.device)
-    with open(a.launch, encoding="utf-8") as f: ddim = validate("ddim(launch)", yaml.safe_load(f)["ddim"], DDIM)
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+    with open(a.launch, encoding="utf-8") as f:
+        ddim = validate("ddim(launch)", yaml.safe_load(f)["ddim"], DDIM)
     diffusion = CondDiffusion(ddim, device, train=False); diffusion.load_weights(a.weight_dir, use_ema=a.use_ema)
     model = diffusion.model.eval(); hu = (a.hu_offset, a.hu_min, a.hu_max)
-    out, weight = Path(a.out_dir), Path(a.weight_dir).name
+    root, weight = Path(a.out_dir), Path(a.weight_dir).name
     lin = lambda s: np.clip((s.astype(np.float32) - a.hu_offset - a.display_hu_min) / float(a.display_hu_max - a.display_hu_min), 0, 1)  # noqa: E731
     quant = ((lambda z: (np.clip(z, 0, 1) * 65535).round().astype(np.uint16)) if a.preview_bits == 16 else (lambda z: (np.clip(z, 0, 1) * 255).round().astype(np.uint8)))
     rgb = lambda g: np.repeat(g[..., None], 3, 2)  # noqa: E731
-    panel_up = lambda im: cv2.resize(im, None, fx=a.panel_scale, fy=a.panel_scale, interpolation=cv2.INTER_NEAREST)  # noqa: E731
 
-    plan, conds, seeds = [], [], []
     for kind, rows in (("pcd", a.pcd_case), ("eid", a.eid_case)):
-        for rel, xs, ys in rows:
+        for tag, rel, xs, ys in rows:
             x, y = int(xs), int(ys)
             if kind == "pcd":
-                full = read_stored(Path(a.eidlike1024_dir) / rel); teacher = read_stored(Path(a.pcd1024_dir) / rel)
-                if full.shape != (a.image_size, a.image_size) or teacher.shape != full.shape: raise ValueError(f"PCD case の画像サイズが不正: {rel}")
+                inp = read_stored(Path(a.eidlike1024_dir) / rel); teacher = read_stored(Path(a.pcd1024_dir) / rel)
+                if inp.shape != (a.image_size, a.image_size) or teacher.shape != inp.shape:
+                    raise ValueError(f"PCD case の画像サイズが不正: {rel} {inp.shape} / {teacher.shape}")
+                diff_label = f"|PCD-like - PCD|  0..{a.diff_max_hu} HU"
             else:
                 src = read_stored(Path(a.eid_dir) / rel); expect = a.image_size // a.scale
-                if src.shape != (expect, expect): raise ValueError(f"実 EID は {expect}px を期待: {rel} {src.shape}")
-                full, teacher = upsample(src, a.scale, a.interp), None
-            ctx, ox, oy = context(full, x, y, a.crop_size, a.patch_size, rel)
-            cut(full, x, y, a.crop_size, rel)
-            if teacher is not None: cut(teacher, x, y, a.crop_size, rel + " teacher")
-            plan.append((kind, rel, x, y, full, teacher, ox, oy))
-            conds.append(torch.from_numpy(normalize(ctx, *hu))[None, None])
-            seeds.append(slice_seed(a.seed, f"{kind}:{rel}"))
+                if src.shape != (expect, expect):
+                    raise ValueError(f"実 EID は {expect}px を期待: {rel} {src.shape}")
+                inp, teacher = upsample(src, a.scale, a.interp), None
+                diff_label = f"|PCD-like - EID|  0..{a.diff_max_hu} HU"
+            cut(inp, x, y, a.crop_size, rel)
+            cond = torch.from_numpy(normalize(inp, *hu))[None, None]
+            sd = slice_seed(a.seed, f"{kind}:{rel}")
+            torch.manual_seed(sd)
+            with torch.inference_mode():
+                yn = diffusion.sample_tiled(cond, a.sample_steps, a.eta, a.skip_type, sd,
+                                            a.tile_stride, a.tile_batch, model)[0, 0].cpu().clamp(-1, 1).numpy()
+            output = denormalize(yn, *hu)
+            base = root / f"{tag}_{kind}_{Path(rel).stem}_x{x}_y{y}"
+            views = (
+                ("full", (inp, output, teacher)),
+                ("local", (cut(inp, x, y, a.crop_size, rel),
+                           cut(output, x, y, a.crop_size, rel + " output"),
+                           cut(teacher, x, y, a.crop_size, rel + " teacher") if teacher is not None else None)),
+            )
+            for view, (in_v, out_v, teacher_v) in views:
+                compare = teacher_v if teacher_v is not None else in_v
+                diff = heatmap_abs(out_v, compare, a.diff_max_hu)
+                if kind == "pcd":
+                    gray = [lin(in_v), lin(out_v), lin(teacher_v)]
+                    names = ["1_EID-like1024", "2_PCD-like1024", "3_PCD1024"]
+                    labels = ["EID-like1024  (input)", f"PCD-like1024  (output)   {weight}", "PCD1024  (teacher)"]
+                else:
+                    gray = [lin(in_v), lin(out_v)]
+                    names = ["1_EID1024", "2_PCD-like1024"]
+                    labels = [f"EID1024  (real EID, x{a.scale} {a.interp})", f"PCD-like1024  (output)   {weight}"]
+                d = base / view
+                for name, z in zip(names, gray):
+                    write_png(d / f"{name}.png", quant(z))
+                diff_name = f"4_diff_abs_0_{a.diff_max_hu}HU.png"
+                write_png(d / diff_name, np.ascontiguousarray(quant(diff)[..., ::-1]))
+                cols = [rgb(z) for z in gray] + [diff]
+                if view == "local" and a.panel_scale != 1:
+                    cols = [cv2.resize(c, None, fx=a.panel_scale, fy=a.panel_scale, interpolation=cv2.INTER_NEAREST) for c in cols]
+                panel = build_panel(cols, labels + [diff_label])
+                write_png(d / "panel.png", np.ascontiguousarray(quant(panel)[..., ::-1]))
+            print(f"[crop] {tag} {kind} {rel}: full + local {a.crop_size}px -> {base}")
+    print(f"[crop] done: weights={a.weight_dir} -> {root}")
 
-    torch.manual_seed(a.seed)
-    with torch.inference_mode():
-        sampled = diffusion.sample_patches(torch.cat(conds), a.sample_steps, a.eta, a.skip_type, seeds, model).cpu().clamp(-1, 1)
-    for i, ((kind, rel, x, y, full, teacher, ox, oy), yn) in enumerate(zip(plan, sampled), 1):
-        generated = denormalize(yn[0].numpy(), *hu)
-        inp_crop = cut(full, x, y, a.crop_size, rel); out_crop = cut(generated, ox, oy, a.crop_size, rel + " output")
-        d = out / f"{i:02d}_{kind}_{Path(rel).stem}_x{x}_y{y}"
-        if kind == "pcd":
-            arrays = [inp_crop, out_crop, cut(teacher, x, y, a.crop_size, rel + " teacher")]
-            names = ["1_EID-like1024", "2_PCD-like1024", "3_PCD1024"]
-            labels = ["EID-like1024  (input)", f"PCD-like1024  (output)   {weight}", "PCD1024  (teacher)"]
-        else:
-            arrays = [inp_crop, out_crop]; names = ["1_EID1024", "2_PCD-like1024"]
-            labels = [f"EID1024  (real EID, x{a.scale} {a.interp})", f"PCD-like1024  (output)   {weight}"]
-        shown = [lin(z) for z in arrays]
-        for name, z in zip(names, shown): write_png(d / f"{name}.png", quant(z))
-        panel = build_panel([panel_up(rgb(z)) for z in shown], labels)
-        write_png(d / "panel.png", np.ascontiguousarray(quant(panel)[..., ::-1]))
-        print(f"[crop] {kind} {rel} ({x},{y}) crop {a.crop_size}px / context {a.patch_size}px -> {d}")
-    print(f"[crop] done: {len(plan)} regions -> {out}")
 
-
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()

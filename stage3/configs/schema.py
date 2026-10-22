@@ -163,8 +163,8 @@ NPS = {
 }
 
 # ---------------------------------------------------------------------------
-# stage3/configs/crop.yaml — 学習中の images/crop と同じ固定領域を checkpoint 指定で単独実行
-# 領域・crop_size は現在の train.yaml log.crop_* を読むので、ここにはサンプリング方式だけを書く。
+# stage3/configs/crop.yaml — 固定領域01/03を checkpoint 指定で全体推論し、全体・局所評価を保存
+# 領域・crop_size は現在の train.yaml log.crop_* を読む。
 # ---------------------------------------------------------------------------
 CROP = {
     "panel_scale": Key(int,   "--panel_scale", "保存する144pxパネルの最近傍拡大倍率"),
@@ -174,6 +174,11 @@ CROP = {
     "eta":          Key(float,"--eta",          "DDIM eta"),
     "skip_type":    Key(str,  "--skip_type",    "uniform | quad"),
     "seed":         Key(int,  "--seed",         "固定領域ごとの x_T seed の基準"),
+    "tile_stride":  Key(int,  "--tile_stride",  "1024全体をタイル合成するときの stride"),
+    "tile_batch":   Key(int,  "--tile_batch",   "タイルを何枚ずつ epsilon-net に通すか"),
+    "pcd_index":    Key(int,  "--pcd_index",    "log.crop_pcd の何番目を出すか（1始まり。01の番号にも使う）"),
+    "eid_index":    Key(int,  "--eid_index",    "log.crop_eid の何番目を出すか（1始まり。番号は crop_pcd の件数を足す）"),
+    "diff_max_hu":  Key(int,  "--diff_max_hu",  "絶対HU差ヒートマップの赤になる上限。200"),
 }
 
 GPU_GENS = (0, 30, 40, 50)
@@ -488,7 +493,7 @@ def check_infer_values(infer, machine, T):
     _problems_to_error("infer values", P)
 
 
-def check_crop_values(crop, train, machine, ddim):
+def check_crop_values(crop, train, machine, ddim, n_pcd, n_eid):
     P = []
     p, n = ddim["data.image_size"], train["log.crop_size"]
     if not (1 <= n <= p): P.append(f"train.log.crop_size は 1..data.image_size ({p})")
@@ -498,7 +503,10 @@ def check_crop_values(crop, train, machine, ddim):
     if crop["device"] == "cuda" and machine["gpu_gen"] == 0: P.append("device=cuda だが machine は gpu_gen 0")
     if crop["use_ema"] and not ddim["model.ema"]: P.append("run は EMA なしなので use_ema false")
     if crop["seed"] < 0: P.append("seed >= 0")
-    _check_sampling(crop["sample_steps"], crop["eta"], crop["skip_type"], 1, 1,
+    if not (1 <= crop["pcd_index"] <= n_pcd): P.append(f"pcd_index は 1..{n_pcd}")
+    if not (1 <= crop["eid_index"] <= n_eid): P.append(f"eid_index は 1..{n_eid}")
+    if crop["diff_max_hu"] < 1: P.append("diff_max_hu >= 1")
+    _check_sampling(crop["sample_steps"], crop["eta"], crop["skip_type"], crop["tile_stride"], crop["tile_batch"],
                     ddim["diffusion.num_diffusion_timesteps"], P, "crop", patch=p)
     _check_machine(machine, P)
     _problems_to_error("crop values", P)

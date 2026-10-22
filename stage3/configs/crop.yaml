@@ -1,5 +1,5 @@
-# Stage 3 の学習中 TensorBoard images/crop と同じ場所を、checkpoint 指定で単独実行する。
-# 場所と保存する一辺（現在144px）は train.yaml log.crop_pcd / crop_eid / crop_size をそのまま読む。
+# Stage 3 の固定01/03を全体推論し、全体画像と144px局所画像を同じ列構成で保存する。
+# 場所と局所の一辺は train.yaml log.crop_pcd / crop_eid / crop_size をそのまま読む。
 panel_scale: 2
 device: cuda
 use_ema: true
@@ -7,3 +7,8 @@ sample_steps: 50
 eta: 0.0
 skip_type: uniform
 seed: 1234
+tile_stride: 128
+tile_batch: 4
+pcd_index: 1
+eid_index: 1
+diff_max_hu: 200
