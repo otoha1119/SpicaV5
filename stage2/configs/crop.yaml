@@ -1,0 +1,17 @@
+# Stage 2 局所推論。座標は Stage 3 train.yaml の固定領域と同じ、1024画素系の左上。
+# 256px の周辺をモデルに渡し、中央の指定144pxだけを個別画像と panel に保存する。
+crop_size: 144
+context_size: 256
+panel_scale: 2
+device: cpu
+
+# [EID-like1024 input | PCD-like1024 output | PCD1024 teacher]
+pcd_cases:
+  - {slice: PCD-002/PCD-002-236.png, x: 532, y: 444}
+  - {slice: PCD-002/PCD-002-222.png, x: 596, y: 746}
+
+# 実 EID512 を学習時と同じ方式で1024へ補間してから局所超解像。
+# [EID1024 input | PCD-like1024 output]
+eid_cases:
+  - {slice: EID-049/EID-049-079.png, x: 654, y: 376}
+  - {slice: EID-001/EID-001-093.png, x: 540, y: 686}

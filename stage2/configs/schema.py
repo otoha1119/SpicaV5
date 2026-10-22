@@ -142,6 +142,41 @@ INFER = {
     "io.write_workers": Key(int,  "--write_workers",  "PNG の書き込みを非同期にするスレッド数（0 = 直列）"),
 }
 
+# ---------------------------------------------------------------------------
+# stage2/configs/crop.yaml — Stage 3 と同じ固定プラーク領域の局所推論
+# pcd_cases / eid_cases は run_crop.py が別途検証する。
+# ---------------------------------------------------------------------------
+CROP = {
+    "crop_size":    Key(int, "--crop_size",    "保存するプラーク領域の一辺。Stage 3 の log.crop_size と同じ 144"),
+    "context_size": Key(int, "--context_size", "モデルに渡す周辺込みの一辺。Stage 3 の data.image_size と同じ 256"),
+    "panel_scale":  Key(int, "--panel_scale",  "表示パネルだけを最近傍で拡大する倍率"),
+    "device":       Key(str, "--device",       "cpu | cuda"),
+}
+
+CROP_CASE_KEYS = {"slice": str, "x": int, "y": int}
+
+
+def check_crop_cases(name, cases):
+    if not isinstance(cases, list):
+        raise ConfigError(f"[crop] {name} は list にしてください")
+    out, problems = [], []
+    for i, c in enumerate(cases, 1):
+        if not isinstance(c, dict):
+            problems.append(f"{name}[{i}] は dict")
+            continue
+        missing = [k for k in CROP_CASE_KEYS if k not in c]
+        unknown = [k for k in c if k not in CROP_CASE_KEYS]
+        bad = [k for k, t in CROP_CASE_KEYS.items() if k in c and (not isinstance(c[k], t) or (t is int and isinstance(c[k], bool)))]
+        if missing: problems.append(f"{name}[{i}] キー不足 {missing}")
+        if unknown: problems.append(f"{name}[{i}] 未知キー {unknown}")
+        if bad: problems.append(f"{name}[{i}] 型違い {bad}")
+        if not missing and not unknown and not bad:
+            if c["x"] < 0 or c["y"] < 0: problems.append(f"{name}[{i}] x / y は 0 以上: {c}")
+            else: out.append(dict(c))
+    _problems_to_error("crop cases", problems)
+    return out
+
+
 INTERPS = ("nearest", "bilinear", "bicubic", "area", "lanczos")
 INFER_INPUTS = ("eidlike", "eid")
 BEST_METRICS = ("rmse", "ssim", "psnr")   # log.best_metric。rmse は小さいほど良い、ssim / psnr は大きいほど良い
@@ -352,6 +387,19 @@ def check_infer_values(infer, machine):
     if infer["io.read_workers"] < 0 or infer["io.write_workers"] < 0: P.append("io.read_workers / write_workers ≥ 0（0 = 直列）")
     _check_machine(machine, P)
     _problems_to_error("infer values", P)
+
+
+def check_crop_values(crop, machine, image_size, n_pool):
+    P = []
+    if crop["crop_size"] < 1 or crop["crop_size"] > crop["context_size"]: P.append("1 <= crop_size <= context_size")
+    if crop["context_size"] > image_size: P.append(f"context_size <= image_size ({image_size})")
+    if crop["context_size"] % (2 ** n_pool): P.append(f"context_size は 2^n_pool ({2 ** n_pool}) の倍数")
+    if (crop["context_size"] - crop["crop_size"]) % 2: P.append("context_size - crop_size は偶数（中心を一致させるため）")
+    if crop["panel_scale"] < 1: P.append("panel_scale >= 1")
+    if crop["device"] not in ("cpu", "cuda"): P.append("device は cpu | cuda")
+    if crop["device"] == "cuda" and machine["gpu_gen"] == 0: P.append("device=cuda だが machine は gpu_gen 0")
+    _check_machine(machine, P)
+    _problems_to_error("crop values", P)
 
 
 def check_train_values(train, mode, machine):

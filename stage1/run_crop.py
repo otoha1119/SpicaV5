@@ -61,7 +61,8 @@ def main():
         data = load_yaml(a.crop)
         if not isinstance(data, dict):
             raise ConfigError(f"[crop] トップレベルが dict ではありません: {a.crop}")
-        cases = check_crop_cases(data.pop("cases", None))
+        cases_degrade = check_crop_cases(data.pop("cases_degrade", None))
+        cases_sr = check_crop_cases(data.pop("cases_sr", None))
         crop = validate("crop", data, CROP)
         machines = load_yaml(a.machines)
         if not isinstance(machines, dict) or a.machine not in machines:
@@ -80,6 +81,7 @@ def main():
             raise ConfigError(f"重みディレクトリの上に {LAUNCH_FILE} を持つ run が見つかりません: {weight_dir}")
         launch_path = latest_launch(run_dir)
         g_argv, g_cfg = generator_argv(load_yaml(launch_path))
+        cases = cases_sr if g_cfg["task"] == "sr" else cases_degrade
         # task で参照するデータが変わる（degrade: PCD512 = pcd_dir / EID512 = eid_dir、sr: PCD1024 = pcd1024_dir / EID1024 = eid1024_dir）。crop.yaml の pcd / eid はその中のスライス名
         dir_keys = ("pcd1024_dir", "eid1024_dir") if g_cfg["task"] == "sr" else ("pcd_dir", "eid_dir")
         for k in dir_keys:

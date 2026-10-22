@@ -12,7 +12,7 @@
 #   3. サブコマンドに応じてコンテナ内のスクリプトを exec する
 #
 # ■ 引数の規則
-#   bash start2.sh [マシン名] [dataset|infer|build|shell|down|tb] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
+#   bash start2.sh [マシン名] [dataset|infer|crop|build|shell|down|tb] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
 #   ・--flag より前の単語を読む。順不同。dataset / build / shell / down / tb / resume / best / infer はサブコマンド、それ以外の単語は「マシン名」とみなし、
 #     sh 内の MACHINE より優先する。マシン名を 2 つ渡すとエラー。configs/machines.yaml に無い名前もエラー（候補を表示）。
 #   ・サブコマンド無し = 学習（train_stage2.sh → stage2/run_train.py → train.py）。設定は stage2/configs/train.yaml（数値・症例分割）と mode.yaml（方式）、
@@ -38,6 +38,7 @@
 #               入力は 1024（EID-like1024）でも 512（実 EID_v5、Stage 1 の推論出力 full/）でもよく、512 は run の dataset_info.yaml の方式（学習と同じ scale / interp）で 1024 にしてから通す。
 #               teacher=true なら pcd1024_dir の同名スライスを教師に rmse / ssim / psnr を metrics.txt へ（PCD のテスト症例向け。実 EID は --teacher false）。
 #               U-Net の構成は run の launch.yaml から。出力 <repo>/output/<run>_<重み>_<入力名>_<時刻>/（Stage 1 と同じ根）。学習中に同じコンテナで打ってよい（exec だけ。VRAM は取り合う）。
+#   ・crop  : stage2/configs/crop.yaml の固定プラーク領域だけを局所推論。[EID-like | PCD-like | PCD] と実 EID→PCD-like の両方を保存する。
 #   ・コンテナが起動済みなら、どのアクションでも up を呼ばず exec だけ行う（Stage 1 の学習中でも安全）。build は起動済みなら拒否。止めるのは down だけ。
 #     compose の設定を変えたときは、中の処理が終わってから down → 起動し直す（起動済みのままだと反映されず、注意が出る）。
 #
@@ -58,6 +59,7 @@
 #   bash start2.sh infer --max_slices 1 --save_panel true                                   # 1 枚だけ試してパネルも出す
 #   bash start2.sh infer --weight_dir /workspace/stage2/checkpoints/2026_0909_1200/best --input_dir /workspace/DataSet/EIDlike1024_v1   # PCD のテスト症例（教師あり → metrics.txt）
 #   bash start2.sh infer --input_dir /workspace/DataSet/EID_v5 --input eid --teacher false   # 実 EID512（補間してから通す。教師なし。パネルは右 2 列に入り左 3 列は pcd_slice の参照）
+#   bash start2.sh crop --weight_dir /workspace/stage2/checkpoints/<run>/best
 #   bash start2.sh PC1 build                     # イメージをビルド（本番機の初回。start.sh build と同じ）
 #   bash start2.sh shell                          # コンテナに入る（手動: bash dataset_stage2.sh [--flag ...]）
 #
@@ -66,6 +68,7 @@
 #   stage2/configs/mode.yaml      方式（arch / base_ch / n_pool / init_type / loss / final_act / residual / serial_batches）
 #   stage2/configs/dataset.yaml   データ作成の方式（scale / interp / input_size）
 #   stage2/configs/infer.yaml     推論の方式（max_slices / batch_slices / teacher / save_input1024 / save_panel / io.*）
+#   stage2/configs/crop.yaml      固定プラーク領域（PCD症例と実EID）・144px出力・256px文脈・表示倍率・device
 #   stage2/configs/schema.py      Stage 2 の設定ファイルの唯一の正（必須キー・型・フラグ）
 #   configs/machines.yaml         マシン定義（Stage 共通。Stage 2 は gpu_gen / host_data_root / container_data_root / num_threads / pcd1024_dir / eidlike1024_dir / stage2_checkpoints_dir / stage2_tb_port を使う。
 #                                 tb_port は compose が Stage 1 のポートも公開するために読むだけ）
@@ -113,6 +116,7 @@ while [ $# -gt 0 ]; do
     tb)      ACTION=tb; shift ;;
     train)   ACTION=train; shift ;;
     infer)   ACTION=infer; shift ;;
+    crop)    ACTION=crop; shift ;;
     resume)
       shift
       [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start2] resume には run 名が必要です: bash start2.sh resume yyyy_mmdd_HHMM [latest|best|<epoch>]" >&2; exit 2; }
@@ -276,6 +280,7 @@ case "$ACTION" in
   shell)   exec_it spicav5 bash ;;
   dataset) exec_it spicav5 bash dataset_stage2.sh "$@" ;;
   infer)   exec_it spicav5 bash infer_stage2.sh "$@" ;;
+  crop)    exec_it spicav5 bash crop_stage2.sh "$@" ;;
   best)    exec_it spicav5 python stage2/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
   train)
     tb_kill
