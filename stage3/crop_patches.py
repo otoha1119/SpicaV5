@@ -81,7 +81,6 @@ def main():
                 if src.shape != (expect, expect):
                     raise ValueError(f"実 EID は {expect}px を期待: {rel} {src.shape}")
                 inp, teacher = upsample(src, a.scale, a.interp), None
-                diff_label = f"|PCD-like - EID|  0..{a.diff_max_hu} HU"
             cut(inp, x, y, a.crop_size, rel)
             cond = torch.from_numpy(normalize(inp, *hu))[None, None]
             sd = slice_seed(a.seed, f"{kind}:{rel}")
@@ -98,12 +97,11 @@ def main():
                            cut(teacher, x, y, a.crop_size, rel + " teacher") if teacher is not None else None)),
             )
             for view, (in_v, out_v, teacher_v) in views:
-                compare = teacher_v if teacher_v is not None else in_v
-                diff = heatmap_abs(out_v, compare, a.diff_max_hu)
                 if kind == "pcd":
                     gray = [lin(in_v), lin(out_v), lin(teacher_v)]
                     names = ["1_EID-like1024", "2_PCD-like1024", "3_PCD1024"]
                     labels = ["EID-like1024  (input)", f"PCD-like1024  (output)   {weight}", "PCD1024  (teacher)"]
+                    diff = heatmap_abs(out_v, teacher_v, a.diff_max_hu)
                 else:
                     gray = [lin(in_v), lin(out_v)]
                     names = ["1_EID1024", "2_PCD-like1024"]
@@ -111,12 +109,14 @@ def main():
                 d = base / view
                 for name, z in zip(names, gray):
                     write_png(d / f"{name}.png", quant(z))
-                diff_name = f"4_diff_abs_0_{a.diff_max_hu}HU.png"
-                write_png(d / diff_name, np.ascontiguousarray(quant(diff)[..., ::-1]))
-                cols = [rgb(z) for z in gray] + [diff]
+                cols, panel_labels = [rgb(z) for z in gray], labels
+                if kind == "pcd":
+                    diff_name = f"4_diff_abs_0_{a.diff_max_hu}HU.png"
+                    write_png(d / diff_name, np.ascontiguousarray(quant(diff)[..., ::-1]))
+                    cols, panel_labels = cols + [diff], labels + [diff_label]
                 if view == "local" and a.panel_scale != 1:
                     cols = [cv2.resize(c, None, fx=a.panel_scale, fy=a.panel_scale, interpolation=cv2.INTER_NEAREST) for c in cols]
-                panel = build_panel(cols, labels + [diff_label])
+                panel = build_panel(cols, panel_labels)
                 write_png(d / "panel.png", np.ascontiguousarray(quant(panel)[..., ::-1]))
             print(f"[crop] {tag} {kind} {rel}: full + local {a.crop_size}px -> {base}")
     print(f"[crop] done: weights={a.weight_dir} -> {root}")

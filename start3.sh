@@ -16,7 +16,7 @@
 #   ・tb    : Stage 3 の全 run を並べた TensorBoard（stage3_tb_port）
 #   ・infer : 推論（infer_stage3.sh → stage3/run_infer.py → inference_dir.py）。重み・入力は infer_stage3.sh の WEIGHT_DIR / INPUT_DIR、方式は stage3/configs/infer.yaml。
 #             1024 は 256 タイルに分けて毎ステップ重なりの ε を平均する（WeatherDiffusion 型）。所要時間はタイル数 × sample_steps に比例
-#   ・crop  : 固定01/03を全体サンプリングし、全体・144px局所・0〜200 HU差分を保存
+#   ・crop  : 固定01/03を全体サンプリングし、全体・144px局所と01のPCD教師との差分（0〜200 HU）を保存
 #   ・nps   : NPS 評価（nps_stage3.sh → stage3/eval_nps.py）。対象は推論の出力フォルダ（nps_stage3.sh の INFER_DIR）、ROI は stage3/configs/nps.yaml
 #   ・データ作成は Stage 2 と同じデータ（eidlike1024_dir）を使うので Stage 3 には無い（必要なら bash start2.sh dataset）
 #   ・build / shell / down : start.sh / start2.sh と同じ（コンテナは共用なので down は Stage 1 / 2 も止める）
