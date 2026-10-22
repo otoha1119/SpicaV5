@@ -12,3 +12,7 @@ tile_batch: 4
 pcd_index: 1
 eid_index: 1
 diff_max_hu: 200
+hist_hu_min: -1024
+hist_hu_max: 2048
+hist_bin_hu: 16
+hist_y_max_pct: 12.0
