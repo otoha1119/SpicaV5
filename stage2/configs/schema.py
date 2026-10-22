@@ -153,6 +153,10 @@ CROP = {
     "pcd_index":    Key(int, "--pcd_index",    "pcd_cases の何番目を出すか（1始まり。01の番号にも使う）"),
     "eid_index":    Key(int, "--eid_index",    "eid_cases の何番目を出すか（1始まり。番号は pcd_cases の件数を足す）"),
     "diff_max_hu":  Key(int, "--diff_max_hu",  "絶対HU差ヒートマップの赤になる上限。200"),
+    "hist_hu_min":  Key(int, "--hist_hu_min",  "HU分布図の横軸下限"),
+    "hist_hu_max":  Key(int, "--hist_hu_max",  "HU分布図の横軸上限"),
+    "hist_bin_hu":  Key(int, "--hist_bin_hu",  "HU分布図のbin幅（HU）"),
+    "hist_y_max_pct": Key(float, "--hist_y_max_pct", "HU分布図の縦軸上限（1 binあたりの画素割合%）"),
 }
 
 CROP_CASE_KEYS = {"slice": str, "x": int, "y": int}
@@ -400,6 +404,10 @@ def check_crop_values(crop, machine, image_size, n_pool, n_pcd, n_eid):
     if not (1 <= crop["pcd_index"] <= n_pcd): P.append(f"pcd_index は 1..{n_pcd}")
     if not (1 <= crop["eid_index"] <= n_eid): P.append(f"eid_index は 1..{n_eid}")
     if crop["diff_max_hu"] < 1: P.append("diff_max_hu >= 1")
+    if crop["hist_hu_min"] >= crop["hist_hu_max"]: P.append("hist_hu_min < hist_hu_max")
+    if crop["hist_bin_hu"] < 1: P.append("hist_bin_hu >= 1")
+    elif (crop["hist_hu_max"] - crop["hist_hu_min"]) % crop["hist_bin_hu"]: P.append("hist_hu_max - hist_hu_min は hist_bin_hu の倍数")
+    if crop["hist_y_max_pct"] <= 0: P.append("hist_y_max_pct > 0")
     _check_machine(machine, P)
     _problems_to_error("crop values", P)
 

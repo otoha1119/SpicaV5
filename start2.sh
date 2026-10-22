@@ -68,7 +68,7 @@
 #   stage2/configs/mode.yaml      方式（arch / base_ch / n_pool / init_type / loss / final_act / residual / serial_batches）
 #   stage2/configs/dataset.yaml   データ作成の方式（scale / interp / input_size）
 #   stage2/configs/infer.yaml     推論の方式（max_slices / batch_slices / teacher / save_input1024 / save_panel / io.*）
-#   stage2/configs/crop.yaml      評価対象（01/03）・144px局所・PCD教師との差分上限・表示倍率・device
+#   stage2/configs/crop.yaml      評価対象（01/03）・144px局所・差分上限・HU分布軸・表示倍率・device
 #   stage2/configs/schema.py      Stage 2 の設定ファイルの唯一の正（必須キー・型・フラグ）
 #   configs/machines.yaml         マシン定義（Stage 共通。Stage 2 は gpu_gen / host_data_root / container_data_root / num_threads / pcd1024_dir / eidlike1024_dir / stage2_checkpoints_dir / stage2_tb_port を使う。
 #                                 tb_port は compose が Stage 1 のポートも公開するために読むだけ）
