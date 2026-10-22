@@ -1,9 +1,11 @@
 # Stage 2 局所推論。座標は Stage 3 train.yaml の固定領域と同じ、1024画素系の左上。
-# 256px の周辺をモデルに渡し、中央の指定144pxだけを個別画像と panel に保存する。
+# 選んだスライスを全体推論し、全体画像と指定144pxの局所画像を同じ列構成で保存する。
 crop_size: 144
-context_size: 256
 panel_scale: 2
-device: cpu
+device: cuda
+pcd_index: 1
+eid_index: 1
+diff_max_hu: 200
 
 # [EID-like1024 input | PCD-like1024 output | PCD1024 teacher]
 pcd_cases:

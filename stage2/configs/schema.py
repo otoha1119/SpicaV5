@@ -148,9 +148,11 @@ INFER = {
 # ---------------------------------------------------------------------------
 CROP = {
     "crop_size":    Key(int, "--crop_size",    "保存するプラーク領域の一辺。Stage 3 の log.crop_size と同じ 144"),
-    "context_size": Key(int, "--context_size", "モデルに渡す周辺込みの一辺。Stage 3 の data.image_size と同じ 256"),
     "panel_scale":  Key(int, "--panel_scale",  "表示パネルだけを最近傍で拡大する倍率"),
     "device":       Key(str, "--device",       "cpu | cuda"),
+    "pcd_index":    Key(int, "--pcd_index",    "pcd_cases の何番目を出すか（1始まり。01の番号にも使う）"),
+    "eid_index":    Key(int, "--eid_index",    "eid_cases の何番目を出すか（1始まり。番号は pcd_cases の件数を足す）"),
+    "diff_max_hu":  Key(int, "--diff_max_hu",  "絶対HU差ヒートマップの赤になる上限。200"),
 }
 
 CROP_CASE_KEYS = {"slice": str, "x": int, "y": int}
@@ -389,15 +391,15 @@ def check_infer_values(infer, machine):
     _problems_to_error("infer values", P)
 
 
-def check_crop_values(crop, machine, image_size, n_pool):
+def check_crop_values(crop, machine, image_size, n_pool, n_pcd, n_eid):
     P = []
-    if crop["crop_size"] < 1 or crop["crop_size"] > crop["context_size"]: P.append("1 <= crop_size <= context_size")
-    if crop["context_size"] > image_size: P.append(f"context_size <= image_size ({image_size})")
-    if crop["context_size"] % (2 ** n_pool): P.append(f"context_size は 2^n_pool ({2 ** n_pool}) の倍数")
-    if (crop["context_size"] - crop["crop_size"]) % 2: P.append("context_size - crop_size は偶数（中心を一致させるため）")
+    if crop["crop_size"] < 1 or crop["crop_size"] > image_size: P.append(f"crop_size は 1..{image_size}")
     if crop["panel_scale"] < 1: P.append("panel_scale >= 1")
     if crop["device"] not in ("cpu", "cuda"): P.append("device は cpu | cuda")
     if crop["device"] == "cuda" and machine["gpu_gen"] == 0: P.append("device=cuda だが machine は gpu_gen 0")
+    if not (1 <= crop["pcd_index"] <= n_pcd): P.append(f"pcd_index は 1..{n_pcd}")
+    if not (1 <= crop["eid_index"] <= n_eid): P.append(f"eid_index は 1..{n_eid}")
+    if crop["diff_max_hu"] < 1: P.append("diff_max_hu >= 1")
     _check_machine(machine, P)
     _problems_to_error("crop values", P)
 
