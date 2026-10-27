@@ -34,6 +34,8 @@ def list_cases(root):
     root = Path(root)
     if not root.is_dir():
         raise ConfigError(f"データディレクトリが存在しません: {root}")
+    from data.ct_dataset import load_eval_only  # 重い import なので使うときだけ
+    eval_only = load_eval_only()
     cases = []
     with os.scandir(root) as it:
         for e in sorted(it, key=lambda e: e.name):
@@ -45,7 +47,7 @@ def list_cases(root):
                 if any(n.lower().endswith(EXT) and not n.startswith(".") for n in names):
                     found = True
                     break
-            if found:
+            if found and e.name not in eval_only:  # 評価専用（configs/eval_only.yaml）は分割に入れない
                 cases.append(e.name)
     if not cases:
         raise ConfigError(f"症例フォルダ（PNG 入り）が見つかりません: {root}")
