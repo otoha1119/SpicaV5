@@ -70,7 +70,7 @@ TRAIN = {
     "log.tb_full_size":            Key(int, "--tb_full_size",            "TensorBoard の images/full/* に出すフル画像の一辺（1024 は大きすぎて拡大が効かないので縮小して出す。512。ディスクの preview_*/ は縮小しない。2026-09-09）"),
     "log.n_full_random":           Key(int, "--n_full_random",           "epoch 末に書き出すランダムスライスの枚数（epoch ごとに別。val の症例だけから。0 で無し）"),
     "log.display_hu_min":          Key(int, "--display_hu_min",          "TensorBoard 画像の線形表示範囲の下限 HU（この値以下を黒）。Stage 1 と同じ −1400"),
-    "log.display_hu_max":          Key(int, "--display_hu_max",          "同上の上限 HU（この値以上を白）。Stage 1 と同じ 2100（stored 3500）"),
+    "log.display_hu_max":          Key(int, "--display_hu_max",          "同上の上限 HU（この値以上を白）。Stage 1 と同じ 3000（stored 4400）"),
     # adv — 実 EID 枝（mode.yaml real_eid_branch: true のときだけ使う。false なら読まない。2026-10-13。docs/plans/20260908_stage2-unet-implementation-spec.md §9）
     "adv.lambda_gan":             Key(float, "--lambda_gan",             "U-Net に戻す GAN 損失の重み（U-Net の損失 = mse + lambda_gan · gan_G）。MSE が主役になる小さい値。0.001 で崩壊（PC4 2026-10-13）→ 0.0001。TB diag/gan_ratio = lambda_gan · gan_G / mse は損失の比で勾配の比ではない（diag/grad_norm_mse / gan を見る）"),
     "adv.gan_mode":               Key(str,   "--gan_mode",               "GAN 損失: lsgan（最小二乗）| vanilla（BCE with logits）| hinge（D: max(0,1−D(real)) + max(0,1+D(fake))、G: −D(fake)。G の勾配が D の出力の大きさに比例しない。2026-10-13 追加）。D の最終層に活性化は無い"),

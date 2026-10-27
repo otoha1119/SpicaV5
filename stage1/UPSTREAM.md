@@ -266,3 +266,8 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - `make_split.py`（新）+ `../split_stage1.sh`（新）+ `../start.sh split`: EID の症例を val : test : train = 15 : 15 : 70、`--force_test EID-049`、seed 固定、既存ファイルは上書きしない
 - **`data.patches_per_slice`（同日、PC1 の 1 本目でデータ律速を確認して追加）**: PC1（3090、SSD）で GPU 使用率が 60% の櫛形、SSD 55%、バーが不等速。EID1024 は 66k 枚 × 2 MB = 130 GB で RAM に収まらず、patch ごとに別スライスを SSD 読み + PNG デコードしていたため。`RandomSampler(k, seed)` が引いたスライス（A / B の組）を k サンプル使い回す（位置は毎回独立。通常は worker ごとのカウンタ、`--serial_batches` は index // k で決定的、`fixed_batch` は負のグループ番号で i ごと）。k = 1 は従来と同じ乱数列（単体で確認）。`sampling=paper` では 1 のみ（check_values）。PC1 で大幅高速化を確認（ユーザー報告）したため、同日ユーザー指示で **train.yaml の既定を 8**（degrade も）にし、Stage 2 の `pair_dataset.py` にも同型を入れた。1 にすれば 2026-10-12 以前の乱数列
 - 検証（scratch venv + 合成データ 64 / 128 px、CPU）: sr の学習 2 epoch（launch / state の sr、ファイル名、val からのランダム）、resume（checkpoint の task 引き継ぎ）、task 変更・degrade での sr フラグ・manifest 無し・除外症例無しのエラー、推論（512 入力の補間 = EID1024 と画素一致、512 / 1024 入力の出力一致、`pcdlike = input + (R − 32768)`、patch、DICOM 拒否）、crop（sr）、degrade の学習・推論・crop の回帰、task 無しの旧 launch の推論
+
+### 表示範囲の上限 HU 2100 → 3000（2026-10-28、ユーザー指示）
+
+- `log.display_hu_max`: 2100 → 3000（stored 0〜3500 → 0〜4400）。下限 −1400 は据え置き。TB の 8bit 表示・preview パネル・推論 / crop のパネルに共通で、Stage 1 / 2 / 3 と ablation（`ablation/*/configs/train.yaml`）を全部揃える。学習・推論の正規化窓（`data.hu_min` / `hu_max` = −1400 / 4096）と 16bit の生出力は変えない
+- 推論・crop は現在の `train.yaml` の表示設定を読むので、古い run の重みでも 3000 になる。既存 run を resume した学習中の TB / preview は `state.pth` の実効値（2100）のまま。揃えたいときは `--display_hu_max 3000` を付ける

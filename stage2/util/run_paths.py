@@ -15,7 +15,7 @@ checkpoint は「重みディレクトリ」単位で扱う（net_G.pth と stat
   output_images/epoch_NNN/                       生 16bit（stored = HU + 1400、HU が読める）。固定 + ランダム + 実 EID テスト（2026-09-09 ユーザー確定）
       <slice>_eidlike.png, _pcd1024.png, _pcdlike.png      固定（train.yaml log.full_slice）とランダム（log.n_full_random 枚、epoch ごとに別）: 入力 / 教師 / 出力
       <eid_slice>_eid1024.png, _pcdlike.png                実 EID テスト（log.eid_slice、eid_dir の 512 を補間したもの / その出力）
-  output_images/preview_fixed_<slice>/           表示用（stored 0〜3500 を線形に、log.preview_bits の深度。HU は読めない）
+  output_images/preview_fixed_<slice>/           表示用（stored 0〜4400 を線形に、log.preview_bits の深度。HU は読めない）
       00_eidlike1024_<slice>.png, 01_pcd1024_<slice>.png, 02_eid1024_<eid_slice>.png   代表（入力 / 教師 / 実 EID 入力）。初回の checkpoint で 1 回だけ
       epoch_NNN_pcdlike.png, epoch_NNN_eid_pcdlike.png     epoch ごとの出力（固定 / 実 EID テスト）
       epoch_NNN_panel.png                                  [EID-like1024 | PCD-like1024 | PCD1024 | 実 EID → PCD-like1024 | 実 EID1024（元）] の 5 列（並びは 2026-09-10 ユーザー確定。util/panel.py。TB の images/full/fixed と同じ絵）
