@@ -59,7 +59,7 @@ log:
   pcd_slice: PCD-002/PCD-002-236.png     # パネル左端の PCD1024 代表（pcd1024_dir 相対。Stage 1 sr と同じ）
   n_full_random: 1      # val の症例からランダムに 1 枚（epoch ごとに別）
   display_hu_min: -1400
-  display_hu_max: 2100
+  display_hu_max: 3000
   preview_bits: 16
   diff_range_hu: 300
   tb_full_size: 512     # TB のフルパネルは列を 512 に縮小（ディスクの preview は 1024 のまま）

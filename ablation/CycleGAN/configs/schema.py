@@ -65,7 +65,7 @@ TRAIN = {
     "log.pcd_slice":         Key(str,   "--pcd_slice",       "パネル左端に並べる B 側（PCD1024）の代表スライス（pcd1024_dir からの相対パス。固定。PCD-002/PCD-002-236.png）"),
     "log.n_full_random":     Key(int,   "--n_full_random",   "epoch 末に書き出すランダムスライスの枚数（val の症例だけから。epoch ごとに別。0 で無し）"),
     "log.display_hu_min":    Key(int,   "--display_hu_min",  "表示の線形範囲の下限 HU（Stage 1 と同じ −1400）"),
-    "log.display_hu_max":    Key(int,   "--display_hu_max",  "表示の線形範囲の上限 HU（Stage 1 と同じ 2100）"),
+    "log.display_hu_max":    Key(int,   "--display_hu_max",  "表示の線形範囲の上限 HU（Stage 1 と同じ 3000）"),
     "log.preview_bits":      Key(int,   "--preview_bits",    "output_images/preview_*/ のビット深度 16 | 8"),
     "log.diff_range_hu":     Key(int,   "--diff_range_hu",   "R = G_A(z) − z のカラー表示の ±範囲 HU（白 = 0、純青 = −、純赤 = +。util/residual_color.py）"),
     "log.tb_full_size":      Key(int,   "--tb_full_size",    "TensorBoard の images/full/* に出すパネルの列の一辺（1024 は大きいので 512 に縮小。ディスクの preview は縮小しない）"),
