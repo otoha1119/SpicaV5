@@ -36,7 +36,7 @@ def check_split_on_disk(train, machine):
     ・train / val の症例は両方のディレクトリに存在すること。test はディスクに無くてもよい
     戻り値は {"input": [症例...], "pcd": [症例...]}（記録用）。問題があれば RuntimeError。"""
     train_cases, val_cases, test_cases = train["data.train_cases"], train["data.val_cases"], train["data.test_cases"]
-    on_in, on_pcd = list_case_names(machine["eidlike1024_dir"]), list_case_names(machine["pcd1024_dir"])
+    on_in, on_pcd = list_case_names(machine["eidlike1024_dir"], drop_eval_only=True), list_case_names(machine["pcd1024_dir"], drop_eval_only=True)  # 評価専用（configs/eval_only.yaml）は照合の対象外
     assigned = set(train_cases) | set(val_cases) | set(test_cases)
     unassigned = sorted((set(on_in) | set(on_pcd)) - assigned)
     if unassigned:
@@ -117,8 +117,8 @@ class PairDataset(Dataset):
         train_cases, val_cases, test_cases = train["data.train_cases"], train["data.val_cases"], train["data.test_cases"]
 
         check_split_on_disk(train, machine)  # 起動器でも検査済みだが、train.py 単独でも同じ規則で止まるように
-        idx_in = CaseIndex(machine["eidlike1024_dir"], cache_dir)
-        idx_pcd = CaseIndex(machine["pcd1024_dir"], cache_dir)
+        idx_in = CaseIndex(machine["eidlike1024_dir"], cache_dir, drop_eval_only=True)
+        idx_pcd = CaseIndex(machine["pcd1024_dir"], cache_dir, drop_eval_only=True)
         for kind, cases in (("train_cases", train_cases), ("val_cases", val_cases)):
             empty = [c for c in cases if c not in idx_in.slices or c not in idx_pcd.slices]
             if empty:
