@@ -5,7 +5,7 @@
 
 ## 起動
 
-リポジトリ直下の **`start_ablation.sh`** から。コンテナは Stage 1 / 2 と同じ `spicav5`（起動済みなら exec だけ。学習中に打っても作り直さない）。
+リポジトリ直下の **`start_ablation.sh`** から。例: `bash start_ablation.sh PC1 CycleGAN`。コンテナは Stage 1 / 2 と同じ `spicav5`（起動済みなら exec だけ。学習中に打っても作り直さない）。
 
 ```bash
 bash start_ablation.sh [マシン名] <アブレーション名> [infer|build|shell|down|tb] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
@@ -23,5 +23,6 @@ bash start_ablation.sh PC3 SRCycleGAN tb                   # その ablation の
 | 名前 | 目的 | 出典 | 追加日 |
 |---|---|---|---|
 | `SRCycleGAN` | 論文オリジナルの SR-CycleGAN（MMSR 損失あり）で実 EID512 → PCD-like1024 を一発 ×2 SR。SpicaV2 の失敗を同じデータ・表示で定量記録し、Stage 1 `task: sr` / Stage 2 と並べる | Zheng et al., J Med Imaging 9(2) 024003 (2022)。コードは著者公開版（SpicaV2 commit 741924c） | 2026-10-27 |
+| `CycleGAN` | 普通の CycleGAN（junyanz 本家の既定）で EID1024（×2 補間済み）→ PCD-like1024 の同解像度・非ペア変換。SRCycleGAN の MMSR 損失（出力を EID 側に引き戻す拘束）を持たない比較対象 | Zhu et al., ICCV 2017。コードは junyanz 本家（stage1/ に vendoring 済み） | 2026-10-27 |
 
 計画・設計: `docs/plans/20261027_stage1-sr-cyclegan-plan.md`。変更履歴: 各ディレクトリの `UPSTREAM.md`。
