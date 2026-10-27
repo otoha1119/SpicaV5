@@ -133,6 +133,20 @@ def _load_normalized(path, offset, hu_min, hu_max):
 # ---------------------------------------------------------------------------
 # 症例 → スライス一覧
 # ---------------------------------------------------------------------------
+def load_eval_only():
+    """configs/eval_only.yaml の評価専用症例名（set）。学習系の列挙（drop_eval_only=True）だけが使う。ファイルが無い・形が違えばエラー（フォールバックしない）。[評価専用症例 2026-10-27]"""
+    import yaml
+    for d in Path(__file__).resolve().parents:
+        p = d / "configs" / "eval_only.yaml"
+        if p.is_file():
+            with open(p, encoding="utf-8") as f:
+                y = yaml.safe_load(f)
+            cases = y.get("cases") if isinstance(y, dict) else None
+            if not isinstance(cases, list) or not all(isinstance(c, str) for c in cases):
+                raise RuntimeError(f"{p}: cases は症例名（文字列）のリストであること")
+            return set(cases)
+    raise RuntimeError("configs/eval_only.yaml が見つかりません（評価専用症例の定義。リポジトリ直下の configs/ に置く）")
+
 class CaseIndex:
     """<root>/<症例>/<slice>.png を {症例: [パス, ...]} に整理する。症例フォルダ直下にサブフォルダがあれば再帰的に拾う。
     <root> 直下に PNG が直接ある場合は症例名 "_root" として 1 症例扱いにする。
@@ -145,8 +159,8 @@ class CaseIndex:
 
     EXT = ".png"
 
-    def __init__(self, root, cache_dir=None, cases=None, exclude=()):
-        """cases: この症例名だけに絞る（None で全部。ディスクに無い名前はエラー）。exclude: この症例名を外す（無い名前はエラー）。
+    def __init__(self, root, cache_dir=None, cases=None, exclude=(), drop_eval_only=False):
+        """cases: この症例名だけに絞る（None で全部。ディスクに無い名前はエラー）。exclude: この症例名を外す（無い名前はエラー）。drop_eval_only: configs/eval_only.yaml の症例を黙って外す（学習系だけ True）。
         列挙とキャッシュはディレクトリ全体に対して行い、絞り込みはその後（キャッシュは分割に依らず共通）。[task: sr 用 2026-10-12]"""
         root = Path(root)
         if not root.is_dir():
@@ -168,6 +182,15 @@ class CaseIndex:
         self.slices = data["slices"]
         if not self.slices:
             raise RuntimeError(f"PNG が見つかりません: {root}")
+        self.eval_only_dropped = []  # 評価専用として外した症例（学習系だけ。推論は drop_eval_only=False で全症例を見る）
+        if drop_eval_only:
+            ev = load_eval_only()
+            self.eval_only_dropped = sorted(c for c in self.slices if c in ev)
+            self.slices = {c: v for c, v in self.slices.items() if c not in ev}
+            if self.eval_only_dropped:
+                print(f"[CaseIndex] {root}: 評価専用 {len(self.eval_only_dropped)} 症例を学習から除外 {self.eval_only_dropped}")
+            if not self.slices:
+                raise RuntimeError(f"評価専用を除くと症例が 0 になりました: {root}")
         self.disk_cases = sorted(self.slices.keys())  # 絞り込み前（ディスク上の全症例）
         if cases is not None:
             missing = [c for c in cases if c not in self.slices]
@@ -373,21 +396,21 @@ class CTDataset(BaseDataset):
         self.idx_a_val = None   # sr: val 症例の A（epoch 末のランダムプレビュー専用。学習には使わない）
         if self.task == "sr":
             self.split, b_exclude = self._load_sr_split(opt)
-            self.idx_a = CaseIndex(dir_a, cache_dir, cases=self.split["train"])
-            self.idx_a_val = CaseIndex(dir_a, cache_dir, cases=self.split["val"]) if self.split["val"] else None
+            self.idx_a = CaseIndex(dir_a, cache_dir, cases=self.split["train"], drop_eval_only=True)
+            self.idx_a_val = CaseIndex(dir_a, cache_dir, cases=self.split["val"], drop_eval_only=True) if self.split["val"] else None
             unassigned = [c for c in self.idx_a.disk_cases if c not in set(self.split["train"]) | set(self.split["val"]) | set(self.split["test"])]
             if unassigned:
                 raise RuntimeError(f"{dir_a} の症例が split_file のどのリストにも入っていません（分割を作り直す: bash start.sh split）: {unassigned[:10]}{' ...' if len(unassigned) > 10 else ''}（{len(unassigned)} 症例）")
             if not self.full_image:
                 if not os.path.isdir(dir_b):
                     raise RuntimeError(f"学習には {dir_b} が必要です")
-                self.idx_b = CaseIndex(dir_b, cache_dir, exclude=b_exclude)
+                self.idx_b = CaseIndex(dir_b, cache_dir, exclude=b_exclude, drop_eval_only=True)
             else:
                 self.idx_b = self.idx_a
         else:
-            self.idx_a = CaseIndex(dir_a, cache_dir)
+            self.idx_a = CaseIndex(dir_a, cache_dir, drop_eval_only=True)
             if os.path.isdir(dir_b):
-                self.idx_b = CaseIndex(dir_b, cache_dir)
+                self.idx_b = CaseIndex(dir_b, cache_dir, drop_eval_only=True)
             else:
                 if not self.full_image:
                     raise RuntimeError(f"学習には {dir_b} が必要です")
