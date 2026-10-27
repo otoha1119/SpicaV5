@@ -47,4 +47,4 @@ log:
   preview_bits: 16           # preview_*/ のビット深度（Stage 2 と同じ）
   tb_full_size: 512          # TB の images/full/* の一辺（Stage 2 と同じ）
   display_hu_min: -1400      # 表示の線形範囲（Stage 2 と同じ）
-  display_hu_max: 2100
+  display_hu_max: 3000

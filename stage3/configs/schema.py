@@ -112,7 +112,7 @@ TRAIN = {
     "log.preview_bits":           Key(int,   "--preview_bits",      "output_images/preview_*/ のビット深度。16 | 8（Stage 2 と同じ）"),
     "log.tb_full_size":           Key(int,   "--tb_full_size",      "TB の images/full/* の一辺（1024 を縮小。ディスクは縮小しない）"),
     "log.display_hu_min":         Key(int,   "--display_hu_min",    "表示の線形範囲の下限 HU（Stage 2 と同じ −1400）"),
-    "log.display_hu_max":         Key(int,   "--display_hu_max",    "表示の線形範囲の上限 HU（Stage 2 と同じ 2100）"),
+    "log.display_hu_max":         Key(int,   "--display_hu_max",    "表示の線形範囲の上限 HU（Stage 2 と同じ 3000）"),
 }
 
 # ---------------------------------------------------------------------------
