@@ -82,13 +82,30 @@ def load_normalized(path, offset, hu_min, hu_max):
     return normalize(read_stored(path), offset, hu_min, hu_max)
 
 
-def list_case_names(root):
+def load_eval_only():
+    """configs/eval_only.yaml の評価専用症例名（set）。学習系の列挙（drop_eval_only=True）だけが使う。ファイルが無い・形が違えばエラー（フォールバックしない）。[評価専用症例 2026-10-27]"""
+    import yaml
+    for d in Path(__file__).resolve().parents:
+        p = d / "configs" / "eval_only.yaml"
+        if p.is_file():
+            with open(p, encoding="utf-8") as f:
+                y = yaml.safe_load(f)
+            cases = y.get("cases") if isinstance(y, dict) else None
+            if not isinstance(cases, list) or not all(isinstance(c, str) for c in cases):
+                raise RuntimeError(f"{p}: cases は症例名（文字列）のリストであること")
+            return set(cases)
+    raise RuntimeError("configs/eval_only.yaml が見つかりません（評価専用症例の定義。リポジトリ直下の configs/ に置く）")
+
+
+def list_case_names(root, drop_eval_only=False):
     """<root> 直下の症例フォルダ名だけを返す（ファイルは走査しない。起動器の事前検査用）。'.' 始まりは無視。"""
     root = Path(root)
     if not root.is_dir():
         raise RuntimeError(f"データディレクトリが存在しません: {root}")
     with os.scandir(root) as it:
-        return sorted(e.name for e in it if e.is_dir() and not e.name.startswith("."))
+            names = sorted(e.name for e in it if e.is_dir() and not e.name.startswith("."))
+    ev = load_eval_only() if drop_eval_only else set()
+    return [n for n in names if n not in ev]
 
 
 class CaseIndex:
@@ -98,7 +115,7 @@ class CaseIndex:
 
     EXT = ".png"
 
-    def __init__(self, root, cache_dir=None):
+    def __init__(self, root, cache_dir=None, drop_eval_only=False):
         root = Path(root)
         if not root.is_dir():
             raise RuntimeError(f"データディレクトリが存在しません: {root}")
@@ -119,6 +136,15 @@ class CaseIndex:
         self.slices = data["slices"]
         if not self.slices:
             raise RuntimeError(f"PNG が見つかりません: {root}")
+        self.eval_only_dropped = []  # 評価専用として外した症例（学習系だけ。推論は drop_eval_only=False で全症例を見る）
+        if drop_eval_only:
+            ev = load_eval_only()
+            self.eval_only_dropped = sorted(c for c in self.slices if c in ev)
+            self.slices = {c: v for c, v in self.slices.items() if c not in ev}
+            if self.eval_only_dropped:
+                print(f"[CaseIndex] {root}: 評価専用 {len(self.eval_only_dropped)} 症例を学習から除外 {self.eval_only_dropped}")
+            if not self.slices:
+                raise RuntimeError(f"評価専用を除くと症例が 0 になりました: {root}")
         self.cases = sorted(self.slices.keys())
 
     @classmethod
