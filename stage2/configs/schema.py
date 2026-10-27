@@ -100,6 +100,8 @@ MACHINE = {
     "eidlike1024_dir":       Key(str, "--eidlike1024_dir",       "Stage 2 の学習入力。bash start2.sh dataset の出力先（EID-like512 を ×2 補間）で、学習はここを読む。container_data_root 配下"),
     "eid1024_dir":           Key(str, None,                      "実 EID の 1024（Stage 1 の task: sr が使う）。Stage 2 は使わない（machines.yaml は Stage 共通なので宣言だけ。2026-10-12）"),
     "stage2_checkpoints_dir": Key(str, "--stage2_checkpoints_dir", "Stage 2 の run（yyyy_mmdd_HHMM）の保存先ルート。レイアウトは stage2/util/run_paths.py"),
+    "ablation_checkpoints_dir": Key(str, None,                "アブレーション（ablation/<名前>/、start_ablation.sh）の保存先ルート。Stage 2 は使わない（宣言だけ。2026-10-27）"),
+    "ablation_tb_port":      Key(int, None,                      "アブレーションの TensorBoard のポート。Stage 2 は使わない（宣言だけ）"),
 }
 
 # ---------------------------------------------------------------------------

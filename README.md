@@ -4,6 +4,7 @@ Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT�
 
 - **Stage 1（本リポジトリの主体）**: PCD512 → EID-like512。別患者の PCD 画像群と EID 画像群から、PCD 固有の成分を除いて EID の分布に寄せる変換 G を学習する。
 - **Stage 2（着手 2026-09-08、§11）**: EID-like1024 → PCD1024 の教師あり同解像度回帰（U-Net + MSE、ILUMENATE = Koons et al., Med Phys 2025 準拠）。Stage 1 の出力を ×2 補間したものを入力、PCD1024 を教師にする。
+- **アブレーション `ablation/`（2026-10-27）**: 比較対象の手法を自己完結で置く場所。`bash start_ablation.sh <マシン> <名前>` で起動（`ablation/README.md`）。1 つ目は論文オリジナルの SR-CycleGAN（EID512 → PCD-like1024 一発 ×2、`ablation/SRCycleGAN/`）。
 
 土台は Park, Baek, You, Choi, Seo, *"Unpaired image denoising using a generative adversarial network in X-ray CT"*, IEEE Access 2019（DOI 10.1109/access.2019.2934178。以下 **FE-GAN**）。GAN 損失に fidelity 項 λ‖G(z)−z‖² を埋め込んだ**一方向・cycle なし**の GAN で、学習フレームワークは [junyanz/pytorch-CycleGAN-and-pix2pix](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix)（commit 2a7afba）を `stage1/` に vendoring して借りている。本家からの変更はすべて `stage1/UPSTREAM.md` に記録する。
 

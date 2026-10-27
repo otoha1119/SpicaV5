@@ -15,6 +15,7 @@
 /stage1/checkpoints/
 /stage1/results/
 /stage2/checkpoints/
+/ablation/checkpoints/
 /runs/
 /output/
 *.pth
@@ -43,3 +44,4 @@ outputs
 # TensorBoard のサーバログ（start.sh がコンテナ内 /workspace に書く）
 /tb_server.log
 /tb_server_stage2.log
+/tb_server_ablation.log

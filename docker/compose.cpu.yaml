@@ -15,6 +15,7 @@ services:
     ports:
       - "${TB_PORT:?configs/machines.yaml の tb_port が未設定}:${TB_PORT:?}"   # Stage 1 の TensorBoard（ホスト:コンテナ 同番号）
       - "${TB_PORT_STAGE2:?configs/machines.yaml の stage2_tb_port が未設定}:${TB_PORT_STAGE2:?}"   # Stage 2 の TensorBoard（start2.sh）。ポートを変えると次の up でコンテナが作り直される（学習中に up しない）
+      - "${TB_PORT_ABLATION:?configs/machines.yaml の ablation_tb_port が未設定}:${TB_PORT_ABLATION:?}"   # アブレーションの TensorBoard（start_ablation.sh、2026-10-27）。同上
     environment:
       - SPICA_MACHINE=${SPICA_MACHINE:?start.sh から起動すること}
     stdin_open: true

@@ -1,0 +1,67 @@
+# ablation/SRCycleGAN/configs/train.yaml — SR-CycleGAN（論文オリジナル）の学習パラメータ。唯一の正は configs/schema.py（キーの欠落・未知・型違いはエラー）。既定値は無い。
+# 出典: JMI = Zheng et al., J Med Imaging 9(2) 024003 (2022)、SPIE = arXiv:1912.12838、コード = 著者公開コード（SpicaV2 commit 741924c）。
+# 論文とコードが違う所は 2026-10-27 にユーザーが「論文の値」と決めた（docs/plans/20261027_stage1-sr-cyclegan-plan.md §2）。コードの値はコメントに残す。
+# 書き方: 小数は必ず点を付ける（1.0e-5, 0.7）。真偽値は true / false。リストは [a, b]。
+
+optim:
+  lr: 1.0e-5            # JMI Sec. 3.3: 1e-5（コードも 0.00001）。Park の 2e-4 より 20 倍小さい
+  beta1: 0.5            # 論文未記載 → コード 0.5
+  beta2: 0.999          # 論文未記載 → コード 0.999
+  batch_size: 4         # JMI Sec. 3.3 "batch size 4"
+  n_epochs: 100         # lr 一定（niter）
+  n_epochs_decay: 100   # 線形に 0 へ（niter_decay）。合計 200 epoch
+  seed: 0
+
+loss:
+  gan_mode: vanilla     # 論文 Eq. 2 の log 形（BCEWithLogits）。コードは lsgan（ablation 用に選べる）
+  lambda_gan_A: 1.0     # λ5（JMI Table 1）
+  lambda_gan_B: 1.0     # λ6
+  lambda_cycle: 1.0     # λ7（両方向）。CycleGAN 本家の 10 ではない
+  cycle_norm: l2        # 論文 Eq. 1 squared l2。コードは l1
+  lambda_ssim_A: 1.0    # λ1: 1 − SSIM(x, f↓(x_SR))（SPIE 版は 2.0）
+  lambda_ssim_B: 1.0    # λ2: 1 − SSIM(y, f↑(y_LR))
+  lambda_down: 0.7      # λ3: ‖x − f↓(x_SR)‖²（コードは 1.0）
+  lambda_up: 0.3        # λ4: ‖y − f↑(y_LR)‖²（コードは 1.0）
+  lambda_identity: 0.0  # 論文 Eq. 8 に無い。コードは 0.2（有効にするなら 0.2）
+  identity_b_scale: 0.1 # コードの idt_B の `* 0.1`（lambda_identity = 0 なら使われない）
+  ssim_window: 11       # コード pytorch_ssim（Gaussian σ 1.5）
+  ssim_c1: 0.02         # SPIE Sec. 3.2（コードは 0.0001 = 0.01²）
+  ssim_c2: 0.06         # SPIE Sec. 3.2（コードは 0.0009 = 0.03²）
+  pool_size: 50         # 論文未記載 → コード 50
+
+network:
+  scale: 2              # EID512 → PCD1024。論文は 8
+  n_blocks: 9           # JMI Sec. 4.2 "9 ResBlocks"
+  ngf: 64               # コード
+  ndf: 64               # コード
+  norm: batch           # 論文 Sec. 2.3.1（BN）。コードは instance
+  n_layers_D: 3         # 70×70 PatchGAN（コード netD basic）
+  init_type: normal     # コード
+  init_gain: 0.02       # コード
+
+data:
+  split_file: configs/splits/eid_v5.yaml   # Stage 1 の task: sr と同じ分割（EID 379 症例、EID-049 を test）。bash start.sh split で作る。リポジトリ直下からの相対パス
+  b_exclude_cases: []   # PCD1024 から外す症例。[] = 全 20 症例（PCD は分布の参照先と比較表示だけ）
+  patch_size: 128       # A（EID512）の patch。B（PCD1024）は patch_size × scale = 256（論文の HR patch と同じ画素数。ユーザー決定 2026-10-27）
+  samples_per_epoch: 10000   # 論文: 2000 patch × 5 症例。batch 4 → 2,500 step/epoch
+  patches_per_slice: 8  # 1 スライスから連続して切る patch 数（Stage 1 と同じ高速化）
+  patch_seed: 0
+  serial_batches: false
+  hu_offset: 1400       # stored = HU + 1400
+  hu_min: -1400         # 正規化窓 [−1400, 4096] → [−1, 1]（Tanh の値域と一致）
+  hu_max: 4096
+
+log:
+  print_freq: 100       # step
+  image_freq: 500       # step（2,500 step/epoch なので 5 回/epoch。256 の patch グリッドは 1 枚 1〜2 MB）
+  n_images: 4
+  full_slice: EID-049/EID-049-079.png    # 固定スライス（eid_dir 相対。test の症例 = holdout。Stage 1 sr / Stage 2 と同じ 1 枚）
+  pcd_slice: PCD-002/PCD-002-236.png     # パネル左端の PCD1024 代表（pcd1024_dir 相対。Stage 1 sr と同じ）
+  n_full_random: 1      # val の症例からランダムに 1 枚（epoch ごとに別）
+  display_hu_min: -1400
+  display_hu_max: 2100
+  preview_bits: 16
+  diff_range_hu: 300
+  tb_full_size: 512     # TB のフルパネルは列を 512 に縮小（ディスクの preview は 1024 のまま）
+  save_epoch_freq: 1    # 毎 epoch 重みとフル画像を保存（200 epoch × 4 ネット ≈ 200 × 180 MB ≈ 36 GB。足りなければ 5）
+  save_latest_freq: 2000   # 画像枚数（batch 4 → 500 step ごと）
