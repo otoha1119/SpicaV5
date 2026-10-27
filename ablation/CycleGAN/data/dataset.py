@@ -92,10 +92,25 @@ def _load_normalized(path, offset, hu_min, hu_max):
 # ---------------------------------------------------------------------------
 # 症例 → スライス一覧（stage1 CaseIndex の複製）
 # ---------------------------------------------------------------------------
+def load_eval_only():
+    """configs/eval_only.yaml の評価専用症例名（set）。学習系の列挙（drop_eval_only=True）だけが使う。ファイルが無い・形が違えばエラー（フォールバックしない）。[評価専用症例 2026-10-27]"""
+    import yaml
+    for d in Path(__file__).resolve().parents:
+        p = d / "configs" / "eval_only.yaml"
+        if p.is_file():
+            with open(p, encoding="utf-8") as f:
+                y = yaml.safe_load(f)
+            cases = y.get("cases") if isinstance(y, dict) else None
+            if not isinstance(cases, list) or not all(isinstance(c, str) for c in cases):
+                raise RuntimeError(f"{p}: cases は症例名（文字列）のリストであること")
+            return set(cases)
+    raise RuntimeError("configs/eval_only.yaml が見つかりません（評価専用症例の定義。リポジトリ直下の configs/ に置く）")
+
+
 class CaseIndex:
     EXT = ".png"
 
-    def __init__(self, root, cache_dir=None, cases=None, exclude=()):
+    def __init__(self, root, cache_dir=None, cases=None, exclude=(), drop_eval_only=False):
         root = Path(root)
         if not root.is_dir():
             raise RuntimeError(f"データディレクトリが存在しません: {root}")
@@ -116,6 +131,15 @@ class CaseIndex:
         self.slices = data["slices"]
         if not self.slices:
             raise RuntimeError(f"PNG が見つかりません: {root}")
+        self.eval_only_dropped = []  # 評価専用として外した症例（学習系だけ。推論は drop_eval_only=False で全症例を見る）
+        if drop_eval_only:
+            ev = load_eval_only()
+            self.eval_only_dropped = sorted(c for c in self.slices if c in ev)
+            self.slices = {c: v for c, v in self.slices.items() if c not in ev}
+            if self.eval_only_dropped:
+                print(f"[CaseIndex] {root}: 評価専用 {len(self.eval_only_dropped)} 症例を学習から除外 {self.eval_only_dropped}")
+            if not self.slices:
+                raise RuntimeError(f"評価専用を除くと症例が 0 になりました: {root}")
         self.disk_cases = sorted(self.slices.keys())
         if cases is not None:
             missing = [c for c in cases if c not in self.slices]
@@ -254,14 +278,14 @@ class CycleGANDataset(Dataset):
         dir_a, dir_b = Path(machine["eid1024_dir"]), Path(machine["pcd1024_dir"])
         self.dir_a, self.dir_b = dir_a, dir_b
         self.split = load_split(train["data.split_file"])
-        self.idx_a = CaseIndex(dir_a, cache_dir, cases=self.split["train"])
-        self.idx_a_val = CaseIndex(dir_a, cache_dir, cases=self.split["val"]) if self.split["val"] else None
+        self.idx_a = CaseIndex(dir_a, cache_dir, cases=self.split["train"], drop_eval_only=True)
+        self.idx_a_val = CaseIndex(dir_a, cache_dir, cases=self.split["val"], drop_eval_only=True) if self.split["val"] else None
         assigned = set(self.split["train"]) | set(self.split["val"]) | set(self.split["test"])
         unassigned = [c for c in self.idx_a.disk_cases if c not in assigned]
         if unassigned:
             raise RuntimeError(f"{dir_a} の症例が split_file のどのリストにも入っていません（分割を作り直す: bash start.sh split）: {unassigned[:10]}{' ...' if len(unassigned) > 10 else ''}（{len(unassigned)} 症例）")
         self.b_exclude = list(train["data.b_exclude_cases"])
-        self.idx_b = CaseIndex(dir_b, cache_dir, exclude=self.b_exclude)
+        self.idx_b = CaseIndex(dir_b, cache_dir, exclude=self.b_exclude, drop_eval_only=True)
         self.fixed_path = dir_a / train["log.full_slice"]
         if not self.fixed_path.is_file():
             raise RuntimeError(f"train.yaml log.full_slice が eid1024_dir の下にありません: {self.fixed_path}")
