@@ -48,7 +48,7 @@ def check_eid_split_on_disk(train, machine):
         split = load_eid_split(train["adv.eid_split_file"])
     except ConfigError as e:
         raise RuntimeError(str(e))
-    on_disk = list_case_names(machine["eid_dir"])
+    on_disk = list_case_names(machine["eid_dir"], drop_eval_only=True)  # 評価専用（configs/eval_only.yaml）は照合の対象外
     assigned = set(split["train"]) | set(split["val"]) | set(split["test"])
     unassigned = sorted(set(on_disk) - assigned)
     if unassigned:
@@ -91,7 +91,7 @@ class RealEIDDataset(Dataset):
 
         self.split = check_eid_split_on_disk(train, machine)  # 起動器でも検査済みだが、train.py 単独でも同じ規則で止まるように
         self.split_file = train["adv.eid_split_file"]
-        idx = CaseIndex(machine["eid_dir"], cache_dir)
+        idx = CaseIndex(machine["eid_dir"], cache_dir, drop_eval_only=True)
         self.cases = [c for c in self.split["train"] if c in idx.slices]  # train だけ。val / test のスライスは列挙結果を捨てる（読まない）
         empty = [c for c in self.split["train"] if c not in idx.slices]
         if empty:
