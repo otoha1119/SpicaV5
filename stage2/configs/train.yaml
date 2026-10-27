@@ -40,6 +40,6 @@ log:
   eid_slice: EID-049/EID-049-079.png    # 実 EID のテストスライス（eid_dir = EID_v5 からの相対パス）。毎 epoch 1 枚だけ 512 → 1024 に補間（eidlike1024_dir/manifest.yaml の方式）して U-Net に通す → 固定パネルの 4 列目
   n_full_random: 1        # epoch ごとに別のランダムスライス（**val だけ**から。学習に使ったスライスは記憶で良く見えるので汎化の目視にならない。ユーザー決定 2026-09-09）→ epoch_NNN/<slice>_{eidlike,pcd1024,pcdlike}.png, preview_random/, TB images/full/random（3 列）
   tb_full_size: 512       # TensorBoard の images/full/* のフル画像の一辺。1024 は TB で拡大が効かないので 512 に縮小して出す（ディスクの preview_*/ と epoch_NNN/ は 1024 のまま。ユーザー指示 2026-09-09）
-  preview_bits: 16        # preview_*/ のビット深度。16 = 表示範囲（stored 0〜3500）を 0..65535 に伸ばす（Stage 1 と同じ）| 8
+  preview_bits: 16        # preview_*/ のビット深度。16 = 表示範囲（stored 0〜4400）を 0..65535 に伸ばす（Stage 1 と同じ）| 8
   display_hu_min: -1400   # 表示の線形範囲（Stage 1 と同じ）。stored 0 = HU −1400 を黒
-  display_hu_max: 2100    # stored 3500 = HU 2100 を白。窓は掛けない
+  display_hu_max: 3000    # stored 4400 = HU 3000 を白。窓は掛けない
