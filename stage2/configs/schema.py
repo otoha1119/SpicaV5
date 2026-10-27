@@ -68,7 +68,7 @@ TRAIN = {
     "log.tb_full_size":            Key(int, "--tb_full_size",            "TensorBoard の images/full/* に出すフル画像の一辺（1024 は大きすぎて拡大が効かないので縮小して出す。512。ディスクの preview_*/ は縮小しない。2026-09-09）"),
     "log.n_full_random":           Key(int, "--n_full_random",           "epoch 末に書き出すランダムスライスの枚数（epoch ごとに別。val の症例だけから。0 で無し）"),
     "log.display_hu_min":          Key(int, "--display_hu_min",          "TensorBoard 画像の線形表示範囲の下限 HU（この値以下を黒）。Stage 1 と同じ −1400"),
-    "log.display_hu_max":          Key(int, "--display_hu_max",          "同上の上限 HU（この値以上を白）。Stage 1 と同じ 2100（stored 3500）"),
+    "log.display_hu_max":          Key(int, "--display_hu_max",          "同上の上限 HU（この値以上を白）。Stage 1 と同じ 3000（stored 4400）"),
 }
 
 # ---------------------------------------------------------------------------

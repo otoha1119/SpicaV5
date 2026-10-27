@@ -244,3 +244,8 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - `models/fidelity_gan_model.py`: `--launch_path` を追加し、`state.pth` に保存時の実効設定（launch の train / mode / machine）を `config` として入れる
 - `run_train.py`: 再開の基準を「最新の launch_resume_*.yaml」から「選んだ checkpoint の state.pth の config」に変更（失敗した起動の設定を次回に引き継がない）。config の無い古い run は従来どおり最新 launch。argv に `--launch_path` を付ける
 - `../start.sh`: 起動済みコンテナのマシン名（SPICA_MACHINE）・イメージ・データマウントを今回の指定と照合し、違えば止める。全 exec に `-e SPICA_MACHINE` を渡す。`tb` は「同じポートで全 run の logdir」が動いているときだけ起動済み扱いにし、run 単位のものは止めて起動し直す
+
+### 表示範囲の上限 HU 2100 → 3000（2026-10-28、ユーザー指示）
+
+- `log.display_hu_max`: 2100 → 3000（stored 0〜3500 → 0〜4400）。下限 −1400 は据え置き。TB の 8bit 表示・preview パネル・推論 / crop のパネルに共通で、Stage 1 / 2 / 3 と ablation（`ablation/*/configs/train.yaml`）を全部揃える。学習・推論の正規化窓（`data.hu_min` / `hu_max` = −1400 / 4096）と 16bit の生出力は変えない
+- 推論・crop は現在の `train.yaml` の表示設定を読むので、古い run の重みでも 3000 になる。既存 run を resume した学習中の TB / preview は `state.pth` の実効値（2100）のまま。揃えたいときは `--display_hu_max 3000` を付ける
