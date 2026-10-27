@@ -254,3 +254,8 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - `run_infer.py generator_argv`（`run_crop.py` も共用）: `G_MODE_BOOL_KEYS` に `residual`。launch に無ければ注意を出して false。`inference_dir.py` / `crop_patches.py` に `--residual` を追加し `build_generator` → `define_G` に渡す
 - `run_train.py prepare_resume`: checkpoint の config に `residual` が無ければ false（注意表示）。**再開で `residual` を変えるのは禁止**（ConfigError。重みの意味が変わる）
 - 入れていないもの（1 変更ずつ）: 最終 conv のゼロ初期化、和への soft clamp（値域逸脱で D が勝つ兆候が出てから）、G 構造の変更
+
+### 表示範囲の上限 HU 2100 → 3000（2026-10-28、ユーザー指示）
+
+- `log.display_hu_max`: 2100 → 3000（stored 0〜3500 → 0〜4400）。下限 −1400 は据え置き。TB の 8bit 表示・preview パネル・推論 / crop のパネルに共通で、Stage 1 / 2 / 3 と ablation（`ablation/*/configs/train.yaml`）を全部揃える。学習・推論の正規化窓（`data.hu_min` / `hu_max` = −1400 / 4096）と 16bit の生出力は変えない
+- 推論・crop は現在の `train.yaml` の表示設定を読むので、古い run の重みでも 3000 になる。既存 run を resume した学習中の TB / preview は `state.pth` の実効値（2100）のまま。揃えたいときは `--display_hu_max 3000` を付ける
