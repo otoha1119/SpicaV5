@@ -316,3 +316,8 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 旧 run の resume は「run 作成後に追加されたキーは今の yaml の値で補う」規則で通る（挙動が変わるのは TB の fixed 行だけ）。multi は dataset を共有するので両モデル同じ固定 patch
 - 検証（scratch venv + 合成 64 px、CPU、`run_train.py` 経由。テストコードはリポジトリに置かない）: crop 2 cases で 1 epoch → `images/fixed` が 2 行（高さ 2 patch 分）/ 無いスライス・はみ出す座標 → 起動時 ConfigError（メッセージに case 番号と側）/ `--fixed_patches foo` → 値域エラー / random → 従来どおり / multi 2 モデルでも通る
 
+
+### 表示範囲の上限 HU 2100 → 3000（2026-10-28、ユーザー指示）
+
+- `log.display_hu_max`: 2100 → 3000（stored 0〜3500 → 0〜4400）。下限 −1400 は据え置き。TB の 8bit 表示・preview パネル・推論 / crop のパネルに共通で、Stage 1 / 2 / 3 と ablation（`ablation/*/configs/train.yaml`）を全部揃える。学習・推論の正規化窓（`data.hu_min` / `hu_max` = −1400 / 4096）と 16bit の生出力は変えない
+- 推論・crop は現在の `train.yaml` の表示設定を読むので、古い run の重みでも 3000 になる。既存 run を resume した学習中の TB / preview は `state.pth` の実効値（2100）のまま。揃えたいときは `--display_hu_max 3000` を付ける

@@ -63,7 +63,7 @@ TRAIN = {
     "log.eid_slice":        Key(str,   "--eid_slice",      "パネルの右端に並べる EID の代表スライス（eid_dir からの相対パス。例 EID-001/EID-001-089.png）。固定。preview_fixed_<slice>/01_eid_<slice>.png にも 1 枚保存"),
     "log.n_full_random":    Key(int,   "--n_full_random",  "checkpoint 保存時にフル 512 で書き出すランダムスライスの枚数（epoch ごとに別のスライス。0 で無し）"),
     "log.display_hu_min":   Key(int,   "--display_hu_min", "表示用の線形範囲の下限 HU（この値以下を黒）"),
-    "log.display_hu_max":   Key(int,   "--display_hu_max", "表示用の線形範囲の上限 HU（この値以上を白）。stored 3500 = HU 2100"),
+    "log.display_hu_max":   Key(int,   "--display_hu_max", "表示用の線形範囲の上限 HU（この値以上を白）。stored 4400 = HU 3000"),
     "log.preview_bits":     Key(int,   "--preview_bits",   "output_images/preview_*/（[EID | EID-like | PCD | R + ゲージ] のパネルと個別画像、表示用）のビット深度。16 = 表示範囲を 0..65535 に伸ばす（プレビューで正しく見え階調も細かい）| 8"),
     "log.diff_range_hu":    Key(int,   "--diff_range_hu",  "差分パネル (G(z) − z) のカラー表示の ±範囲 HU（白 = 0、純青 = −範囲、純赤 = +範囲。util/residual_color.py。推論の *_R_color/ も同じ値）"),
     "log.save_epoch_freq":  Key(int,   "--save_epoch_freq", "checkpoint を保存する epoch 間隔"),

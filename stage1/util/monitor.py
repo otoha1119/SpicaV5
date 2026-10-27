@@ -32,7 +32,7 @@ junyanz の util/visualizer.py（wandb / HTML）は使わない。train.py は�
    固定スライスは名前が同じなので毎 epoch 同じ n（epoch 間で比較できる）、ランダムスライスもそのスライス名の seed（推論の sigma_mode random と同じ n になる）。
    学習中の 128 patch グリッド（log_images）は変更なし（netG(x) = n は毎回ランダム）。
 
-【表示の線形範囲】 TB の 8bit 表示と preview パネルは HU を [display_hu_min, display_hu_max] で線形に 0..白へ（窓は掛けない。既定 −1400..2100 HU = stored 0..3500）。
+【表示の線形範囲】 TB の 8bit 表示と preview パネルは HU を [display_hu_min, display_hu_max] で線形に 0..白へ（窓は掛けない。既定 −1400..3000 HU = stored 0..4400）。
    差分パネル（G(z) − z）はカラー: 白 = 0 HU（変化なし）、純青 = −diff_range_hu（G が HU を下げた）、純赤 = +diff_range_hu（上げた）。
    白から純色へ線形、範囲外は端の色で飽和（util/residual_color.py。2026-09-08 ユーザー確定）。グリッドの最下段に凡例（左 −range … 白 … 右 +range）。
 """

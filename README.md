@@ -109,7 +109,7 @@ git reset --hard
   best/…, best.txt                           bash start.sh best で作る（判定は目視。指標ができたら自動化）
   weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq（既定 1 = 毎 epoch）ごと
   output_images/epoch_NNN/    checkpoint（毎 epoch）ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit = HU が読める）
-  output_images/preview_fixed_<slice>/                固定スライス（train.yaml log.full_slice）の表示用（表示範囲 stored 0〜3500 を線形に、log.preview_bits の深度）
+  output_images/preview_fixed_<slice>/                固定スライス（train.yaml log.full_slice）の表示用（表示範囲 stored 0〜4400 を線形に、log.preview_bits の深度）
     00_pcd_<slice>.png, 01_eid_<eid_slice>.png        代表: PCD 入力と EID（log.eid_slice）。初回の checkpoint で 1 回だけ（名前順で先頭）
     epoch_NNN_eidlike.png, epoch_NNN_R_color.png      epoch ごとの EID-like（グレー）と R（カラー、下記）
     epoch_NNN_panel.png                               上を並べた [EID | EID-like | PCD | R + ゲージ]、各列の下にラベル。epoch 順に並べて見比べる
@@ -125,7 +125,7 @@ git reset --hard
 
 - ターミナル: tqdm バー（画像枚数単位。1 step = batch_size 枚）。末尾に D / G_GAN / G_fid と `d_in`（G(z) − z の平均絶対値 [HU]）。
 - TensorBoard（学習の起動器が **その run の `tb/` だけ**を logdir にして自動起動。前の run のものは止める。全 run を並べるときは `bash start.sh tb`。`machines.yaml` の `tb_port` で公開）: `loss/*`、`diag/*`（D_real、D_fake、d_in_HU）、`time/*`、`train/lr`、`images/current`、`images/fixed`（固定サンプル。128 patch グリッドは TB にだけ出す）、`images/full/<slice>`（checkpoint 時のフル 512）。横軸は総画像枚数。
-- 表示は窓を掛けず HU −1400〜2100（stored 0〜3500）を線形に黒〜白へ。差分パネル（R = G(z) − z）はカラーで、白 = 0 HU（変化なし）、純青 = −300 HU（G が HU を下げた）、純赤 = +300 HU（上げた）、白から純色へ線形、範囲外は端の色で飽和（`train.yaml` の `log.diff_range_hu`、実装は `stage1/util/residual_color.py`）。パネル（`stage1/util/panel.py`）は白い余白、各列の下にラベル帯（`EID` / `EID-like G(z) epoch NNN` / `PCD z` / `R = G(z) - z [HU]`）、R の右に小さな縦ゲージ（+300 … 0 … −300 の目盛り）。文字は cv2 の組み込みフォント（商用フォントはリポジトリに入れられないため）。TensorBoard は 8bit、`preview_*/` は RGB 3ch で `log.preview_bits`（16 = 表示範囲を 0〜65535 に伸ばす / 8）。16bit の `_R.png` はグレーの生データのまま（CT 論文の差分図の標準。図にするときは窓をキャプションに書く）。
+- 表示は窓を掛けず HU −1400〜3000（stored 0〜4400）を線形に黒〜白へ。差分パネル（R = G(z) − z）はカラーで、白 = 0 HU（変化なし）、純青 = −300 HU（G が HU を下げた）、純赤 = +300 HU（上げた）、白から純色へ線形、範囲外は端の色で飽和（`train.yaml` の `log.diff_range_hu`、実装は `stage1/util/residual_color.py`）。パネル（`stage1/util/panel.py`）は白い余白、各列の下にラベル帯（`EID` / `EID-like G(z) epoch NNN` / `PCD z` / `R = G(z) - z [HU]`）、R の右に小さな縦ゲージ（+300 … 0 … −300 の目盛り）。文字は cv2 の組み込みフォント（商用フォントはリポジトリに入れられないため）。TensorBoard は 8bit、`preview_*/` は RGB 3ch で `log.preview_bits`（16 = 表示範囲を 0〜65535 に伸ばす / 8）。16bit の `_R.png` はグレーの生データのまま（CT 論文の差分図の標準。図にするときは窓をキャプションに書く）。
 
 ## 8. 推論（`bash start.sh infer`）
 
@@ -233,7 +233,7 @@ Stage 1 推論出力 <run>/infer/<重み>/<入力>/<時刻>/full/<case>/<slice>.
 - **監視**: ターミナルは Stage 1 と同じ tqdm バー（画像枚数単位、末尾に loss、rmse、ssim）だけ。TensorBoard は scalar（`loss/mse`、`train/rmse`（正規化空間、0 へ）、`train/ssim`（1 へ）、`time/*`、`train/lr`、epoch 末の `val/rmse` / `val/ssim` / `val/psnr` と参照線 `val/rmse_input` / `val/ssim_input` / `val/psnr_input`（入力そのまま vs 教師）。2026-09-09 に RMSE / MAE の HU 表示を廃止。指標は `stage2/util/metrics.py`）、学習中の 128 patch グリッド（`images/current` / `images/fixed`、`log.n_images` 行 = 2）、epoch 末のフル画像パネル（`images/full/fixed` / `random`、実 EID だけの 2 列 `images/full/EID`。TB には `log.tb_full_size` = 512 に縮小して出す。ディスクの `preview_*/` は 1024 のまま）。`loss_log.txt` は print_freq ごとの損失と epoch 要約
 - **epoch 末のフル 1024 画像**（Stage 1 と同じ 2 系統。固定 = `log.full_slice` **`PCD-002/PCD-002-236.png`**（test の症例）、ランダム = `log.n_full_random` 枚（**val だけ**、epoch ごとに別。学習に使ったスライスは記憶で良く見えるので汎化の目視にならない）、実 EID テスト = `log.eid_slice` **`EID-049/EID-049-079.png`**（`eid_dir` の 512 を `eidlike1024_dir/manifest.yaml` の方式で 1 枚だけ補間して U-Net に通す。EID_v5 全件の 1024 化は約 200 GB になるのでファイルにしない）。すべて `train.yaml` で変更でき `--flag` で上書き可）:
   - `output_images/epoch_NNN/<slice>_{eidlike,pcd1024,pcdlike}.png`, `<eid_slice>_{eid1024,pcdlike}.png` — 生 uint16（stored = HU + 1400、HU が読める）
-  - `output_images/preview_fixed_<slice>/` — 表示用（stored 0〜3500 を線形に、`log.preview_bits` 16 / 8）: `00_eidlike1024_` / `01_pcd1024_` / `02_eid1024_`（代表、初回だけ）、`epoch_NNN_pcdlike.png`、`epoch_NNN_eid_pcdlike.png`、`epoch_NNN_panel.png` = **[EID-like1024 | PCD-like1024 | PCD1024 | 実 EID → PCD-like1024 | 実 EID1024（元）] の 5 列**（並びは 2026-09-10 ユーザー確定: 入力 → 出力 → 教師、右端に元の EID。`stage2/util/panel.py`。白余白・1px 枠・ラベル帯は Stage 1 と同じ）
+  - `output_images/preview_fixed_<slice>/` — 表示用（stored 0〜4400 を線形に、`log.preview_bits` 16 / 8）: `00_eidlike1024_` / `01_pcd1024_` / `02_eid1024_`（代表、初回だけ）、`epoch_NNN_pcdlike.png`、`epoch_NNN_eid_pcdlike.png`、`epoch_NNN_panel.png` = **[EID-like1024 | PCD-like1024 | PCD1024 | 実 EID → PCD-like1024 | 実 EID1024（元）] の 5 列**（並びは 2026-09-10 ユーザー確定: 入力 → 出力 → 教師、右端に元の EID。`stage2/util/panel.py`。白余白・1px 枠・ラベル帯は Stage 1 と同じ）
   - `output_images/preview_random/epoch_NNN_<slice>.png` — ランダムスライスの 3 列パネル [入力 | 出力 | 教師] だけ
   - 容量: 1 epoch あたり生 16bit 約 16 MB + preview（16bit）約 50 MB。100 epoch で約 6.5 GB（重み約 12 GB とは別）
 - **run ディレクトリ**（正は `stage2/util/run_paths.py`）: `launch.yaml`（+ `launch_resume_*.yaml`）、`dataset_info.yaml`、`loss_log.txt`、`latest/` `best/`（val の `log.best_metric` 更新で自動、`bash start2.sh best` で手動。由来は `best.txt`）`weights/epoch_NNN/`（各 `net_G.pth` + `state.pth`、`.tmp` → rename で原子的）、`output_images/`、`tb/`
