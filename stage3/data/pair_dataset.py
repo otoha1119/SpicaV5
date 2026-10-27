@@ -23,7 +23,7 @@ MANIFEST = "manifest.yaml"  # bash start2.sh dataset が eidlike1024_dir に書�
 def check_split_on_disk(train, machine):
     """train.yaml の症例リストとディスク（eidlike1024_dir / pcd1024_dir 直下の症例フォルダ）を照合する（stage2 と同じ規則）。run_train.py が run ディレクトリを作る前に呼ぶ。"""
     train_cases, val_cases, test_cases = train["data.train_cases"], train["data.val_cases"], train["data.test_cases"]
-    on_in, on_pcd = list_case_names(machine["eidlike1024_dir"]), list_case_names(machine["pcd1024_dir"])
+    on_in, on_pcd = list_case_names(machine["eidlike1024_dir"], drop_eval_only=True), list_case_names(machine["pcd1024_dir"], drop_eval_only=True)  # 評価専用（configs/eval_only.yaml）は照合の対象外
     assigned = set(train_cases) | set(val_cases) | set(test_cases)
     unassigned = sorted((set(on_in) | set(on_pcd)) - assigned)
     if unassigned:
@@ -118,8 +118,8 @@ class PairDataset(Dataset):
         train_cases, val_cases, test_cases = train["data.train_cases"], train["data.val_cases"], train["data.test_cases"]
 
         check_split_on_disk(train, machine)
-        idx_in = CaseIndex(machine["eidlike1024_dir"], cache_dir)
-        idx_pcd = CaseIndex(machine["pcd1024_dir"], cache_dir)
+        idx_in = CaseIndex(machine["eidlike1024_dir"], cache_dir, drop_eval_only=True)
+        idx_pcd = CaseIndex(machine["pcd1024_dir"], cache_dir, drop_eval_only=True)
         for kind, cases in (("train_cases", train_cases), ("val_cases", val_cases)):
             empty = [c for c in cases if c not in idx_in.slices or c not in idx_pcd.slices]
             if empty:
