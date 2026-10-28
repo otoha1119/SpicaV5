@@ -18,6 +18,7 @@ import itertools
 import os
 import random
 import shutil
+import time
 
 import numpy as np
 import torch
@@ -30,6 +31,37 @@ from util.run_paths import CKPT_KINDS, NET_NAMES, ckpt_dir
 
 def _to_tuple(x):
     return tuple(_to_tuple(v) for v in x) if isinstance(x, (list, tuple)) else x
+
+
+def _swap_dirs(tmp, final, old, retries=10, wait=3.0):
+    """tmp を final に差し替える。既存の final は old に退避してから消す。改名が拒否されたら wait 秒待って再試行し、最後はファイル単位の置き換えに落とす。
+    final が無く old だけあるのは「退避まで済んで差し替えで止まった」状態なので、old は直前の checkpoint として消さない。戻り値: 成功したか。"""
+    err = None
+    for _ in range(retries):
+        try:
+            if final.exists() and old.exists():  # 前回の中断の残骸
+                shutil.rmtree(old)
+            if final.exists():
+                os.replace(final, old)
+            os.replace(tmp, final)
+            if old.exists():
+                shutil.rmtree(old, ignore_errors=True)
+            return True
+        except PermissionError as e:
+            err = e
+            time.sleep(wait)
+    try:  # フォールバック: ディレクトリは触らず、中のファイルを 1 つずつ置き換える（フォルダのハンドルが掴まれていても通る）
+        final.mkdir(parents=True, exist_ok=True)
+        for f in sorted(tmp.iterdir()):
+            os.replace(f, final / f.name)
+        shutil.rmtree(tmp, ignore_errors=True)
+        if old.exists():
+            shutil.rmtree(old, ignore_errors=True)
+        print(f"[save] 注意: {final} のフォルダ改名が拒否されたのでファイル単位で置き換えた（{err}）", flush=True)
+        return True
+    except (PermissionError, FileNotFoundError) as e2:
+        print(f"[save] 警告: checkpoint {final} を保存できなかった（{e2}）。学習は続け、次回の保存で再試行する。{tmp} に今回の重みが残っている", flush=True)
+        return False
 
 
 class CycleGANModel:
@@ -206,21 +238,18 @@ class CycleGANModel:
         }
 
     def save(self, run_dir, tag):
+        """重み 4 つと state.pth を**同じ重みディレクトリに原子的に**保存する（<dir>.tmp に書く → 既存を .old に → rename → .old を消す）。
+        Windows のバインドマウント（Docker Desktop）では、フォルダ内のファイルを別プロセス（Explorer / ウイルス対策 / 同期ソフト）が掴んでいるとフォルダの改名が
+        PermissionError になる（PC3 で epoch 52 に発生、2026-10-28）。_swap_dirs が再試行し、それでも駄目ならファイル単位で置き換え、それも駄目なら**学習を止めずに警告**して次回の保存に委ねる。"""
         final = ckpt_dir(run_dir, tag)
         tmp, old = final.with_name(final.name + ".tmp"), final.with_name(final.name + ".old")
         if tmp.exists():
-            shutil.rmtree(tmp)
-        tmp.mkdir(parents=True)
+            shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True, exist_ok=True)
         for name, net in self.nets().items():
             torch.save(net.state_dict(), tmp / f"net_{name}.pth")
         torch.save(self._state(), tmp / "state.pth")
-        if old.exists():
-            shutil.rmtree(old)
-        if final.exists():
-            os.replace(final, old)
-        os.replace(tmp, final)
-        if old.exists():
-            shutil.rmtree(old)
+        _swap_dirs(tmp, final, old)
 
     def load_weights(self, weight_dir):
         for name, net in self.nets().items():
