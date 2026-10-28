@@ -357,6 +357,7 @@ class CTDataset(BaseDataset):
         parser.add_argument("--sampling", type=str, default=None, choices=["random", "paper", "aligned"], help="random=ケース1 完全ランダム | paper=論文の固定 40 patch/画像 | aligned=ケース2 (未実装)")
         parser.add_argument("--samples_per_epoch", type=int, default=None, help="sampling=random のときの 1 epoch のサンプル数")
         parser.add_argument("--patches_per_slice", type=int, default=None, help="sampling=random で 1 回読んだスライスから連続して切る patch 数（1 = 従来）")
+        parser.add_argument("--use_eval_only_cases", action="store_true", help="configs/eval_only.yaml の評価専用症例も学習に使う（通常は除外。DataSet_new を学習に使う実験用）")
         parser.add_argument("--patch_size", type=int, default=None, help="patch の一辺。0 でフル画像 (テスト・推論用)")
         parser.add_argument("--patch_stride", type=int, default=None, help="patch 左上座標の刻み。1=任意位置、8=論文のグリッド")
         parser.add_argument("--patches_per_image", type=int, default=None, help="sampling=paper のときの 1 画像あたり patch 数 (論文 40)")
@@ -393,21 +394,21 @@ class CTDataset(BaseDataset):
         self.idx_a_val = None   # sr: val 症例の A（epoch 末のランダムプレビュー専用。学習には使わない）
         if self.task == "sr":
             self.split, b_exclude = self._load_sr_split(opt)
-            self.idx_a = CaseIndex(dir_a, cache_dir, cases=self.split["train"], drop_eval_only=True)
-            self.idx_a_val = CaseIndex(dir_a, cache_dir, cases=self.split["val"], drop_eval_only=True) if self.split["val"] else None
+            self.idx_a = CaseIndex(dir_a, cache_dir, cases=self.split["train"], drop_eval_only=not opt.use_eval_only_cases)
+            self.idx_a_val = CaseIndex(dir_a, cache_dir, cases=self.split["val"], drop_eval_only=not opt.use_eval_only_cases) if self.split["val"] else None
             unassigned = [c for c in self.idx_a.disk_cases if c not in set(self.split["train"]) | set(self.split["val"]) | set(self.split["test"])]
             if unassigned:
                 raise RuntimeError(f"{dir_a} の症例が split_file のどのリストにも入っていません（分割を作り直す: bash start.sh split）: {unassigned[:10]}{' ...' if len(unassigned) > 10 else ''}（{len(unassigned)} 症例）")
             if not self.full_image:
                 if not os.path.isdir(dir_b):
                     raise RuntimeError(f"学習には {dir_b} が必要です")
-                self.idx_b = CaseIndex(dir_b, cache_dir, exclude=b_exclude, drop_eval_only=True)
+                self.idx_b = CaseIndex(dir_b, cache_dir, exclude=b_exclude, drop_eval_only=not opt.use_eval_only_cases)
             else:
                 self.idx_b = self.idx_a
         else:
-            self.idx_a = CaseIndex(dir_a, cache_dir, drop_eval_only=True)
+            self.idx_a = CaseIndex(dir_a, cache_dir, drop_eval_only=not opt.use_eval_only_cases)
             if os.path.isdir(dir_b):
-                self.idx_b = CaseIndex(dir_b, cache_dir, drop_eval_only=True)
+                self.idx_b = CaseIndex(dir_b, cache_dir, drop_eval_only=not opt.use_eval_only_cases)
             else:
                 if not self.full_image:
                     raise RuntimeError(f"学習には {dir_b} が必要です")

@@ -33,6 +33,7 @@ data:
   samples_per_epoch: 24000   # sampling=random の epoch 長。論文の patch 集合と同数（batch 40 → 600 iter/epoch）
   patches_per_slice: 8       # 1 回読んだスライス（A / B それぞれ）から連続して切る patch 数（random のみ。位置は毎回独立）。1 = patch ごとに別スライス（2026-10-12 以前の挙動）。
                              # 8 で読み出し・デコードが 1/8（PC1 の sr で大幅高速化。degrade にも共通して効くのでユーザー指示で既定を 8 に。2026-10-12）
+  use_eval_only_cases: false   # true で configs/eval_only.yaml の評価専用症例も学習に使う。通常 false。評価専用症例そのものを学習データにするときだけ --use_eval_only_cases（2026-10-28）
   hu_offset: 1400       # stored = HU + 1400
   hu_min: -1400         # 正規化窓 [−1400, 4096] → [−1, 1]
   hu_max: 4096

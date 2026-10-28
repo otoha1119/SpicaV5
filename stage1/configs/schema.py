@@ -47,6 +47,7 @@ TRAIN = {
     "data.patch_seed":      Key(int,   "--patch_seed",     "sampling=paper の固定集合、--serial_batches 時の再現用 seed"),
     "data.samples_per_epoch": Key(int, "--samples_per_epoch", "sampling=random の 1 epoch のサンプル数。論文の patch 集合 24,000 に合わせる"),
     "data.patches_per_slice": Key(int, "--patches_per_slice", "sampling=random で 1 回読んだスライス（A / B それぞれ）から連続して切る patch 数。1 = patch ごとに別スライス（2026-10-12 以前）。大きいほど読み出し・デコードが 1/k（既定 8。PC1 の sr で大幅高速化、degrade も同じ。2026-10-12）。位置は patch ごとに独立"),
+    "data.use_eval_only_cases": Key(bool, "--use_eval_only_cases", "true で configs/eval_only.yaml の評価専用症例も学習に使う（通常 false = 除外）。評価専用症例そのものを学習データにした実験（DataSet_new、2026-10-28）だけ true。--use_eval_only_cases で上書き"),
     "data.hu_offset":       Key(int,   "--hu_offset",      "stored = HU + hu_offset（1400）"),
     "data.hu_min":          Key(int,   "--hu_min",         "正規化窓の下限 HU（−1400）"),
     "data.hu_max":          Key(int,   "--hu_max",         "正規化窓の上限 HU（4096）"),
