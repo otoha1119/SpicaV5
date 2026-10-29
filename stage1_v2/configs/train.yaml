@@ -10,6 +10,8 @@ optim:
   n_epochs: 100         # lr 一定（本家 n_epochs）
   n_epochs_decay: 100   # 線形に 0 へ（本家 n_epochs_decay）。合計 200 epoch
   seed: 0
+  precision: bf16       # CUDA autocast。重み・optimizer state は FP32 のまま
+  compile: true         # CUDA で4ネットワークを torch.compile(max-autotune)。初回だけコンパイルで遅い
 
 loss:
   gan_mode: lsgan       # 本家既定（論文 Sec. 4 least-squares）。vanilla で log 形

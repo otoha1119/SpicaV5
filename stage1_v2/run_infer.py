@@ -17,7 +17,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import INFER, MACHINE, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate, validate_shared  # noqa: E402
+from configs.schema import INFER, LEGACY_TRAIN_DEFAULTS, MACHINE, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate, validate_shared  # noqa: E402
 from util.run_paths import STAGE, DATASET_INFO_FILE, INFER_WEIGHT, LAUNCH_FILE, checkpoints_root, find_run_dir, infer_output_dir, latest_launch  # noqa: E402
 
 G_KEYS = {"network.netG": "--netG", "network.ngf": "--ngf", "network.norm": "--norm", "data.hu_offset": "--hu_offset", "data.hu_min": "--hu_min", "data.hu_max": "--hu_max"}
@@ -82,6 +82,9 @@ def main():
         launch = load_yaml(launch_path)
         if launch.get("stage") != STAGE:
             raise ConfigError(f"{launch_path} は {STAGE} の run ではありません")
+        # BF16 / compile 導入前の launch も推論可能に保つ。推論器が使うのは G の構造だけ。
+        for key, value in LEGACY_TRAIN_DEFAULTS.items():
+            launch["train"].setdefault(key, value)
         ltrain = validate("train(launch)", launch["train"], TRAIN)
         info_path = run_dir / DATASET_INFO_FILE
         info = load_yaml(info_path)

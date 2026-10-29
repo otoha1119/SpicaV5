@@ -19,7 +19,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import MACHINE, TRAIN, ConfigError, apply_overrides, check_train_values, validate, validate_shared  # noqa: E402
+from configs.schema import LEGACY_TRAIN_DEFAULTS, MACHINE, TRAIN, ConfigError, apply_overrides, check_train_values, validate, validate_shared  # noqa: E402
 from util.run_paths import STAGE, CKPT_KINDS, LAUNCH_FILE, checkpoints_root, ckpt_path, latest_launch, run_name, saved_tags  # noqa: E402
 
 SHAPE_KEYS = ("network.netG", "network.ngf", "network.ndf", "network.norm", "network.n_layers_D")  # 重みの形。再開で変えられない
@@ -114,9 +114,13 @@ def prepare_resume(a, train_yaml, machine_yaml, overrides, now):
         for section, cur, schema in (("train", train_yaml, TRAIN), ("machine", machine_yaml, MACHINE)):
             missing = [k for k in schema if k not in saved[section]]
             if missing:
-                print(f"[run_train] 注意: run の {section} に無いキー（run 作成後に追加）は今の yaml の値を使う: " + ", ".join(f"{k}={cur[k]!r}" for k in missing))
                 for k in missing:
-                    saved[section][k] = cur[k]
+                    if section == "train" and k in LEGACY_TRAIN_DEFAULTS:
+                        saved[section][k] = LEGACY_TRAIN_DEFAULTS[k]
+                        print(f"[run_train] 互換移行: 旧runに無い {k} は従来動作 {saved[section][k]!r} とする（変更は対応する --flag で明示）")
+                    else:
+                        saved[section][k] = cur[k]
+                        print(f"[run_train] 注意: run の {section} に無いキー（run 作成後に追加）は今の yaml の値を使う: {k}={cur[k]!r}")
             obsolete = [k for k in saved[section] if k not in schema]
             if obsolete:
                 print(f"[run_train] 注意: run の {section} にある廃止キーは無視する: " + ", ".join(f"{k}={saved[section][k]!r}" for k in obsolete))

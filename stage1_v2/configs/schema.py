@@ -30,6 +30,8 @@ TRAIN = {
     "optim.n_epochs":        Key(int,   "--n_epochs",        "lr 一定の epoch 数。本家 100"),
     "optim.n_epochs_decay":  Key(int,   "--n_epochs_decay",  "lr を 0 へ線形減衰させる epoch 数。本家 100。合計 200 epoch"),
     "optim.seed":            Key(int,   "--seed",            "python / numpy / torch の乱数 seed（再現条件）。cudnn.benchmark は有効なので完全決定ではない"),
+    "optim.precision":       Key(str,   "--precision",       "演算精度: fp32 | bf16。bf16 は autocast を使い、重み・optimizer state は FP32 のまま保持する"),
+    "optim.compile":         Key(bool,  "--compile",         "CUDA で4ネットワークを torch.compile(mode='max-autotune') する。初回 iteration はコンパイルのため遅い"),
     # loss（CycleGAN 論文 Eq. 3: L_GAN(G, D_Y) + L_GAN(F, D_X) + λ L_cyc(G, F)。+ 本家の identity loss）
     "loss.gan_mode":         Key(str,   "--gan_mode",        "lsgan（本家既定 = 論文 Sec. 4 \"we replace the negative log likelihood objective by a least-squares loss\"）| vanilla（log 形）"),
     "loss.lambda_A":         Key(float, "--lambda_A",        "forward cycle ‖F(G(x)) − x‖₁ の重み（本家 10.0 = 論文 λ = 10）"),
@@ -106,6 +108,11 @@ NORMS = ("instance", "batch")
 INIT_TYPES = ("normal", "xavier", "kaiming", "orthogonal")
 GPU_GENS = (0, 30, 40, 50)
 SAMPLINGS = ("random", "paper", "aligned")
+PRECISIONS = ("fp32", "bf16")
+
+# この2項目が追加される前の checkpoint / launch を読むためだけの移行値。
+# 新規 run の既定値は train.yaml にあり、通常の設定欠落を暗黙補完する用途には使わない。
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False}
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +309,7 @@ def check_train_values(train, machine):
     if train["optim.n_epochs"] < 1: P.append("optim.n_epochs ≥ 1")
     if train["optim.n_epochs_decay"] < 0: P.append("optim.n_epochs_decay ≥ 0")
     if train["optim.seed"] < 0: P.append("optim.seed ≥ 0")
+    if train["optim.precision"] not in PRECISIONS: P.append(f"optim.precision は {PRECISIONS}")
     if train["loss.gan_mode"] not in GAN_MODES: P.append(f"loss.gan_mode は {GAN_MODES}")
     for k in ("lambda_A", "lambda_B", "lambda_identity"):
         if train[f"loss.{k}"] < 0: P.append(f"loss.{k} ≥ 0")

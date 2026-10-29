@@ -67,7 +67,10 @@ def main():
     model = CycleGANModel(train, machine, device, launch_config={"train": dict(train), "machine": dict(machine)})
     npar = model.n_params()
     print(f"[train] CycleGAN {train['network.netG']} norm {train['network.norm']} gan {train['loss.gan_mode']} lambda_A/B {train['loss.lambda_A']}/{train['loss.lambda_B']} idt {train['loss.lambda_identity']} | "
-          + " ".join(f"{k} {v / 1e6:.2f}M" for k, v in npar.items()) + f" | device {device}")
+          + " ".join(f"{k} {v / 1e6:.2f}M" for k, v in npar.items())
+          + f" | precision {model.precision} | compile {model.compile_enabled}"
+          + (" (requested, CUDA only)" if model.compile_requested and not model.compile_enabled else "")
+          + f" | device {device}")
     if a.resume_state:
         model.load_weights(Path(a.resume_state).parent)
         model.resume(a.resume_state, a.epoch_count)

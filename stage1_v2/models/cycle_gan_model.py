@@ -73,6 +73,10 @@ class CycleGANModel:
         self.is_train = is_train
         self.launch_config = launch_config
         self.hu_per_unit = (train["data.hu_max"] - train["data.hu_min"]) / 2.0
+        self.precision = train["optim.precision"]
+        self.use_bf16 = self.precision == "bf16"
+        self.compile_requested = train["optim.compile"]
+        self.compile_enabled = self.compile_requested and device.type == "cuda"
         # 本家 __init__: define networks (both Generators and discriminators)
         self.netG_A = networks.build_G(train, device)  # G: A → B
         self.netG_B = networks.build_G(train, device)  # F: B → A
@@ -80,6 +84,11 @@ class CycleGANModel:
         if is_train:
             self.netD_A = networks.build_D(train, device)  # D_Y
             self.netD_B = networks.build_D(train, device)  # D_X
+            if self.compile_enabled:
+                # nn.Module.compile は module identity と state_dict のキーを保ったまま
+                # __call__ をコンパイルするため、既存 checkpoint と互換。
+                for net in self.nets().values():
+                    net.compile(mode="max-autotune")
             self.fake_A_pool = ImagePool(train["loss.pool_size"])
             self.fake_B_pool = ImagePool(train["loss.pool_size"])
             self.criterionGAN = networks.GANLoss(train["loss.gan_mode"]).to(device)
@@ -121,6 +130,10 @@ class CycleGANModel:
         for net in self.nets().values():
             net.train(flag)
 
+    def _autocast(self):
+        """BF16 は GradScaler 不要。重みと optimizer state は FP32 のまま。"""
+        return torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16)
+
     # ------------------------------------------------------------------ 本家と同じメソッド構成
     def set_input(self, input):
         self.real_A = input["A"].to(self.device, non_blocking=True)
@@ -140,16 +153,17 @@ class CycleGANModel:
         pred_fake = netD(fake.detach())
         loss_D_fake = self.criterionGAN(pred_fake, False)
         loss_D = (loss_D_real + loss_D_fake) * 0.5
-        loss_D.backward()
         return loss_D
 
     def backward_D_A(self):
         fake_B = self.fake_B_pool.query(self.fake_B)
         self.loss_D_A = self.backward_D_basic(self.netD_A, self.real_B, fake_B)
+        return self.loss_D_A
 
     def backward_D_B(self):
         fake_A = self.fake_A_pool.query(self.fake_A)
         self.loss_D_B = self.backward_D_basic(self.netD_B, self.real_A, fake_A)
+        return self.loss_D_B
 
     def backward_G(self):
         """Calculate the loss for generators G_A and G_B（本家）"""
@@ -174,21 +188,26 @@ class CycleGANModel:
         self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * lambda_A
         # Backward cycle loss || G_A(G_B(B)) - B||
         self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
-        # combined loss and calculate gradients
+        # combined loss（backward は autocast context の外で行う）
         self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B
-        self.loss_G.backward()
+        return self.loss_G
 
     def optimize_parameters(self):
         """1 iteration: forward → G 更新 → D 更新（本家と同じ順序）"""
-        self.forward()
         self.set_requires_grad([self.netD_A, self.netD_B], False)
-        self.optimizer_G.zero_grad()
-        self.backward_G()
+        self.optimizer_G.zero_grad(set_to_none=True)
+        with self._autocast():
+            self.forward()
+            self.backward_G()
+        self.loss_G.backward()
         self.optimizer_G.step()
         self.set_requires_grad([self.netD_A, self.netD_B], True)
-        self.optimizer_D.zero_grad()
-        self.backward_D_A()
-        self.backward_D_B()
+        self.optimizer_D.zero_grad(set_to_none=True)
+        with self._autocast():
+            self.backward_D_A()
+            self.backward_D_B()
+            loss_D = self.loss_D_A + self.loss_D_B
+        loss_D.backward()
         self.optimizer_D.step()
         with torch.no_grad():
             d_in_hu = float((self.fake_B.detach() - self.real_A).abs().mean()) * self.hu_per_unit
@@ -203,21 +222,24 @@ class CycleGANModel:
         """x: (N,1,H,W) 正規化済み → G_A(x)（同じ大きさ）。eval で通す（InstanceNorm は train / eval で同じ）。"""
         was = self.netG_A.training
         self.netG_A.eval()
-        y = self.netG_A(x.to(self.device))
+        with self._autocast():
+            y = self.netG_A(x.to(self.device))
         self.netG_A.train(was)
-        return y
+        return y.float()
 
     @torch.no_grad()
     def cycle_views(self, batch):
         """表示用: バッチ先頭 n 枚の fake_B / rec_A / fake_A / rec_B（eval で通す）。"""
         self.train_mode(False)
         a, b = batch["A"].to(self.device), batch["B"].to(self.device)
-        fake_B = self.netG_A(a)
-        rec_A = self.netG_B(fake_B)
-        fake_A = self.netG_B(b)
-        rec_B = self.netG_A(fake_A)
+        with self._autocast():
+            fake_B = self.netG_A(a)
+            rec_A = self.netG_B(fake_B)
+            fake_A = self.netG_B(b)
+            rec_B = self.netG_A(fake_A)
         self.train_mode(True)
-        return {"A": a, "fake_B": fake_B, "rec_A": rec_A, "B": b, "fake_A": fake_A, "rec_B": rec_B}
+        return {"A": a, "fake_B": fake_B.float(), "rec_A": rec_A.float(),
+                "B": b, "fake_A": fake_A.float(), "rec_B": rec_B.float()}
 
     # ------------------------------------------------------------------ 保存 / 再開
     def _state(self):
