@@ -13,13 +13,13 @@ optim:
 
 loss:
   gan_mode: lsgan       # 本家既定（論文 Sec. 4 least-squares）。vanilla で log 形
-  lambda_A: 10.0        # forward cycle（本家 10 = 論文 λ 10）
-  lambda_B: 10.0        # backward cycle
+  lambda_A: 20.0        # forward cycle（本家10から増加。旧条件は --lambda_A 10 --lambda_B 10）
+  lambda_B: 20.0        # backward cycle（同上）
   lambda_identity: 0.5  # 本家既定 0.5（論文の一般目的関数には無い。0 で無し）
   pool_size: 400        # 既存の成功 run と同じ
 
 network:
-  netG: resnet_9blocks  # 本家既定（256×256 用）
+  netG: wavelet_resnet_9blocks  # 2段Haar DWT/IDWT。LL/LH/HL/HHを全て深層へ通す
   ngf: 64
   ndf: 64
   norm: instance        # 本家既定 = 論文

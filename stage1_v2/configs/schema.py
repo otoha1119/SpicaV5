@@ -37,7 +37,7 @@ TRAIN = {
     "loss.lambda_identity":  Key(float, "--lambda_identity", "identity loss の重み（‖G(y) − y‖₁ × λ_B × これ + ‖F(x) − x‖₁ × λ_A × これ）。本家既定 0.5（論文 Sec. 5.2 の painting→photo で 0.5λ。一般目的関数 Eq. 3 には無い）。0 で無し"),
     "loss.pool_size":        Key(int,   "--pool_size",       "D 用の ImagePool（生成画像の履歴）の大きさ。本家 50（論文 Sec. 4 \"keep an image buffer that stores the 50 previously created images\"）。0 で無し"),
     # network
-    "network.netG":          Key(str,   "--netG",            "G_A / G_B の構造: resnet_9blocks（本家既定、論文 256×256 用）| resnet_6blocks"),
+    "network.netG":          Key(str,   "--netG",            "G_A / G_B の構造: resnet_9blocks（本家既定）| resnet_6blocks | wavelet_resnet_9blocks（2段Haar、全4帯域を深層へ通す独自変種）"),
     "network.ngf":           Key(int,   "--ngf",             "G の基本チャネル数（本家 64）"),
     "network.ndf":           Key(int,   "--ndf",             "D 1 層目のチャネル数（本家 64）"),
     "network.norm":          Key(str,   "--norm",            "正規化層: instance（本家既定 = 論文）| batch"),
@@ -101,7 +101,7 @@ INFER = {
 }
 
 GAN_MODES = ("lsgan", "vanilla")
-NETGS = ("resnet_9blocks", "resnet_6blocks")
+NETGS = ("resnet_9blocks", "resnet_6blocks", "wavelet_resnet_9blocks")
 NORMS = ("instance", "batch")
 INIT_TYPES = ("normal", "xavier", "kaiming", "orthogonal")
 GPU_GENS = (0, 30, 40, 50)

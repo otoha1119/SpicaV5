@@ -2,6 +2,7 @@
 2026-10-27 に必要分だけ複製した。構造は変えていない。
 
   ResnetGenerator        : 本家 resnet_9blocks / resnet_6blocks（7×7 conv → 2 段 downsampling → ResnetBlock × n → 2 段 upsampling（ConvTranspose）→ 7×7 conv → Tanh）。論文 Sec. 7.2（256×256 用に 9 blocks）
+  WaveletResnetGenerator : stride-2 Conv / ConvTranspose を固定 Haar DWT / IDWT に置換した独自変種。各 DWT の LL/LH/HL/HH は全て学習可能 Conv と ResNet body に通し、生の高周波 skip は作らない
   ResnetBlock            : 本家
   NLayerDiscriminator    : 本家 basic（70×70 PatchGAN、n_layers 3）。論文 Sec. 7.2
   GANLoss                : 本家（lsgan = MSE が既定 = 論文 Sec. 4、vanilla = BCEWithLogits）
@@ -12,6 +13,7 @@ import functools
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn import init
 from torch.optim import lr_scheduler
 
@@ -143,6 +145,111 @@ class ResnetBlock(nn.Module):
 
 
 ###############################################################################
+# WaveletResnetGenerator（独自変種）
+###############################################################################
+def _haar_kernels():
+    """正規直交 2-D Haar の LL/LH/HL/HH カーネル（各 2×2）。"""
+    low = torch.tensor([1.0, 1.0])
+    high = torch.tensor([1.0, -1.0])
+    return torch.stack(
+        [torch.outer(low, low), torch.outer(low, high), torch.outer(high, low), torch.outer(high, high)]
+    ) * 0.5
+
+
+class HaarDWT(nn.Module):
+    """x: N,C,H,W → subbands: N,4C,H/2,W/2。4帯域を捨てずチャネルごとに並べる。"""
+
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("kernel", _haar_kernels().unsqueeze(1))  # 4,1,2,2
+
+    def forward(self, x):
+        n, c, h, w = x.shape
+        if h % 2 or w % 2:
+            raise ValueError(f"Haar DWT の入力 H/W は偶数が必要: {(h, w)}")
+        weight = self.kernel.repeat(c, 1, 1, 1)
+        return F.conv2d(x, weight, stride=2, groups=c).view(n, 4 * c, h // 2, w // 2)
+
+
+class HaarIDWT(nn.Module):
+    """subbands: N,4C,h,w → x: N,C,2h,2w。HaarDWT の厳密な逆変換。"""
+
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("kernel", _haar_kernels().unsqueeze(1))
+
+    def forward(self, x):
+        four_c = x.shape[1]
+        if four_c % 4:
+            raise ValueError(f"Haar IDWT の入力チャネルは 4 の倍数が必要: {four_c}")
+        c = four_c // 4
+        weight = self.kernel.repeat(c, 1, 1, 1)
+        return F.conv_transpose2d(x, weight, stride=2, groups=c)
+
+
+class WaveletResnetGenerator(nn.Module):
+    """2段の全帯域 Haar DWT/IDWT を使う ResNet generator。
+
+    各DWT後の4C（LL/LH/HL/HH）はまとめて学習可能な3×3 Convへ入力する。
+    Stage 1のWaveletGeneratorと違いHFをdecoderへ直結せず、全帯域をResNet bodyへ通す。
+    """
+
+    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=9, padding_type="reflect"):
+        assert n_blocks >= 0
+        super().__init__()
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        self.stem = nn.Sequential(
+            nn.ReflectionPad2d(3),
+            nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0, bias=use_bias),
+            norm_layer(ngf),
+            nn.ReLU(True),
+        )
+        self.dwt = HaarDWT()
+        self.down = nn.ModuleList(
+            [
+                nn.Sequential(nn.Conv2d(4 * ngf, 2 * ngf, 3, padding=1, bias=use_bias), norm_layer(2 * ngf), nn.ReLU(True)),
+                nn.Sequential(nn.Conv2d(8 * ngf, 4 * ngf, 3, padding=1, bias=use_bias), norm_layer(4 * ngf), nn.ReLU(True)),
+            ]
+        )
+        self.body = nn.Sequential(
+            *[
+                ResnetBlock(4 * ngf, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)
+                for _ in range(n_blocks)
+            ]
+        )
+        # IDWTへ渡す4帯域をConvで全て生成する。encoder側subbandへのskipは持たない。
+        self.up = nn.ModuleList(
+            [
+                nn.Conv2d(4 * ngf, 8 * ngf, 3, padding=1, bias=use_bias),
+                nn.Conv2d(2 * ngf, 4 * ngf, 3, padding=1, bias=use_bias),
+            ]
+        )
+        self.idwt = HaarIDWT()
+        self.up_norm_act = nn.ModuleList(
+            [
+                nn.Sequential(norm_layer(2 * ngf), nn.ReLU(True)),
+                nn.Sequential(norm_layer(ngf), nn.ReLU(True)),
+            ]
+        )
+        self.head = nn.Sequential(nn.ReflectionPad2d(3), nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0), nn.Tanh())
+
+    def forward(self, x):
+        if x.shape[-2] % 4 or x.shape[-1] % 4:
+            raise ValueError(f"2段Haar DWTの入力H/Wは4の倍数が必要: {tuple(x.shape[-2:])}")
+        h = self.stem(x)
+        for down in self.down:
+            h = down(self.dwt(h))
+        h = self.body(h)
+        for up, norm_act in zip(self.up, self.up_norm_act):
+            h = norm_act(self.idwt(up(h)))
+        return self.head(h)
+
+
+###############################################################################
 # D: NLayerDiscriminator（本家 basic = 70×70 PatchGAN）
 ###############################################################################
 class NLayerDiscriminator(nn.Module):
@@ -202,13 +309,15 @@ class GANLoss(nn.Module):
 ###############################################################################
 # 組み立て（本家 define_G / define_D の必要分）
 ###############################################################################
-N_BLOCKS = {"resnet_9blocks": 9, "resnet_6blocks": 6}
+N_BLOCKS = {"resnet_9blocks": 9, "resnet_6blocks": 6, "wavelet_resnet_9blocks": 9}
 
 
 def build_G(cfg, device):
     """cfg = train の平坦 dict（network.*）。G_A / G_B とも同じ構造（1ch → 1ch、同解像度）。本家は no_dropout=True（論文も dropout 無し）。"""
     norm_layer = get_norm_layer(cfg["network.norm"])
-    net = ResnetGenerator(1, 1, cfg["network.ngf"], norm_layer=norm_layer, use_dropout=False, n_blocks=N_BLOCKS[cfg["network.netG"]])
+    netG = cfg["network.netG"]
+    cls = WaveletResnetGenerator if netG.startswith("wavelet_") else ResnetGenerator
+    net = cls(1, 1, cfg["network.ngf"], norm_layer=norm_layer, use_dropout=False, n_blocks=N_BLOCKS[netG])
     return init_net(net, cfg["network.init_type"], cfg["network.init_gain"], device)
 
 
