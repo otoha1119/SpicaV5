@@ -136,6 +136,15 @@ class CycleGANModel:
         """BF16 は GradScaler 不要。重みと optimizer state は FP32 のまま。"""
         return torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16)
 
+    def _run_net(self, net, x):
+        """compiled module のCUDA Graph出力を次の呼び出しによる上書きから守る。
+
+        CycleGANは同じG/Dを1 iteration内で複数回呼ぶ。torch.compileのCUDA Graphは
+        出力bufferを再利用するため、保持する出力はcompile境界の外でcloneする必要がある。
+        """
+        y = net(x)
+        return y.clone() if self.compile_enabled else y
+
     # ------------------------------------------------------------------ 本家と同じメソッド構成
     def set_input(self, input):
         self.real_A = input["A"].to(self.device, non_blocking=True)
@@ -143,16 +152,16 @@ class CycleGANModel:
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        self.fake_B = self.netG_A(self.real_A)  # G_A(A)
-        self.rec_A = self.netG_B(self.fake_B)   # G_B(G_A(A))
-        self.fake_A = self.netG_B(self.real_B)  # G_B(B)
-        self.rec_B = self.netG_A(self.fake_A)   # G_A(G_B(B))
+        self.fake_B = self._run_net(self.netG_A, self.real_A)  # G_A(A)
+        self.rec_A = self._run_net(self.netG_B, self.fake_B)   # G_B(G_A(A))
+        self.fake_A = self._run_net(self.netG_B, self.real_B)  # G_B(B)
+        self.rec_B = self._run_net(self.netG_A, self.fake_A)   # G_A(G_B(B))
 
     def backward_D_basic(self, netD, real, fake):
         """Calculate GAN loss for the discriminator（本家。(real + fake) × 0.5）"""
-        pred_real = netD(real)
+        pred_real = self._run_net(netD, real)
         loss_D_real = self.criterionGAN(pred_real, True)
-        pred_fake = netD(fake.detach())
+        pred_fake = self._run_net(netD, fake.detach())
         loss_D_fake = self.criterionGAN(pred_fake, False)
         loss_D = (loss_D_real + loss_D_fake) * 0.5
         return loss_D
@@ -174,18 +183,18 @@ class CycleGANModel:
         # Identity loss
         if lambda_idt > 0:
             # G_A should be identity if real_B is fed: ||G_A(B) - B||
-            self.idt_A = self.netG_A(self.real_B)
+            self.idt_A = self._run_net(self.netG_A, self.real_B)
             self.loss_idt_A = self.criterionIdt(self.idt_A, self.real_B) * lambda_B * lambda_idt
             # G_B should be identity if real_A is fed: ||G_B(A) - A||
-            self.idt_B = self.netG_B(self.real_A)
+            self.idt_B = self._run_net(self.netG_B, self.real_A)
             self.loss_idt_B = self.criterionIdt(self.idt_B, self.real_A) * lambda_A * lambda_idt
         else:
             self.loss_idt_A = torch.zeros((), device=self.device)
             self.loss_idt_B = torch.zeros((), device=self.device)
         # GAN loss D_A(G_A(A))
-        self.loss_G_A = self.criterionGAN(self.netD_A(self.fake_B), True)
+        self.loss_G_A = self.criterionGAN(self._run_net(self.netD_A, self.fake_B), True)
         # GAN loss D_B(G_B(B))
-        self.loss_G_B = self.criterionGAN(self.netD_B(self.fake_A), True)
+        self.loss_G_B = self.criterionGAN(self._run_net(self.netD_B, self.fake_A), True)
         # Forward cycle loss || G_B(G_A(A)) - A||
         self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * lambda_A
         # Backward cycle loss || G_A(G_B(B)) - B||
@@ -225,7 +234,7 @@ class CycleGANModel:
         was = self.netG_A.training
         self.netG_A.eval()
         with self._autocast():
-            y = self.netG_A(x.to(self.device))
+            y = self._run_net(self.netG_A, x.to(self.device))
         self.netG_A.train(was)
         return y.float()
 
@@ -235,10 +244,10 @@ class CycleGANModel:
         self.train_mode(False)
         a, b = batch["A"].to(self.device), batch["B"].to(self.device)
         with self._autocast():
-            fake_B = self.netG_A(a)
-            rec_A = self.netG_B(fake_B)
-            fake_A = self.netG_B(b)
-            rec_B = self.netG_A(fake_A)
+            fake_B = self._run_net(self.netG_A, a)
+            rec_A = self._run_net(self.netG_B, fake_B)
+            fake_A = self._run_net(self.netG_B, b)
+            rec_B = self._run_net(self.netG_A, fake_A)
         self.train_mode(True)
         return {"A": a, "fake_B": fake_B.float(), "rec_A": rec_A.float(),
                 "B": b, "fake_A": fake_A.float(), "rec_B": rec_B.float()}

@@ -22,3 +22,4 @@ Stage 1 の fidelity loss は使用しません。データ処理だけを Stage
 - 採用設定は`wavelet_resnet_9blocks`、cycle λ_A / λ_B = 20。`--netG resnet_9blocks --lambda_A 10 --lambda_B 10`で旧baselineを再現できる
 - 学習の既定をBF16 autocast + CUDA上の`torch.compile(mode="max-autotune")`へ変更。重み・Adam stateはFP32のまま保存する。導入前checkpointは指定なしならFP32 / compileなしとして再開し、`--precision bf16 --compile true`を明示した場合だけ途中切替する
 - `torch.compile` / Tritonが実行時に生成するCUDA補助モジュールのビルドに必要なC/C++コンパイラを、gen30 / gen50 Dockerイメージへ`build-essential`として追加
+- CycleGANが同じcompiled G/Dを1 iteration内で複数回呼ぶ際、CUDA Graphの再利用bufferで保持中の出力が上書きされるため、各network出力をcompile境界の直後でcloneして独立化
