@@ -77,6 +77,8 @@ class CycleGANModel:
         self.use_bf16 = self.precision == "bf16"
         self.compile_requested = train["optim.compile"]
         self.compile_enabled = self.compile_requested and device.type == "cuda"
+        if self.compile_enabled and not (shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc")):
+            raise RuntimeError("torch.compile に必要なCコンパイラがありません。Dockerイメージを再ビルドしてください: bash start1_v2.sh <machine> down → bash start1_v2.sh <machine> build")
         # 本家 __init__: define networks (both Generators and discriminators)
         self.netG_A = networks.build_G(train, device)  # G: A → B
         self.netG_B = networks.build_G(train, device)  # F: B → A

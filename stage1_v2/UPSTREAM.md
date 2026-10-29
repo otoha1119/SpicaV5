@@ -21,3 +21,4 @@ Stage 1 の fidelity loss は使用しません。データ処理だけを Stage
 - encoderは`64 --DWT→ 256 --Conv→ 128 --DWT→ 512 --Conv→ 256`、中央はResNet Block ×9。decoderはConvで4帯域を生成してIDWTする対称構造
 - 採用設定は`wavelet_resnet_9blocks`、cycle λ_A / λ_B = 20。`--netG resnet_9blocks --lambda_A 10 --lambda_B 10`で旧baselineを再現できる
 - 学習の既定をBF16 autocast + CUDA上の`torch.compile(mode="max-autotune")`へ変更。重み・Adam stateはFP32のまま保存する。導入前checkpointは指定なしならFP32 / compileなしとして再開し、`--precision bf16 --compile true`を明示した場合だけ途中切替する
+- `torch.compile` / Tritonが実行時に生成するCUDA補助モジュールのビルドに必要なC/C++コンパイラを、gen30 / gen50 Dockerイメージへ`build-essential`として追加
