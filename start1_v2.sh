@@ -119,7 +119,7 @@ exec_it() {
 }
 
 tb_kill() {
-  "${COMPOSE[@]}" exec -T spicav5 bash -c 'for p in /proc/[0-9]*; do tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "tensorboard --logdir.* --port '"$TB_PORT"' " && kill "${p#/proc/}" 2>/dev/null; done; exit 0'
+  "${COMPOSE[@]}" exec -T spicav5 bash -c 'for p in /proc/[0-9]*; do [ "$p" = "/proc/$$" ] && continue; tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "tensorboard --logdir.* --port '"$TB_PORT"' " && kill "${p#/proc/}" 2>/dev/null; done; exit 0'
 }
 start_tb() {
   tb_kill
