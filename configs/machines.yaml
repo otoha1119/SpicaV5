@@ -60,7 +60,7 @@ PC3:                                   # 研究室 Windows 機
   gpu_name: RTX 6000
   host_data_root: "C:/otoha/DataSet"
   container_data_root: /workspace/DataSet
-  pcd_dir: /workspace/DataSet/PCD512_v2   # 直下に症例フォルダ。論文の z 側 (A)
+  pcd_dir: /workspace/DataSet/PCD512_v1   # PC3 の実配置。直下に症例フォルダ、論文の z 側 (A)
   eid_dir: /workspace/DataSet/EID_v5      # 論文の x 側 (B)
   pcd1024_dir: /workspace/DataSet/PCD1024_v1         # Stage 2 の教師（PCD512_v2 と同一患者・同一スキャンの 1024 再構成、1ch uint16）。Stage 1 は task: sr の B 側にだけ使う
   eidlike1024_dir: /workspace/DataSet/EIDlike1024_v1   # Stage 2 の学習入力 = bash start2.sh dataset の出力先（EID-like512 を ×2 補間）。存在しない状態で dataset を実行する。Stage 1 は使わない
