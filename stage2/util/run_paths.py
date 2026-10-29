@@ -11,6 +11,7 @@ checkpoint は「重みディレクトリ」単位で扱う（net_G.pth と stat
   latest/net_G.pth, state.pth [, net_D.pth]  直下に置く重みディレクトリは latest と best だけ（net_D.pth は real_eid_branch の run だけ。state.pth に optimizer_D）
   best/net_G.pth,   state.pth [, net_D.pth]  自動: 毎 epoch の val で train.yaml log.best_metric が最良を更新したとき（state.pth の best に指標と epoch が入る）
   best.txt                               手動: bash start2.sh best <run> <epoch>（weights/epoch_NNN/ をコピー）。どちらも best.txt に epoch・指標・時刻を書く（2026-09-09）
+  weights/pretrained/net_G.pth, state.pth [, net_D.pth]  init_G のときだけ。学習前の G + 新規初期化 D / optimizer と epoch 0 val 基準
   weights/epoch_NNN/net_G.pth, state.pth [, net_D.pth]  save_epoch_freq ごとの checkpoint（保存は <dir>.tmp → rename で原子的。.tmp / .old が残っていたら中断の痕跡）
   output_images/epoch_NNN/                       生 16bit（stored = HU + 1400、HU が読める）。固定 + ランダム + 実 EID テスト（2026-09-09 ユーザー確定）
       <slice>_eidlike.png, _pcd1024.png, _pcdlike.png      固定（train.yaml log.full_slice）とランダム（log.n_full_random 枚、epoch ごとに別）: 入力 / 教師 / 出力

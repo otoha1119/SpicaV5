@@ -241,6 +241,14 @@ class RegressionModel:
                 raise RuntimeError(f"real_eid_branch=true ですが D の重みがありません: {d_path}（この checkpoint は実 EID 枝なしで学習された。resume で real_eid_branch は変えられない）")
             self.netD.load_state_dict(torch.load(d_path, map_location=self.device, weights_only=True))
 
+    def load_G_only(self, weight_path):
+        """事前学習した G だけを現在のモデルへ読み込む。
+
+        D / optimizer / RNG / epoch / total_iters / best は意図的に引き継がない。
+        run_train.py が起動前に state_dict のキーと形を検査するが、ここでも strict=True で読む。
+        """
+        self.net.load_state_dict(torch.load(Path(weight_path), map_location=self.device, weights_only=True), strict=True)
+
     def resume(self, state_path):
         """state.pth から optimizer / RNG / 進捗を復元する。state は CPU に読む（RNG 用 Tensor を CUDA に載せない）。lr / betas は今の実効値を再適用。"""
         state = torch.load(state_path, map_location="cpu", weights_only=True)

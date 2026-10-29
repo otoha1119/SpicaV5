@@ -14,6 +14,10 @@
   → **選んだ checkpoint の state.pth に入っている実効設定**（その重みを作った設定）を基準に、今回の上書きを反映し、state.pth（optimizer / RNG / 進捗）と
     net_G.pth を復元して同じディレクトリに続きを保存する。設定は launch_resume_<日時秒>.yaml に保存される（記録用。次の再開の基準は checkpoint 側）。
     重みの形が実効設定と合わなければ launch を書く前に止める（レビュー指摘 2026-09-09: 失敗した起動の設定を次回に引き継がない）
+G だけを引き継ぐ新規 run（MSE-only で事前学習した G → 新規 D）:
+  python run_train.py --machine PC1 ... --init_G_from /workspace/stage2/checkpoints/<run>/best -- [--warmup_epochs 1 ...]
+  → net_G.pth だけを読み、G/D の optimizer と D は新規初期化。epoch / total_iters も 1 / 0 からの新規 run とする。
+    読み込み直後の val を epoch 0 として best の初期基準にし、weights/pretrained/ に G + 新規 D + state を保存する。
 """
 
 import argparse
@@ -108,26 +112,42 @@ def prepare_new(train, mode, machine, overrides, now):
     return name, run_dir, 1, None, LAUNCH_FILE, applied, None, train, mode, machine
 
 
+def _compare_weights(path, expect, what):
+    """保存済み state_dict のキーと形が実効設定と一致するか。"""
+    import torch
+
+    saved = torch.load(path, map_location="cpu", weights_only=True)
+    bad = [f"{k}: 重み {tuple(saved[k].shape) if k in saved else '無し'} ≠ 設定 {tuple(v.shape)}" for k, v in expect.items() if k not in saved or tuple(saved[k].shape) != tuple(v.shape)]
+    extra = [k for k in saved if k not in expect]
+    if bad or extra:
+        raise ConfigError(f"{path} の形が実効設定（{what}）と合いません: " + "; ".join(bad[:3] + [f"余分 {k}" for k in extra[:3]]) + ("" if len(bad) + len(extra) <= 3 else " ..."))
+
+
+def resolve_init_g_path(value, mode):
+    """--init_G_from のディレクトリまたは net_G.pth を解決し、G の形だけを検査する。D は新規初期化なので要求しない。"""
+    from models.unet import build_net
+
+    path = Path(value)
+    if path.is_dir():
+        path = path / "net_G.pth"
+    if not path.is_file():
+        raise ConfigError(f"G の初期重みが見つかりません: {path}（--init_G_from に best/ 等の重みディレクトリか net_G.pth を指定）")
+    _compare_weights(path, build_net(mode).state_dict(), "G: arch / base_ch / n_pool")
+    return path.resolve()
+
+
 def check_weights_match(weight_path, mode):
     """net_G.pth の各テンソルの形が、実効 mode で組んだネットと一致するか（--base_ch 等を変えた再開をここで止める。launch を書く前）。
     実 EID 枝なら同じディレクトリの net_D.pth も D の形と照合する（無ければ止める）。"""
-    import torch
     from models.discriminator import build_D
     from models.unet import build_net
 
-    def compare(path, expect, what):
-        saved = torch.load(path, map_location="cpu", weights_only=True)
-        bad = [f"{k}: 重み {tuple(saved[k].shape) if k in saved else '無し'} ≠ 設定 {tuple(v.shape)}" for k, v in expect.items() if k not in saved or tuple(saved[k].shape) != tuple(v.shape)]
-        extra = [k for k in saved if k not in expect]
-        if bad or extra:
-            raise ConfigError(f"{path} の形が実効設定（{what}）と合いません: " + "; ".join(bad[:3] + [f"余分 {k}" for k in extra[:3]]) + ("" if len(bad) + len(extra) <= 3 else " ..."))
-
-    compare(weight_path, build_net(mode).state_dict(), "arch / base_ch / n_pool")
+    _compare_weights(weight_path, build_net(mode).state_dict(), "G: arch / base_ch / n_pool")
     if mode["real_eid_branch"]:
         d_path = Path(weight_path).with_name(CKPT_D)
         if not d_path.is_file():
             raise ConfigError(f"real_eid_branch=true ですが D の重みがありません: {d_path}（この checkpoint は実 EID 枝なしで学習された。resume で real_eid_branch は変えられない）")
-        compare(d_path, build_D().state_dict(), "D")
+        _compare_weights(d_path, build_D().state_dict(), "D")
 
 
 def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
@@ -206,6 +226,7 @@ def main():
     p.add_argument("--machines", required=True, help="マシン定義 YAML")
     p.add_argument("--resume", default=None, metavar="RUN", help="再開する run 名（yyyy_mmdd_HHMM）")
     p.add_argument("--resume_tag", default="latest", help="再開に使う checkpoint の tag（latest | best | epoch 番号）")
+    p.add_argument("--init_G_from", default=None, metavar="DIR_OR_NET_G", help="新規 run の G だけを初期化する重みディレクトリ（best 等）または net_G.pth。D / optimizer / 進捗は引き継がない")
     p.add_argument("overrides", nargs=argparse.REMAINDER, help="'--' の後に上書き（schema のフラグのみ。bool は --flag true|false、list は --flag a,b,c）")
     a = p.parse_args()
     overrides = a.overrides[1:] if a.overrides and a.overrides[0] == "--" else a.overrides
@@ -213,6 +234,8 @@ def main():
     jst = datetime.timezone(datetime.timedelta(hours=9), name="JST")
     now = datetime.datetime.now(jst)
     try:
+        if a.resume and a.init_G_from:
+            raise ConfigError("--resume と --init_G_from は同時に使えません（resume = G/D/optimizer/進捗の完全再開、init_G = G だけを引き継ぐ新規 run）")
         train = validate("train", load_yaml(a.train), TRAIN)
         mode = validate("mode", load_yaml(a.mode), MODE)
         machines = load_yaml(a.machines)
@@ -223,6 +246,7 @@ def main():
             name, run_dir, epoch_count, state_path, launch_name, applied, base, train, mode, machine = prepare_resume(a, train, mode, machine, overrides, now)
         else:
             name, run_dir, epoch_count, state_path, launch_name, applied, base, train, mode, machine = prepare_new(train, mode, machine, overrides, now)
+        init_g_path = resolve_init_g_path(a.init_G_from, mode) if a.init_G_from else None
     except ConfigError as e:
         print(f"[run_train] 設定エラー: {e}", file=sys.stderr)
         sys.exit(2)
@@ -232,6 +256,8 @@ def main():
     argv = ["--launch", str(launch_path), "--run_dir", str(run_dir), "--epoch_count", str(epoch_count)]
     if state_path:
         argv += ["--resume_state", str(state_path)]
+    if init_g_path:
+        argv += ["--init_G_from", str(init_g_path)]
     if machine["gpu_gen"] != 0:
         argv.append("--require_cuda")
     with open(launch_path, "w", encoding="utf-8") as f:
@@ -241,6 +267,7 @@ def main():
              "eid_split": eid_split_record(train, mode),  # 実 EID 枝の分割ファイル（絶対パス）と症例数（記録用。2026-10-13）。枝なしなら null
              "overrides": list(overrides), "applied": applied,
              "resume": a.resume, "resume_tag": a.resume_tag if a.resume else None, "base_launch": str(base) if base else None,
+             "init_G_from": str(init_g_path) if init_g_path else None,
              "argv": argv},
             f, allow_unicode=True, sort_keys=False,
         )

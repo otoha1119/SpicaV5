@@ -3,7 +3,7 @@
 設計: docs/plans/20260908_stage2-unet-implementation-spec.md §4
   1. run_train.py が書いた launch.yaml（実効値）を読み、schema で再検証する（既定値なし）
   2. seed → device（machines.yaml の gpu_gen ≠ 0 なら CUDA 必須。黙って CPU に落ちない）→ PairDataset → DataLoader → RegressionModel
-  3. 再開（--resume_state）なら重みと optimizer / RNG / 進捗を復元する
+  3. 再開（--resume_state）なら重みと optimizer / RNG / 進捗を復元する。新規 run の --init_G_from なら G だけを読み、D / optimizer / 進捗は新規にする
   4. epoch ループ: print_freq step ごとに scalar、image_freq step ごとに 128 patch グリッド（TB images/current, images/fixed）、save_latest_freq 枚ごとに latest/、epoch 末に val 指標 →（log.best_metric が最良なら best/ + best.txt）→ latest/ + weights/epoch_NNN/ + フル 1024 画像
      （固定 = train.yaml log.full_slice、ランダム = n_full_random 枚、実 EID テスト = log.eid_slice。output_images/ の生 16bit と preview、TB のパネル。util/monitor.py）
   5. 最終 epoch は save_epoch_freq の倍数でなくても保存する
@@ -38,8 +38,13 @@ def main():
     p.add_argument("--run_dir", required=True, help="run ディレクトリ")
     p.add_argument("--epoch_count", type=int, required=True, help="開始 epoch（新規 1、再開は run_train.py が state から決める）")
     p.add_argument("--resume_state", default=None, help="再開に使う重みディレクトリの state.pth（同じディレクトリの net_G.pth も読む）")
+    p.add_argument("--init_G_from", default=None, help="新規 run で読む G-only の net_G.pth（D / optimizer / 進捗は新規）")
     p.add_argument("--require_cuda", action="store_true", help="CUDA が無ければ止める（gpu_gen ≠ 0 のとき run_train.py が付ける）")
     a = p.parse_args()
+    if a.resume_state and a.init_G_from:
+        p.error("--resume_state と --init_G_from は同時に使えません")
+    if a.init_G_from and a.epoch_count != 1:
+        p.error("--init_G_from は新規 run 専用なので --epoch_count 1 が必要です")
 
     launch = Path(a.launch)
     if not launch.is_file():
@@ -95,6 +100,9 @@ def main():
     if a.resume_state:
         model.load_weights(Path(a.resume_state).parent)
         model.resume(a.resume_state)
+    elif a.init_G_from:
+        model.load_G_only(a.init_G_from)
+        print(f"[train] pretrained G を読み込み: {a.init_G_from}（D / G optimizer / D optimizer は新規初期化）")
     total_iters = model.total_iters
     val_slices = dataset.val_slices()
     fixed = dataset.fixed_patches(train["log.n_images"])  # TB images/fixed 用（log.full_slice から。位置は patch_seed で固定）
@@ -103,6 +111,17 @@ def main():
     best_metric = train["log.best_metric"]
     image_freq = train["log.image_freq"]
     last_epoch, last_saved_epoch = None, None
+
+    if a.init_G_from:
+        # 学習前の事前学習 G を必ず残し、その val を best の初期基準にする。
+        # pretrained checkpoint に含まれる D は新規初期化、optimizer も新規。epoch 1 から通常どおり学習する。
+        model.cur_epoch, model.epoch_done, model.total_iters = 0, True, 0
+        val0 = model.evaluate(dataset, val_slices)
+        monitor.log_val(val0, 0)
+        improved = model.update_best(run_dir, best_metric, val0, 0, 0)
+        monitor.log_best(model.best, improved, 0, 0)
+        model.save(run_dir, "pretrained")
+        monitor.write(f"[init_G] epoch 0 baseline: {best_metric} {val0[best_metric]:.6f} on {val0['n']} slices | source {a.init_G_from} | saved {ckpt_dir(run_dir, 'pretrained')}")
 
     for epoch in range(a.epoch_count, n_epochs + 1):
         t_epoch = time.time()

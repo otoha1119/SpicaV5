@@ -12,7 +12,7 @@
 #   3. サブコマンドに応じてコンテナ内のスクリプトを exec する
 #
 # ■ 引数の規則
-#   bash start2.sh [マシン名] [dataset|infer|crop|build|shell|down|tb] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
+#   bash start2.sh [マシン名] [dataset|infer|crop|build|shell|down|tb] [resume <run> [tag]] [init_G <weight_dir|net_G.pth>] [best <run> <epoch>] [--flag value ...]
 #   ・--flag より前の単語を読む。順不同。dataset / build / shell / down / tb / resume / best / infer はサブコマンド、それ以外の単語は「マシン名」とみなし、
 #     sh 内の MACHINE より優先する。マシン名を 2 つ渡すとエラー。configs/machines.yaml に無い名前もエラー（候補を表示）。
 #   ・サブコマンド無し = 学習（train_stage2.sh → stage2/run_train.py → train.py）。設定は stage2/configs/train.yaml（数値・症例分割）と mode.yaml（方式）、
@@ -21,6 +21,7 @@
 #     学習開始時に起動器がその run の tb/ だけを logdir に TensorBoard を起動し、ホストのブラウザを開く（machines.yaml の **stage2_tb_port**。Stage 1 の tb_port とは別ポートで、
 #     起動・停止は自分のポートのものだけ。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）。
 #   ・resume <run> [latest|best|<epoch>] : その run の checkpoint から続きを学習（optimizer / RNG / 進捗を復元。run 起動時の設定を使う。--n_epochs 等の上書き可）。
+#   ・init_G <weight_dir|net_G.pth> : G だけを引き継ぐ新規 run。D / G optimizer / D optimizer / RNG / 進捗は新規。resume との併用不可。
 #   ・best <run> <epoch> : weights/epoch_NNN/ を best/ にコピーして best.txt に記録する（手動の上書き）。通常は学習中に val の train.yaml log.best_metric
 #               （rmse 最小 | ssim / psnr 最大）が更新されるたびに best/ が自動で書かれるので、目視で別の epoch にしたいときだけ使う（stage2/mark_best.py）。
 #   ・tb : Stage 2 の全 run を並べた TensorBoard を起動してブラウザを開く（logdir = stage2_checkpoints_dir）。
@@ -47,6 +48,7 @@
 #   bash start2.sh PC1 --n_epochs 50 --batch_size 32   # 上書きして学習
 #   bash start2.sh --val_cases PCD-017,PCD-018 --test_cases PCD-019,PCD-020 --train_cases PCD-001,PCD-002,...   # 分割の一時変更（恒久的には train.yaml）
 #   bash start2.sh resume 2026_0908_2130          # その run の latest から再開
+#   bash start2.sh PC3 init_G /workspace/stage2/checkpoints/2026_1029_1200/best --eidlike1024_dir /workspace/DataSet/EIDlike1024_v3 --warmup_epochs 1
 #   bash start2.sh resume 2026_0908_2130 30 --n_epochs 200   # epoch 30 の checkpoint から、epoch 数を延ばして再開
 #   bash start2.sh best 2026_0908_2130 30         # epoch 30 を best にする（手動。自動更新は学習中に val で行われる）
 #   bash start2.sh tb                             # Stage 2 の全 run を並べた TensorBoard（stage2_tb_port）
@@ -106,7 +108,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 MACHINES="$ROOT/configs/machines.yaml"
 
 # --- 引数: --flag より前の単語を読む。dataset / build / shell / down / train / infer はサブコマンド、それ以外の単語はマシン名 ---
-ACTION=train; BUILD=""; MACHINE_ARG=""; RESUME=""; RESUME_TAG="latest"; BEST_RUN=""; BEST_EPOCH=""
+ACTION=train; BUILD=""; MACHINE_ARG=""; RESUME=""; RESUME_TAG="latest"; INIT_G_FROM=""; BEST_RUN=""; BEST_EPOCH=""
 while [ $# -gt 0 ]; do
   case "$1" in
     dataset) ACTION=dataset; shift ;;
@@ -122,6 +124,10 @@ while [ $# -gt 0 ]; do
       [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start2] resume には run 名が必要です: bash start2.sh resume yyyy_mmdd_HHMM [latest|best|<epoch>]" >&2; exit 2; }
       RESUME="$1"; shift
       if [ $# -gt 0 ] && [[ "$1" =~ ^([0-9]+|latest|best)$ ]]; then RESUME_TAG="$1"; shift; fi ;;
+    init_G)
+      shift
+      [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start2] init_G には best/ 等の重みディレクトリか net_G.pth が必要です" >&2; exit 2; }
+      INIT_G_FROM="$1"; shift ;;
     best)
       shift
       [ $# -ge 2 ] && [[ "$1" != --* ]] && [[ "$2" =~ ^[0-9]+$ ]] || { echo "[start2] best には run 名と epoch 番号が必要です: bash start2.sh best yyyy_mmdd_HHMM <epoch>" >&2; exit 2; }
@@ -132,6 +138,10 @@ while [ $# -gt 0 ]; do
       MACHINE_ARG="$1"; shift ;;
   esac
 done
+if [ -n "$RESUME" ] && [ -n "$INIT_G_FROM" ]; then
+  echo "[start2] resume と init_G は同時に使えません" >&2
+  exit 2
+fi
 if [ -n "$MACHINE_ARG" ]; then
   echo "[start2] マシン名をコマンド引数で上書き: $MACHINE -> $MACHINE_ARG"
   MACHINE="$MACHINE_ARG"
@@ -180,7 +190,7 @@ case "$GPU_GEN" in
 esac
 COMPOSE=("docker" "compose" "-f" "$ROOT/docker/compose.$GEN.yaml" "-p" "spicav5")
 export HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT TB_PORT_STAGE2 SPICA_MACHINE="$MACHINE"
-echo "[start2] machine=$MACHINE gpu_gen=$GPU_GEN -> $GEN | mount $HOST_DATA_ROOT -> $CONTAINER_DATA_ROOT | action=$ACTION ${BUILD:+(rebuild)}${RESUME:+ resume=$RESUME tag=$RESUME_TAG}"
+echo "[start2] machine=$MACHINE gpu_gen=$GPU_GEN -> $GEN | mount $HOST_DATA_ROOT -> $CONTAINER_DATA_ROOT | action=$ACTION ${BUILD:+(rebuild)}${RESUME:+ resume=$RESUME tag=$RESUME_TAG}${INIT_G_FROM:+ init_G=$INIT_G_FROM}"
 
 if [ "$ACTION" = down ]; then
   "${COMPOSE[@]}" down
@@ -287,6 +297,8 @@ case "$ACTION" in
     if command -v curl >/dev/null 2>&1; then open_when_ready & fi
     if [ -n "$RESUME" ]; then
       exec_it -e SPICA_TB_PORT="$TB_PORT_STAGE2" -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash train_stage2.sh "$@"
+    elif [ -n "$INIT_G_FROM" ]; then
+      exec_it -e SPICA_TB_PORT="$TB_PORT_STAGE2" -e SPICA_INIT_G_FROM="$INIT_G_FROM" spicav5 bash train_stage2.sh "$@"
     else
       exec_it -e SPICA_TB_PORT="$TB_PORT_STAGE2" spicav5 bash train_stage2.sh "$@"
     fi ;;

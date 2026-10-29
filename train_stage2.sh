@@ -11,6 +11,10 @@
 #   環境変数 SPICA_RESUME=<run 名 yyyy_mmdd_HHMM>（と任意で SPICA_RESUME_TAG=latest|best|<epoch>）があれば、その run の続きから学習する。
 #   ホストからは  bash start2.sh resume 2026_0908_2130 [30]  で同じ。
 #
+# ■ G だけを引き継ぐ新規 run
+#   環境変数 SPICA_INIT_G_FROM=<best 等の重みディレクトリまたは net_G.pth>。D / optimizer / 進捗は新規。
+#   ホストからは  bash start2.sh init_G /workspace/stage2/checkpoints/<run>/best  で同じ。
+#
 # ■ マシン名
 #   環境変数 SPICA_MACHINE から取る（start2.sh が compose 経由でコンテナに渡す）。未設定ならエラー（既定値なし）。
 #
@@ -25,10 +29,15 @@ RESUME_ARGS=()
 if [ -n "${SPICA_RESUME:-}" ]; then
   RESUME_ARGS=(--resume "$SPICA_RESUME" --resume_tag "${SPICA_RESUME_TAG:-latest}")
 fi
+INIT_G_ARGS=()
+if [ -n "${SPICA_INIT_G_FROM:-}" ]; then
+  INIT_G_ARGS=(--init_G_from "$SPICA_INIT_G_FROM")
+fi
 python run_train.py \
     --machine "$MACHINE" \
     --train configs/train.yaml \
     --mode configs/mode.yaml \
     --machines ../configs/machines.yaml \
     "${RESUME_ARGS[@]}" \
+    "${INIT_G_ARGS[@]}" \
     -- "$@"
