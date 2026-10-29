@@ -15,6 +15,7 @@ Stage 1 `task: degrade` と同じです。degrade と同じく症例 split は�
 新規runは既定でBF16 autocastと、CUDA上の4ネットワークに対する
 `torch.compile(mode="max-autotune")`を使います。重みとAdam stateはFP32で保存するため、
 checkpoint形式は従来と同じです。初回iterationはコンパイルのため通常より長くかかります。
+成功したautotune候補一覧は表示せず、compilerの警告とエラーだけを端末に残します。
 従来条件は`--precision fp32 --compile false`で実行できます。
 
 ```bash

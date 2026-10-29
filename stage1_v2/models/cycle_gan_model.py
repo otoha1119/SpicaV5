@@ -33,6 +33,20 @@ def _to_tuple(x):
     return tuple(_to_tuple(v) for v in x) if isinstance(x, (list, tuple)) else x
 
 
+def _quiet_inductor_autotune_success_logs():
+    """探索は維持し、成功したmax-autotune候補の大量表示だけ止める。"""
+    import torch._inductor.select_algorithm as select_algorithm
+
+    # gen30のtorch 2.5とgen50のtorch 2.10の双方にある表示スイッチ。
+    select_algorithm.PRINT_AUTOTUNE = False
+    import torch._inductor.config as inductor_config
+    # torch 2.10で追加された表示項目。警告と例外には影響しない。
+    if hasattr(inductor_config, "autotune_num_choices_displayed"):
+        inductor_config.autotune_num_choices_displayed = 0
+    if hasattr(inductor_config, "max_autotune_report_choices_stats"):
+        inductor_config.max_autotune_report_choices_stats = False
+
+
 def _swap_dirs(tmp, final, old, retries=10, wait=3.0):
     """tmp を final に差し替える。既存の final は old に退避してから消す。改名が拒否されたら wait 秒待って再試行し、最後はファイル単位の置き換えに落とす。
     final が無く old だけあるのは「退避まで済んで差し替えで止まった」状態なので、old は直前の checkpoint として消さない。戻り値: 成功したか。"""
@@ -87,6 +101,7 @@ class CycleGANModel:
             self.netD_A = networks.build_D(train, device)  # D_Y
             self.netD_B = networks.build_D(train, device)  # D_X
             if self.compile_enabled:
+                _quiet_inductor_autotune_success_logs()
                 # nn.Module.compile は module identity と state_dict のキーを保ったまま
                 # __call__ をコンパイルするため、既存 checkpoint と互換。
                 for net in self.nets().values():

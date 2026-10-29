@@ -23,3 +23,4 @@ Stage 1 の fidelity loss は使用しません。データ処理だけを Stage
 - 学習の既定をBF16 autocast + CUDA上の`torch.compile(mode="max-autotune")`へ変更。重み・Adam stateはFP32のまま保存する。導入前checkpointは指定なしならFP32 / compileなしとして再開し、`--precision bf16 --compile true`を明示した場合だけ途中切替する
 - `torch.compile` / Tritonが実行時に生成するCUDA補助モジュールのビルドに必要なC/C++コンパイラを、gen30 / gen50 Dockerイメージへ`build-essential`として追加
 - CycleGANが同じcompiled G/Dを1 iteration内で複数回呼ぶ際、CUDA Graphの再利用bufferで保持中の出力が上書きされるため、各network出力をcompile境界の直後でcloneして独立化
+- max-autotuneの探索は維持したまま、成功候補の全カーネル・所要時間一覧だけを非表示化。compilerの警告・例外は従来どおり表示する
