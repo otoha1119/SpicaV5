@@ -95,8 +95,14 @@ def init_weights(net, init_type):
 
 def build_net(mode, in_nc=1, out_nc=1):
     """mode.yaml の実効値からネットワークを組む。"""
-    if mode["arch"] != "unet_ilumenate":
+    if mode["arch"] == "unet_ilumenate":
+        net = UNetILUMENATE(in_nc, out_nc, mode["base_ch"], mode["n_pool"], mode["final_act"])
+    elif mode["arch"] == "wavelet_unet":
+        # 遅延 import: wavelet_unet は共通の ConvBlock をこの module から使うため、module 初期化後に読む。
+        from .wavelet_unet import WaveletUNet
+
+        net = WaveletUNet(in_nc, out_nc, mode["base_ch"], mode["n_pool"], mode["final_act"])
+    else:
         raise ValueError(mode["arch"])
-    net = UNetILUMENATE(in_nc, out_nc, mode["base_ch"], mode["n_pool"], mode["final_act"])
     init_weights(net, mode["init_type"])
     return net

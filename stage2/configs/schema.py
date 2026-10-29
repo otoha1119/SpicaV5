@@ -76,9 +76,9 @@ TRAIN = {
 # stage2/configs/mode.yaml — アルゴリズムのモード切替
 # ---------------------------------------------------------------------------
 MODE = {
-    "arch":           Key(str,  "--arch",           "unet_ilumenate（論文 Fig. 2: Conv3×3+ReLU ×2 を 3 段、max pool 2 回、up-conv 2 回、skip concat、BN なし）"),
+    "arch":           Key(str,  "--arch",           "wavelet_unet（ILUMENATE の Conv / channel / skip を保ち、max pool / up-conv を Haar DWT / 1x1+IDWT に置換）| unet_ilumenate（論文 Fig. 2 の基準 U-Net）"),
     "base_ch":        Key(int,  "--base_ch",        "最初の段のチャネル数。論文 128（段ごとに 2 倍: 128 / 256 / 512）"),
-    "n_pool":         Key(int,  "--n_pool",         "max pool の回数。論文 2"),
+    "n_pool":         Key(int,  "--n_pool",         "encoder / decoder の解像度段数。論文 2。unet_ilumenate は max pool / up-conv、wavelet_unet は DWT / IDWT の回数"),
     "init_type":      Key(str,  "--init_type",      "重み初期化: xavier_uniform（Keras 既定 Glorot uniform + bias 0 に合わせる）| torch（PyTorch 既定のまま）"),
     "loss":           Key(str,  "--loss",           "mse（論文 Eq. 1）| l1（ablation）。正規化空間 [−1,1] で計算"),
     "final_act":      Key(str,  "--final_act",      "最終層の活性化: linear（論文、回帰）| tanh（出力を [−1,1] に縛る変種）"),
@@ -126,7 +126,7 @@ INTERPS = ("nearest", "bilinear", "bicubic", "area", "lanczos")
 INFER_INPUTS = ("eidlike", "eid")
 BEST_METRICS = ("rmse", "ssim", "psnr")   # log.best_metric。rmse は小さいほど良い、ssim / psnr は大きいほど良い
 GPU_GENS = (0, 30, 40, 50)
-ARCHS = ("unet_ilumenate",)
+ARCHS = ("wavelet_unet", "unet_ilumenate")
 INIT_TYPES = ("xavier_uniform", "torch")
 LOSSES = ("mse", "l1")
 FINAL_ACTS = ("linear", "tanh")
