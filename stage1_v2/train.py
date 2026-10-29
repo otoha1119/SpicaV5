@@ -68,6 +68,7 @@ def main():
     npar = model.n_params()
     print(f"[train] CycleGAN {train['network.netG']} norm {train['network.norm']} gan {train['loss.gan_mode']} lambda_A/B {train['loss.lambda_A']}/{train['loss.lambda_B']} idt {train['loss.lambda_identity']} | "
           + " ".join(f"{k} {v / 1e6:.2f}M" for k, v in npar.items())
+          + f" | lr_G {model.lr_G:.2e} lr_D {model.lr_D:.2e}"
           + f" | precision {model.precision} | compile {model.compile_enabled}"
           + (" (requested, CUDA only)" if model.compile_requested and not model.compile_enabled else "")
           + f" | device {device}")
@@ -113,7 +114,7 @@ def main():
             monitor.save_full_images(model, dataset.full_slices(epoch), epoch, total_iters)
             last_saved_epoch = epoch
         last_epoch = epoch
-        monitor.end_epoch(epoch, total_epochs, total_iters, model.lr, time.time() - t_epoch)
+        monitor.end_epoch(epoch, total_epochs, total_iters, model.lr_G, model.lr_D, time.time() - t_epoch)
 
     if last_epoch is not None and last_saved_epoch != last_epoch:
         monitor.write(f"saving the final model (epoch {last_epoch}, iters {total_iters})")

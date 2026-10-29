@@ -4,7 +4,7 @@
   TensorBoard: <run>/tb/  global_step = total_iters（画像枚数。resume でつながる）
      loss/*            D_A, G_A, cycle_A, idt_A, D_B, G_B, cycle_B, idt_B, G_total（重み込み。本家 loss_names）
      diag/d_in_HU      mean|G_A(x) − x| の HU（入力からどれだけ動いたか）
-     time/sec_per_step, time/data_sec_per_step, train/lr, train/epoch
+     time/sec_per_step, time/data_sec_per_step, train/lr_G, train/lr_D, train/epoch
      images/current, images/fixed   各行 [PCD x | EID-like G_A(x) | R | EID y]（128 patch）
      images/cycle_A    現在のバッチ: [x | G_A(x) | G_B(G_A(x))]（forward cycle）、images/cycle_B: [y | G_B(y) | G_A(G_B(y))]（backward cycle）
      images/full/fixed, images/full/random   epoch 末のパネル [EID代表 | EID-like | PCD | R + ゲージ]
@@ -87,13 +87,15 @@ class TrainMonitor:
             f.write(f"(epoch: {epoch}, samples: {total_iters}, step: {total_iters // self.bs}, sec/step: {self._t_comp:.3f}, data: {self._t_data:.3f}) "
                     + " ".join(f"{k}: {v:.4f}" for k, v in losses.items()) + "\n")
 
-    def end_epoch(self, epoch, total_epochs, total_iters, lr, elapsed):
+    def end_epoch(self, epoch, total_epochs, total_iters, lr_G, lr_D, elapsed):
         means = {k: v / max(1, self._n) for k, v in self._sum.items()}
-        line = f"epoch {epoch}/{total_epochs} | " + " ".join(f"{k} {v:.4f}" for k, v in means.items()) + f" | lr {lr:.2e} | {elapsed:.0f}s"
+        line = f"epoch {epoch}/{total_epochs} | " + " ".join(f"{k} {v:.4f}" for k, v in means.items()) + f" | lr_G {lr_G:.2e} lr_D {lr_D:.2e} | {elapsed:.0f}s"
         self.write(line)
         with open(self.log_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
-        self.tb.add_scalar("train/lr", lr, total_iters)
+        self.tb.add_scalar("train/lr_G", lr_G, total_iters)
+        self.tb.add_scalar("train/lr_D", lr_D, total_iters)
+        self.tb.add_scalar("train/lr", lr_G, total_iters)  # 旧dashboardとの互換
         self.tb.add_scalar("train/epoch", epoch, total_iters)
 
     # ------------------------------------------------------------------ 表示用の変換

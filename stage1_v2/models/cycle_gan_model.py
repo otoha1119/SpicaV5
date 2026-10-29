@@ -111,9 +111,9 @@ class CycleGANModel:
             self.criterionGAN = networks.GANLoss(train["loss.gan_mode"]).to(device)
             self.criterionCycle = nn.L1Loss()
             self.criterionIdt = nn.L1Loss()
-            lr, betas = train["optim.lr"], (train["optim.beta1"], train["optim.beta2"])
-            self.optimizer_G = torch.optim.Adam(itertools.chain(self.netG_A.parameters(), self.netG_B.parameters()), lr=lr, betas=betas)
-            self.optimizer_D = torch.optim.Adam(itertools.chain(self.netD_A.parameters(), self.netD_B.parameters()), lr=lr, betas=betas)
+            betas = (train["optim.beta1"], train["optim.beta2"])
+            self.optimizer_G = torch.optim.Adam(itertools.chain(self.netG_A.parameters(), self.netG_B.parameters()), lr=train["optim.lr_G"], betas=betas)
+            self.optimizer_D = torch.optim.Adam(itertools.chain(self.netD_A.parameters(), self.netD_B.parameters()), lr=train["optim.lr_D"], betas=betas)
             self.optimizers = [self.optimizer_G, self.optimizer_D]
             self.schedulers = []
             self.cur_epoch, self.epoch_done, self.total_iters = 1, False, 0
@@ -135,7 +135,16 @@ class CycleGANModel:
 
     @property
     def lr(self):
-        return float(self.optimizers[0].param_groups[0]["lr"])
+        """旧ログ参照用。個別学習率導入後は Generator 側を返す。"""
+        return self.lr_G
+
+    @property
+    def lr_G(self):
+        return float(self.optimizer_G.param_groups[0]["lr"])
+
+    @property
+    def lr_D(self):
+        return float(self.optimizer_D.param_groups[0]["lr"])
 
     @staticmethod
     def set_requires_grad(nets, requires_grad=False):
@@ -277,6 +286,8 @@ class CycleGANModel:
             "optimizer_G": self.optimizer_G.state_dict(),
             "optimizer_D": self.optimizer_D.state_dict(),
             "lr": self.lr,
+            "lr_G": self.lr_G,
+            "lr_D": self.lr_D,
             "config": self.launch_config,
             "rng": {
                 "python": random.getstate(),
@@ -311,10 +322,10 @@ class CycleGANModel:
         state = torch.load(state_path, map_location="cpu", weights_only=True)
         self.optimizer_G.load_state_dict(state["optimizer_G"])
         self.optimizer_D.load_state_dict(state["optimizer_D"])
-        for optimizer in self.optimizers:
+        for optimizer, lr in ((self.optimizer_G, self.cfg["optim.lr_G"]), (self.optimizer_D, self.cfg["optim.lr_D"])):
             for g in optimizer.param_groups:
-                g["lr"] = self.cfg["optim.lr"]
-                g["initial_lr"] = self.cfg["optim.lr"]
+                g["lr"] = lr
+                g["initial_lr"] = lr
                 g["betas"] = (self.cfg["optim.beta1"], self.cfg["optim.beta2"])
         self.make_schedulers(epoch_count)
         rng = state["rng"]
@@ -323,5 +334,5 @@ class CycleGANModel:
         kind, keys, pos, has_gauss, cached = rng["numpy"]
         np.random.set_state((kind, keys.cpu().numpy().astype(np.uint32), pos, has_gauss, cached))
         self.total_iters = int(state["total_iters"])
-        print(f"[resume] {state_path}: epoch {state['epoch']} (done={state['epoch_done']}), total_iters {state['total_iters']}, lr {self.lr:.2e}")
+        print(f"[resume] {state_path}: epoch {state['epoch']} (done={state['epoch_done']}), total_iters {state['total_iters']}, lr_G {self.lr_G:.2e}, lr_D {self.lr_D:.2e}")
         return state

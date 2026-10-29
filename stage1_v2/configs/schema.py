@@ -23,7 +23,9 @@ Key = namedtuple("Key", "type flag doc")
 # ---------------------------------------------------------------------------
 TRAIN = {
     # optim
-    "optim.lr":              Key(float, "--lr",              '本家 0.0002 = 論文 Sec. 4 "learning rate of 0.0002 ... the same learning rate for the first 100 epochs and linearly decay the rate to zero over the next 100 epochs"'),
+    "optim.lr":              Key(float, "--lr",              "G / D 共通学習率の互換オプション。指定時は --lr_G / --lr_D の未指定側も同じ値にする"),
+    "optim.lr_G":            Key(float, "--lr_G",            "Generator G_A / G_B の学習率。本家は D と同じ 0.0002"),
+    "optim.lr_D":            Key(float, "--lr_D",            "Discriminator D_A / D_B の学習率。本家は G と同じ 0.0002"),
     "optim.beta1":           Key(float, "--beta1",           "Adam β1。本家 0.5（論文 Sec. 4）"),
     "optim.beta2":           Key(float, "--beta2",           "Adam β2。本家 0.999"),
     "optim.batch_size":      Key(int,   "--batch_size",      "Stage 1 と同じ40。CycleGANでVRAM不足ならCLIで下げる"),
@@ -303,7 +305,8 @@ def _check_machine(machine, P):
 def check_train_values(train, machine):
     P = []
     bs = train["optim.batch_size"]
-    if train["optim.lr"] <= 0: P.append("optim.lr は正")
+    for k in ("lr", "lr_G", "lr_D"):
+        if train[f"optim.{k}"] <= 0: P.append(f"optim.{k} は正")
     if not (0.0 <= train["optim.beta1"] < 1.0 and 0.0 <= train["optim.beta2"] < 1.0): P.append("optim.beta1 / beta2 は [0, 1)")
     if bs < 1: P.append("optim.batch_size ≥ 1")
     if train["optim.n_epochs"] < 1: P.append("optim.n_epochs ≥ 1")

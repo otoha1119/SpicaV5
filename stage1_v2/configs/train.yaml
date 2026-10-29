@@ -3,7 +3,9 @@
 # 書き方: 小数は必ず点を付ける（2.0e-4, 10.0）。真偽値は true / false。リストは [a, b]。
 
 optim:
-  lr: 2.0e-4            # 本家 0.0002（論文 Sec. 4）
+  lr: 2.0e-4            # 互換用の共通値。--lr は lr_G / lr_D の両方を上書き
+  lr_G: 2.0e-4          # Generator の学習率
+  lr_D: 2.0e-4          # Discriminator の学習率
   beta1: 0.5            # 本家
   beta2: 0.999          # 本家
   batch_size: 40        # Stage 1 と同じ（VRAM不足時は --batch_size で下げる）

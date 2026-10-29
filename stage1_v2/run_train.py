@@ -65,6 +65,17 @@ def sections(train, machine):
     return {"train": (train, TRAIN), "machine": (machine, MACHINE)}
 
 
+def apply_train_overrides(tokens, train, machine):
+    """--lr は従来どおり G / D の両方に適用し、個別指定があればそちらを優先する。"""
+    applied = apply_overrides(tokens, sections(train, machine))
+    if "--lr" in applied:
+        if "--lr_G" not in applied:
+            train["optim.lr_G"] = train["optim.lr"]
+        if "--lr_D" not in applied:
+            train["optim.lr_D"] = train["optim.lr"]
+    return applied
+
+
 def check_paths(train, machine):
     """空の run を残す前に Stage 1 degrade と同じ入力を確認する。"""
     for k in ("pcd_dir", "eid_dir"):
@@ -77,7 +88,7 @@ def check_paths(train, machine):
 
 
 def prepare_new(train, machine, overrides, now):
-    applied = apply_overrides(overrides, sections(train, machine))
+    applied = apply_train_overrides(overrides, train, machine)
     check_train_values(train, machine)
     check_paths(train, machine)
     name = run_name(now)
@@ -91,7 +102,7 @@ def prepare_resume(a, train_yaml, machine_yaml, overrides, now):
     import torch
 
     probe = (dict(train_yaml), dict(machine_yaml))
-    apply_overrides(overrides, sections(*probe))
+    apply_train_overrides(overrides, *probe)
     run_dir = checkpoints_root(probe[1]) / a.resume
     if not run_dir.is_dir():
         raise ConfigError(f"再開する run が見つかりません: {run_dir}")
@@ -115,7 +126,10 @@ def prepare_resume(a, train_yaml, machine_yaml, overrides, now):
             missing = [k for k in schema if k not in saved[section]]
             if missing:
                 for k in missing:
-                    if section == "train" and k in LEGACY_TRAIN_DEFAULTS:
+                    if section == "train" and k in ("optim.lr_G", "optim.lr_D") and "optim.lr" in saved[section]:
+                        saved[section][k] = saved[section]["optim.lr"]
+                        print(f"[run_train] 互換移行: 旧runに無い {k} は従来の共通学習率 {saved[section][k]!r} を使う")
+                    elif section == "train" and k in LEGACY_TRAIN_DEFAULTS:
                         saved[section][k] = LEGACY_TRAIN_DEFAULTS[k]
                         print(f"[run_train] 互換移行: 旧runに無い {k} は従来動作 {saved[section][k]!r} とする（変更は対応する --flag で明示）")
                     else:
@@ -135,7 +149,7 @@ def prepare_resume(a, train_yaml, machine_yaml, overrides, now):
         if diff:
             print(f"[run_train] 注意: 今の {section} 設定は checkpoint の実効設定と異なる（checkpoint の値を使う。変えるなら --flag で上書き）: {diff}")
     saved_shape = {k: train[k] for k in SHAPE_KEYS}
-    applied = apply_overrides(overrides, sections(train, machine))
+    applied = apply_train_overrides(overrides, train, machine)
     changed = {k: (saved_shape[k], train[k]) for k in SHAPE_KEYS if train[k] != saved_shape[k]}
     if changed:
         raise ConfigError(f"再開時に重みの形を決めるキーは変えられません: {changed}")
