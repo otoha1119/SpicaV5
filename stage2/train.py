@@ -62,6 +62,9 @@ def main():
     dataset = PairDataset(train, mode, machine, cache_dir=Path(machine["stage2_checkpoints_dir"]) / ".case_index")
     with open(run_dir / DATASET_INFO_FILE, "w", encoding="utf-8") as f:
         yaml.safe_dump({"train_cases": dataset.train_cases, "val_cases": dataset.val_cases, "test_cases": dataset.test_cases,
+                        "train_input_dirs": dataset.train_input_dirs,
+                        "train_input_sampling": "uniform_dir_then_uniform_case_then_uniform_slice",
+                        "validation_input_dir": machine["eidlike1024_dir"],
                         "image_hw": list(dataset.img_hw), "counts": dataset.info,
                         "fixed_slice": list(dataset.fixed_pair), "eid_test_slice": dataset.eid_path,
                         "eid_upsample": {"scale": dataset.upsample_cfg[0], "interp": dataset.upsample_cfg[1], "from": f"{machine['eidlike1024_dir']}/manifest.yaml"},

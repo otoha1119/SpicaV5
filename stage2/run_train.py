@@ -130,6 +130,14 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
         print(f"[run_train] 注意: {state_path.name} に実効設定が無い古い run なので、最新の launch（{base.name}）を基準にする")
         saved = load_yaml(base)
     try:
+        # train_input_dirs 導入前の checkpoint は、その run が実際に使っていた単一入力を維持する。
+        # 一般の新規キーと同様に現在の train.yaml（V1/V2/V3）を補うと、旧実験の resume だけ手法が変わってしまうため。
+        if "data.train_input_dirs" not in saved["train"]:
+            legacy_input = saved["machine"].get("eidlike1024_dir")
+            if not legacy_input:
+                raise ConfigError(f"{base} に data.train_input_dirs も machine.eidlike1024_dir もありません")
+            saved["train"]["data.train_input_dirs"] = [legacy_input]
+            print(f"[run_train] 注意: 旧 run なので学習入力は当時の単一ディレクトリを維持する: {legacy_input}")
         for section, cur, schema in (("train", train_yaml, TRAIN), ("mode", mode_yaml, MODE), ("machine", machine_yaml, MACHINE)):
             missing = [k for k in schema if k not in saved[section]]
             if missing:

@@ -6,7 +6,7 @@ checkpoint は「重みディレクトリ」単位で扱う（net_G.pth と stat
 
 <stage2_checkpoints_dir>/<run>/
   launch.yaml                 解決済み設定（実効値 = yaml + sh の上書き）。resume 時は launch_resume_<日時秒>.yaml が追加され、最新のものが次の再開の基準
-  dataset_info.yaml           train.py が起動時に書く: 症例分割の実効リスト、症例ごとの入力 / 教師 / ペア枚数（切り捨て）
+  dataset_info.yaml           train.py が起動時に書く: 学習入力ドメインと抽選方式、症例分割の実効リスト、症例ごとの入力 / 教師 / ペア枚数（切り捨て）
   loss_log.txt
   latest/net_G.pth, state.pth            直下に置く重みディレクトリは latest と best だけ
   best/net_G.pth,   state.pth            自動: 毎 epoch の val で train.yaml log.best_metric が最良を更新したとき（state.pth の best に指標と epoch が入る）

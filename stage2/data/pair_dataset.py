@@ -2,14 +2,16 @@
 
 設計: docs/plans/20260908_stage2-unet-implementation-spec.md §4
 
-【入力データ】 machines.yaml の eidlike1024_dir（入力。bash start2.sh dataset の出力）と pcd1024_dir（教師）。各直下に <症例>/<slice>.png（1ch uint16、一辺 1024）
+【入力データ】 train.yaml の data.train_input_dirs（学習入力。EID-like の複数ドメイン）と machines.yaml の
+  eidlike1024_dir（val / 固定表示の基準入力）、pcd1024_dir（共通の教師）。各直下に <症例>/<slice>.png（1ch uint16、一辺 1024）
 【対応付け】 症例名（フォルダ名）とスライス名（ファイル名）が同じものをペアにする。症例ごとに両方にある名前の共通部分だけ使う
   （PCD1024_v1 は PCD-006 / 011 / 015 で末尾の枚数が PCD512 と違う → 先頭から min まで。切り捨てた枚数は dataset_info に残す）
 【症例分割】 train.yaml の data.train_cases / val_cases / test_cases（ユーザー決定 2026-09-08）。
-  ・train / val の症例は両方のディレクトリに存在すること（無ければエラー）
+  ・train の症例は全 train_input_dirs と教師に、val の症例は基準入力 eidlike1024_dir と教師に存在すること（無ければエラー）
   ・test の症例は**一切読まない**（ディスクに無くてもよい）
   ・ディスク上（入力側・教師側）の症例は必ずどれかのリストに入っていること（未割当があればエラー = 意図せず学習に混ざるのを防ぐ）
-【サンプリング】 Stage 1 のケース 1 と同じ: 症例一様 → スライス一様 → 位置一様（1 サンプルごと）。入力と教師は**同じスライス・同じ位置**の patch。
+【サンプリング】 入力ドメイン一様 → 症例一様 → スライス一様 → 位置一様（1 サンプルごと）。入力と教師は**同じスライス・同じ位置**の patch。
+  patches_per_slice > 1 のときは従来どおり、選んだドメイン・症例・スライスをその patch 数だけ使い回し、位置だけ毎回引く。
   augmentation なし（ユーザー決定: データが論文より多い）。epoch 長は samples_per_epoch
 【正規化】 Stage 1 と同じ [−1,1]（data/ct_io.py）
 【検証】 val_slices(): val 症例のフル 1024 ペアを、症例ごとに val_max_slices_per_case 枚まで等間隔に間引いて返す（毎 epoch 同じ集合）
@@ -31,20 +33,29 @@ MANIFEST = "manifest.yaml"  # bash start2.sh dataset が eidlike1024_dir に書�
 
 
 def check_split_on_disk(train, machine):
-    """train.yaml の症例リストとディスク（eidlike1024_dir / pcd1024_dir 直下の症例フォルダ）を照合する。run_train.py が run ディレクトリを作る前に呼ぶ。
+    """train.yaml の症例リストとディスク（train_input_dirs / eidlike1024_dir / pcd1024_dir 直下の症例フォルダ）を照合する。run_train.py が run ディレクトリを作る前に呼ぶ。
     ・ディスク上の症例は train / val / test のどれかに入っていること（未割当 = 意図せず学習に混ざるのを防ぐ）
-    ・train / val の症例は両方のディレクトリに存在すること。test はディスクに無くてもよい
-    戻り値は {"input": [症例...], "pcd": [症例...]}（記録用）。問題があれば RuntimeError。"""
+    ・train 症例は全 train_input_dirs と教師に、val 症例は基準入力 eidlike1024_dir と教師に存在すること。test はディスクに無くてもよい
+    戻り値は {"train_inputs": {dir: [症例...]}, "validation_input": [症例...], "pcd": [症例...]}（記録用）。問題があれば RuntimeError。"""
     train_cases, val_cases, test_cases = train["data.train_cases"], train["data.val_cases"], train["data.test_cases"]
-    on_in, on_pcd = list_case_names(machine["eidlike1024_dir"], drop_eval_only=True), list_case_names(machine["pcd1024_dir"], drop_eval_only=True)  # 評価専用（configs/eval_only.yaml）は照合の対象外
+    input_dirs = train["data.train_input_dirs"]
+    on_train = {root: list_case_names(root, drop_eval_only=True) for root in input_dirs}
+    on_val = list_case_names(machine["eidlike1024_dir"], drop_eval_only=True)
+    on_pcd = list_case_names(machine["pcd1024_dir"], drop_eval_only=True)  # 評価専用（configs/eval_only.yaml）は照合の対象外
     assigned = set(train_cases) | set(val_cases) | set(test_cases)
-    unassigned = sorted((set(on_in) | set(on_pcd)) - assigned)
+    all_on_disk = set(on_val) | set(on_pcd)
+    for cases in on_train.values():
+        all_on_disk.update(cases)
+    unassigned = sorted(all_on_disk - assigned)
     if unassigned:
         raise RuntimeError(f"train.yaml のどのリストにも無い症例がディスクにあります（train_cases / val_cases / test_cases のどれかに入れること）: {unassigned}")
-    for kind, cases in (("train_cases", train_cases), ("val_cases", val_cases)):
-        missing = [c for c in cases if c not in on_in or c not in on_pcd]
+    for root, on_in in on_train.items():
+        missing = [c for c in train_cases if c not in on_in or c not in on_pcd]
         if missing:
-            raise RuntimeError(f"{kind} の症例が入力（{machine['eidlike1024_dir']}）か教師（{machine['pcd1024_dir']}）にありません: {missing}")
+            raise RuntimeError(f"train_cases の症例が学習入力（{root}）か教師（{machine['pcd1024_dir']}）にありません: {missing}")
+    missing = [c for c in val_cases if c not in on_val or c not in on_pcd]
+    if missing:
+        raise RuntimeError(f"val_cases の症例が基準入力（{machine['eidlike1024_dir']}）か教師（{machine['pcd1024_dir']}）にありません: {missing}")
     fixed_case = Path(train["log.full_slice"]).parts[0]  # 固定スライスの症例はどれかのリストに入っていること。test も可（ユーザー決定 2026-09-09: 目視用に holdout の症例を毎 epoch 見る。
     if fixed_case not in set(train_cases) | set(val_cases) | set(test_cases):  # best の選択は val の指標で行い、この絵で選ばない。それ以前は train ∪ val に限っていた）
         raise RuntimeError(f"train.yaml log.full_slice の症例 {fixed_case} が train_cases / val_cases / test_cases のどれにも含まれていません: {train['log.full_slice']}")
@@ -56,8 +67,12 @@ def check_split_on_disk(train, machine):
     eid = Path(machine["eid_dir"]) / train["log.eid_slice"]
     if not eid.is_file():
         raise RuntimeError(f"train.yaml log.eid_slice がありません: {eid}（machines.yaml の eid_dir からの相対パス）")
-    read_upsample_cfg(machine["eidlike1024_dir"])  # manifest.yaml の存在と方式
-    return {"input": on_in, "pcd": on_pcd}
+    reference_cfg = read_upsample_cfg(machine["eidlike1024_dir"])  # manifest.yaml の存在と方式
+    for root in input_dirs:
+        cfg = read_upsample_cfg(root)
+        if cfg != reference_cfg:
+            raise RuntimeError(f"学習入力 {root} の補間方式 {cfg} が基準入力 {machine['eidlike1024_dir']} の {reference_cfg} と違います")
+    return {"train_inputs": on_train, "validation_input": on_val, "pcd": on_pcd}
 
 
 def read_upsample_cfg(eidlike1024_dir):
@@ -114,15 +129,21 @@ class PairDataset(Dataset):
         self.full_slice, self.n_full_random = train["log.full_slice"], train["log.n_full_random"]
         self.eid_path = str(Path(machine["eid_dir"]) / train["log.eid_slice"])
         self.upsample_cfg = read_upsample_cfg(machine["eidlike1024_dir"])  # (scale, interp)
+        self.train_input_dirs = list(train["data.train_input_dirs"])
         train_cases, val_cases, test_cases = train["data.train_cases"], train["data.val_cases"], train["data.test_cases"]
 
         check_split_on_disk(train, machine)  # 起動器でも検査済みだが、train.py 単独でも同じ規則で止まるように
-        idx_in = CaseIndex(machine["eidlike1024_dir"], cache_dir, drop_eval_only=True)
+        input_roots = list(dict.fromkeys(self.train_input_dirs + [machine["eidlike1024_dir"]]))
+        idx_inputs = {root: CaseIndex(root, cache_dir, drop_eval_only=True) for root in input_roots}
+        idx_val = idx_inputs[machine["eidlike1024_dir"]]
         idx_pcd = CaseIndex(machine["pcd1024_dir"], cache_dir, drop_eval_only=True)
-        for kind, cases in (("train_cases", train_cases), ("val_cases", val_cases)):
-            empty = [c for c in cases if c not in idx_in.slices or c not in idx_pcd.slices]
+        for root in self.train_input_dirs:
+            empty = [c for c in train_cases if c not in idx_inputs[root].slices or c not in idx_pcd.slices]
             if empty:
-                raise RuntimeError(f"{kind} の症例フォルダに PNG がありません: {empty}")
+                raise RuntimeError(f"train_cases の症例フォルダに PNG がありません（入力 {root} / 教師 {machine['pcd1024_dir']}）: {empty}")
+        empty = [c for c in val_cases if c not in idx_val.slices or c not in idx_pcd.slices]
+        if empty:
+            raise RuntimeError(f"val_cases の症例フォルダに PNG がありません（基準入力 {machine['eidlike1024_dir']} / 教師 {machine['pcd1024_dir']}）: {empty}")
 
         self.train_cases, self.val_cases, self.test_cases = list(train_cases), list(val_cases), list(test_cases)
         # 固定スライス（毎 epoch TB へ）は起動時に両方のディレクトリで存在を検査する（無ければ学習前に止める。Stage 1 と同じ）
@@ -130,24 +151,28 @@ class PairDataset(Dataset):
         for p in self.fixed_pair:
             if not Path(p).is_file():
                 raise RuntimeError(f"train.yaml log.full_slice がありません: {p}（eidlike1024_dir / pcd1024_dir からの相対パス）")
-        self.pairs_train, info_train = build_pairs(idx_in, idx_pcd, self.train_cases)
-        self.pairs_val, info_val = build_pairs(idx_in, idx_pcd, self.val_cases)
+        self.pairs_train, info_train = {}, {}
+        for root in self.train_input_dirs:
+            self.pairs_train[root], info_train[root] = build_pairs(idx_inputs[root], idx_pcd, self.train_cases)
+        self.pairs_val, info_val = build_pairs(idx_val, idx_pcd, self.val_cases)
         self.info = {"train": info_train, "val": info_val}
 
-        first_in, first_pcd = self.pairs_train[self.train_cases[0]][0]
-        a, b = read_stored(first_in), read_stored(first_pcd)
-        if a.shape != b.shape:
-            raise ValueError(f"入力と教師の画像サイズが違います: {a.shape} != {b.shape}: {first_in} / {first_pcd}")
-        self.img_hw = a.shape
+        first_in, first_pcd = self.pairs_train[self.train_input_dirs[0]][self.train_cases[0]][0]
+        self.img_hw = read_stored(first_pcd).shape
+        for root in self.train_input_dirs:
+            domain_in, domain_pcd = self.pairs_train[root][self.train_cases[0]][0]
+            a, b = read_stored(domain_in), read_stored(domain_pcd)
+            if a.shape != b.shape or a.shape != self.img_hw:
+                raise ValueError(f"入力と教師の画像サイズが違います: {a.shape} != {b.shape}（基準 {self.img_hw}）: {domain_in} / {domain_pcd}")
         e = read_stored(self.eid_path)
         if tuple(x * self.upsample_cfg[0] for x in e.shape) != tuple(self.img_hw):
             raise ValueError(f"実 EID テストスライス {self.eid_path} の大きさ {e.shape} × scale {self.upsample_cfg[0]} が学習画像 {self.img_hw} と合いません")
         if self.patch > min(self.img_hw):
             raise ValueError(f"patch_size {self.patch} が画像サイズ {self.img_hw} を超えています")
-        n_tr = sum(len(v) for v in self.pairs_train.values())
+        n_tr = {root: sum(len(v) for v in pairs.values()) for root, pairs in self.pairs_train.items()}
         n_va = sum(len(v) for v in self.pairs_val.values())
-        dropped = sum(i["dropped"] for i in list(info_train.values()) + list(info_val.values()))
-        print(f"[PairDataset] train {len(self.train_cases)} cases / {n_tr} pairs, val {len(self.val_cases)} cases / {n_va} pairs, "
+        dropped = sum(i["dropped"] for domain in info_train.values() for i in domain.values()) + sum(i["dropped"] for i in info_val.values())
+        print(f"[PairDataset] train domains {len(self.train_input_dirs)} (uniform) / {len(self.train_cases)} cases / pairs {n_tr}, val reference {machine['eidlike1024_dir']} / {len(self.val_cases)} cases / {n_va} pairs, "
               f"test {len(self.test_cases)} cases（読まない）, image {self.img_hw}, patch {self.patch}, patches_per_slice {self.k}, len {len(self)}"
               + (f", 名前が片側にしか無いスライス {dropped} 枚は不使用" if dropped else ""))
 
@@ -166,8 +191,9 @@ class PairDataset(Dataset):
         return torch.from_numpy(np.ascontiguousarray(img[y : y + self.patch, x : x + self.patch])).unsqueeze(0)
 
     def _draw_pair(self, rng):
+        root = rng.choice(self.train_input_dirs)
         case = rng.choice(self.train_cases)
-        return rng.choice(self.pairs_train[case])
+        return rng.choice(self.pairs_train[root][case])
 
     def __getitem__(self, index):
         rng = self._rng(index)

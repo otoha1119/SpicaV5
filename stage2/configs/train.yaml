@@ -16,6 +16,9 @@ data:
   samples_per_epoch: 64000   # 1 epoch のサンプル数（random sampling）。論文の 1 epoch ≈ 61,101 組に合わせる。batch 16 → 4,000 step/epoch
   patch_seed: 0         # serial_batches=true のときの決定的サンプリング用
   patches_per_slice: 8  # 1 回読んだペア（入力 + 教師、各 2 MB）から連続して切る patch 数（位置は毎回独立）。1 = patch ごとに別ペア（2026-10-12 以前）。Stage 1 で 8 にして大幅高速化したので同じ（ユーザー指示 2026-10-12）
+  # 学習だけ、まず入力ドメインを等確率で選び、その中で従来どおり症例一様 → スライス一様 → 位置一様に選ぶ。
+  # patches_per_slice: 8 なので、同じドメイン・症例・スライスから位置だけ変えた 8 patch を連続して使う。val / 固定表示 / 推論は machines.yaml eidlike1024_dir のまま。
+  train_input_dirs: [/workspace/DataSet/EIDlike1024_v1, /workspace/DataSet/EIDlike1024_v2, /workspace/DataSet/EIDlike1024_v3]
   hu_offset: 1400       # stored = HU + 1400（Stage 1 と同じ）
   hu_min: -1400         # 正規化窓 [−1400, 4096] → [−1, 1]（Stage 1 と同じ。final_act=tanh でも同じ範囲）
   hu_max: 4096
