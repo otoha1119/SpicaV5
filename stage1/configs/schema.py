@@ -118,6 +118,9 @@ MACHINE = {
     "eidlike1024_dir":     Key(str, None,                "Stage 2 の学習入力（bash start2.sh dataset の出力先）。Stage 1 は使わない"),
     "stage2_checkpoints_dir": Key(str, None,           "Stage 2 の run の保存先ルート。Stage 1 は使わない"),
     "stage2_tb_port":      Key(int, None,                "Stage 2 の TensorBoard のポート（compose が両方公開するので start.sh も読む）。Stage 1 の TensorBoard は tb_port"),
+    # アブレーション用（ablation/<名前>/、start_ablation.sh。2026-10-27）。Stage 1 は使わない（宣言だけ）
+    "ablation_checkpoints_dir": Key(str, None,      "アブレーションの run の保存先ルート（ablation/<名前>/util/run_paths.py）。Stage 1 は使わない"),
+    "ablation_tb_port":    Key(int, None,                "アブレーションの TensorBoard のポート（compose が 3 本とも公開するので start.sh も読む）。Stage 1 は使わない"),
 }
 
 # ---------------------------------------------------------------------------

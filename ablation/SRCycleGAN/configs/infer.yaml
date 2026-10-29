@@ -1,0 +1,13 @@
+# ablation/SRCycleGAN/configs/infer.yaml — 推論（bash start_ablation.sh <マシン> SRCycleGAN infer）の方式。唯一の正は configs/schema.py の INFER。既定値は無い。
+# 重みディレクトリ・入力フォルダは infer.sh の WEIGHT_DIR / INPUT_DIR（--weight_dir / --input_dir で上書き可）。デバイスは machines.yaml の gpu_gen（0 → cpu）。
+# G1（512 → 1024）の構成と HU 正規化は run の launch.yaml、入力の一辺（512）は run の dataset_info.yaml から取る。入力は 512 のみ（1024 や他の大きさはエラー）。
+# 出力は <repo>/output/ablation/SRCycleGAN/<run>_<重み>_<入力名>_<実行時刻>/（util/run_paths.py）。patch 推論・DICOM 出力は未対応。
+
+max_slices: 0           # 0 で全スライス。動作確認は 4 など
+batch_slices: 1         # 同時に G1 に通すスライス数。G1 は 512² を 64 ch × 9 ResBlock で通す（1 枚で数 GB）。3070 8GB は 1、24 GB なら 4
+save_residual: false    # R = G1(z) − f↑(z)（16bit、0 HU = 32768）と表示用カラーも書くか
+save_panel: false       # 表示用パネル [PCD-like1024 | EID↑2 | R + ゲージ] も書くか（目視確認用。--save_panel true --max_slices 1）
+
+io:
+  read_workers: 4       # PNG の読み込み・デコードを先読みするスレッド数（0 = 直列）
+  write_workers: 2      # PNG の書き込みを非同期にするスレッド数（0 = 直列）

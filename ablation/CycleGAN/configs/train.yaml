@@ -1,0 +1,56 @@
+# ablation/CycleGAN/configs/train.yaml — 普通の CycleGAN（Zhu et al., ICCV 2017。junyanz 本家 cycle_gan_model の既定値）の学習パラメータ。唯一の正は configs/schema.py。既定値は無い。
+# A = EID1024（EID_v5 を ×2 補間、eid1024_dir）→ B = PCD1024（pcd1024_dir）の同解像度・非ペア。SR-CycleGAN（ablation/SRCycleGAN）の MMSR 損失（down / up / SSIM）が出力を EID 側に引き戻す拘束になるため、
+# それを持たない素の CycleGAN を並べる（ユーザー決定 2026-10-27）。
+# 書き方: 小数は必ず点を付ける（2.0e-4, 10.0）。真偽値は true / false。リストは [a, b]。
+
+optim:
+  lr: 2.0e-4            # 本家 0.0002（論文 Sec. 4）
+  beta1: 0.5            # 本家
+  beta2: 0.999          # 本家
+  batch_size: 4         # 本家・論文は 1。InstanceNorm なので batch に依らない。SRCycleGAN と揃えて 4（ユーザー判断）
+  n_epochs: 100         # lr 一定（本家 n_epochs）
+  n_epochs_decay: 100   # 線形に 0 へ（本家 n_epochs_decay）。合計 200 epoch
+  seed: 0
+
+loss:
+  gan_mode: lsgan       # 本家既定（論文 Sec. 4 least-squares）。vanilla で log 形
+  lambda_A: 10.0        # forward cycle（本家 10 = 論文 λ 10）
+  lambda_B: 10.0        # backward cycle
+  lambda_identity: 0.5  # 本家既定 0.5（論文の一般目的関数には無い。0 で無し）
+  pool_size: 50         # 本家（論文 Sec. 4）
+
+network:
+  netG: resnet_9blocks  # 本家既定（256×256 用）
+  ngf: 64
+  ndf: 64
+  norm: instance        # 本家既定 = 論文
+  n_layers_D: 3         # 70×70 PatchGAN（本家 basic）
+  init_type: normal
+  init_gain: 0.02
+
+data:
+  split_file: configs/splits/eid_v5.yaml   # Stage 1 task: sr / SRCycleGAN と同じ分割（EID-049 を test）
+  b_exclude_cases: []   # PCD1024 から外す症例。[] = 全 20 症例
+  patch_size: 256       # A / B 共通（1024 で 256 = task: sr と同じ解剖スケール。本家 crop_size 256 と一致）
+  samples_per_epoch: 10000   # SRCycleGAN と揃える（batch 4 → 2,500 step/epoch）
+  patches_per_slice: 8  # 1 スライスから連続して切る patch 数（Stage 1 と同じ高速化）
+  patch_seed: 0
+  serial_batches: false
+  hu_offset: 1400       # stored = HU + 1400
+  hu_min: -1400         # 正規化窓 [−1400, 4096] → [−1, 1]（Tanh の値域と一致）
+  hu_max: 4096
+
+log:
+  print_freq: 100       # step
+  image_freq: 500       # step（5 回/epoch）
+  n_images: 4
+  full_slice: EID-049/EID-049-079.png    # 固定スライス（eid1024_dir 相対。test の症例 = holdout）
+  pcd_slice: PCD-002/PCD-002-236.png     # パネル左端の PCD1024 代表（pcd1024_dir 相対）
+  n_full_random: 1      # val の症例からランダムに 1 枚（epoch ごとに別）
+  display_hu_min: -1400
+  display_hu_max: 3000
+  preview_bits: 16
+  diff_range_hu: 300
+  tb_full_size: 512     # TB のフルパネルは列を 512 に縮小
+  save_epoch_freq: 1    # 毎 epoch 重みとフル画像を保存（4 ネット ≈ 100 MB/epoch）
+  save_latest_freq: 2000   # 画像枚数（batch 4 → 500 step ごと）
