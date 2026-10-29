@@ -1,0 +1,13 @@
+# stage1_v2 推論（bash start1_v2.sh <マシン> infer）の設定。
+# 重みディレクトリ・入力フォルダは infer.sh の WEIGHT_DIR / INPUT_DIR（--weight_dir / --input_dir で上書き可）。デバイスは machines.yaml の gpu_gen（0 → cpu）。
+# G_A（PCD512 → EID-like512）の構成と HU 正規化は run の launch.yaml から読む。
+# 出力は <repo>/output/stage1_v2/<run>_<重み>_<入力名>_<実行時刻>/。patch 推論・DICOM 出力は未対応。
+
+max_slices: 0           # 0 で全スライス。動作確認は 4 など
+batch_slices: 1         # 同時に G_A に通す512スライス数
+save_residual: false    # R = G_A(z) − z（16bit、0 HU = 32768）と表示用カラーも書くか
+save_panel: false       # 表示用パネル [EID-like512 | PCD512 | R + ゲージ]
+
+io:
+  read_workers: 4       # PNG の読み込み・デコードを先読みするスレッド数（0 = 直列）
+  write_workers: 2      # PNG の書き込みを非同期にするスレッド数（0 = 直列）

@@ -14,6 +14,8 @@
 # ===== 学習・推論生成物 =====
 /stage1/checkpoints/
 /stage1/results/
+/stage1_v2/checkpoints/
+/stage1_v2/results/
 /stage2/checkpoints/
 /runs/
 /output/

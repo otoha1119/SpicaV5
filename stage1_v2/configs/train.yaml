@@ -1,0 +1,57 @@
+# stage1_v2: A = PCD512 → B = EID512、出力 = EID-like512 の CycleGAN。
+# データ列挙・patch sampling・HU 正規化は Stage 1 の task: degrade と同じ。
+# 書き方: 小数は必ず点を付ける（2.0e-4, 10.0）。真偽値は true / false。リストは [a, b]。
+
+optim:
+  lr: 2.0e-4            # 本家 0.0002（論文 Sec. 4）
+  beta1: 0.5            # 本家
+  beta2: 0.999          # 本家
+  batch_size: 40        # Stage 1 と同じ（VRAM不足時は --batch_size で下げる）
+  n_epochs: 100         # lr 一定（本家 n_epochs）
+  n_epochs_decay: 100   # 線形に 0 へ（本家 n_epochs_decay）。合計 200 epoch
+  seed: 0
+
+loss:
+  gan_mode: lsgan       # 本家既定（論文 Sec. 4 least-squares）。vanilla で log 形
+  lambda_A: 10.0        # forward cycle（本家 10 = 論文 λ 10）
+  lambda_B: 10.0        # backward cycle
+  lambda_identity: 0.5  # 本家既定 0.5（論文の一般目的関数には無い。0 で無し）
+  pool_size: 400        # 既存の成功 run と同じ
+
+network:
+  netG: resnet_9blocks  # 本家既定（256×256 用）
+  ngf: 64
+  ndf: 64
+  norm: instance        # 本家既定 = 論文
+  n_layers_D: 3         # 70×70 PatchGAN（本家 basic）
+  init_type: normal
+  init_gain: 0.02
+
+data:
+  sampling: random      # Stage 1 mode.yaml と同じ。random | paper | aligned（未実装）
+  use_eval_only_cases: false
+  patch_size: 128       # Stage 1 degrade と同じ
+  patch_stride: 1       # random は任意位置。paper では 8 を指定
+  patches_per_image: 40 # paper sampling 用
+  samples_per_epoch: 24000   # Stage 1 と同じ epoch 長（batch 40 → 600 step/epoch）
+  patches_per_slice: 8  # 1 スライスから連続して切る patch 数（Stage 1 と同じ高速化）
+  patch_seed: 0
+  serial_batches: false
+  hu_offset: 1400       # stored = HU + 1400
+  hu_min: -1400         # 正規化窓 [−1400, 4096] → [−1, 1]（Tanh の値域と一致）
+  hu_max: 4096
+
+log:
+  print_freq: 100       # step
+  image_freq: 500       # step（5 回/epoch）
+  n_images: 4
+  full_slice: PCD-002/PCD-002-215.png    # Stage 1 と同じ固定 PCD512
+  eid_slice: EID-001/EID-001-089.png     # Stage 1 と同じ代表 EID512
+  n_full_random: 1      # PCD 全症例からランダムに1枚
+  display_hu_min: -1400
+  display_hu_max: 3000
+  preview_bits: 16
+  diff_range_hu: 300
+  tb_full_size: 512     # TB のフルパネルは列を 512 に縮小
+  save_epoch_freq: 1    # 毎 epoch 重みとフル画像を保存（4 ネット ≈ 100 MB/epoch）
+  save_latest_freq: 4000   # 画像枚数（batch 40 → 100 step ごと）

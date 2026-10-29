@@ -10,15 +10,23 @@ device: cpu           # cpu | cuda。学習中は cpu（512 を数枚通すだ�
 
 cases:                # PCD と EID のペア。スライス名（PCD-nnn-sss / EID-nnn-sss）と左上座標。ファイルは pcd_dir/<PCD-nnn>/<name>.png、eid_dir/<EID-nnn>/<name>.png
                       # run の task が sr のときは pcd1024_dir / eid1024_dir のスライスを読み、eid が入力（eid_x/y で入力・G(z)・R を切る）、pcd が参照。座標は 1024 の画素で書く（2026-10-12）
-  - pcd: PCD-002-236
-    pcd_x: 266
-    pcd_y: 222
-    eid: EID-049-079
-    eid_x: 327
-    eid_y: 188
-  - pcd: PCD-002-222
-    pcd_x: 298
-    pcd_y: 373
-    eid: EID-001-093
-    eid_x: 270
-    eid_y: 343
+  # --- 新データ（DataSet_new、PC1_new）のプラーク領域。座標はプラーク中心から patch/2 = 36 を引いた左上（PCD512 = 選定表の 1024 座標 ÷ 2、EID は 512 座標そのまま）。選定表 1 行目（PCD-plaque-eval/plaques.csv、2026-10-28）---
+  - pcd: PCD-021-135
+    pcd_x: 197          # 中心 (466, 588) ÷ 2 = (233, 294) − 36
+    pcd_y: 258
+    eid: EID-1021-038
+    eid_x: 216          # 中心 (252, 321) − 36
+    eid_y: 285
+  # --- 旧データ（PCD512_v2 / EID_v5）のケース。旧データのマシンで crop するときはこちらに戻す ---
+  # - pcd: PCD-002-236
+  #   pcd_x: 266
+  #   pcd_y: 222
+  #   eid: EID-049-079
+  #   eid_x: 327
+  #   eid_y: 188
+  # - pcd: PCD-002-222
+  #   pcd_x: 298
+  #   pcd_y: 373
+  #   eid: EID-001-093
+  #   eid_x: 270
+  #   eid_y: 343

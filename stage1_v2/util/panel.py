@@ -1,0 +1,101 @@
+"""stage1_v2/util/panel.py — 表示用パネルの組み立て。
+
+2026-09-08 ユーザー確定: 並び順は EID（代表）→ EID-like G(z) → PCD z → R。各列の下に白地・黒文字のラベル帯、R の右に小さな縦ゲージ
+（上 = +range_hu 赤、中央 = 0 白、下 = −range_hu 青、目盛り付き。補足扱いなので小さめ）。余白は白、画像の周りに 1px の薄いグレー枠
+（R の白 = 0 が余白に溶けないように）。文字は cv2 の Hershey フォント（英数のみ。TrueType は商用フォントをリポジトリに入れられないため見送り）。
+
+入出力はすべて RGB float32 [0,1]（呼び出し側が 8bit / 16bit に量子化する。画像列の 16bit 階調を落とさないため、文字帯だけ 8bit で描いて変換する）。
+使う所: util/monitor.py save_full_images（TB images/full/* と output_images/preview_*/ のパネル）、inference_dir.py --save_panel、crop_patches.py panel.png
+余白・ラベル帯・ゲージ・文字の寸法は列の高さ REF_H（512）を基準にした比率で決める（列が 288 の crop パネルも 512 の preview と相似形になる。2026-09-10）。
+"""
+
+import cv2
+import numpy as np
+
+from util.residual_color import residual_rgb01
+
+REF_H = 512          # レイアウト寸法の基準となる列の高さ（フル 512。他の高さは比例）
+PAD = 8              # 余白（白）
+LABEL_H = 30         # ラベル帯の高さ
+LABEL_SCALE = 0.6    # ラベルの文字
+GAUGE_W = 72         # ゲージ列の幅
+GAUGE_BAR_W = 12     # ゲージのバー幅
+GAUGE_BAR_H = 0.55   # バーの高さ（列の高さに対する比）
+GAUGE_SCALE = 0.36   # 目盛りの文字
+BORDER = 170 / 255.0  # 画像の 1px 枠
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+
+
+def _px(v, s):
+    """基準寸法 v を比率 s で拡縮した画素数（最小 1）。"""
+    return max(1, int(round(v * s)))
+
+
+def _text_img(width, height, text, scale, color=(20, 20, 20), center=True, x=0, baseline=None):
+    """白地に黒文字の帯を 8bit で描いて float01 RGB に。"""
+    img = np.full((height, width, 3), 255, np.uint8)
+    (tw, th), _ = cv2.getTextSize(text, FONT, scale, 1)
+    if center:
+        x = (width - tw) // 2
+    y = (height + th) // 2 if baseline is None else baseline
+    cv2.putText(img, text, (int(x), int(y)), FONT, scale, color, 1, cv2.LINE_AA)
+    return img.astype(np.float32) / 255.0
+
+
+def label_strip(width, text, s):
+    """画像の下に付けるラベル帯（画像には重ねない）。s = 列の高さ / REF_H。"""
+    return _text_img(width, _px(LABEL_H, s), text, LABEL_SCALE * s)
+
+
+def gauge(height, range_hu, s, ticks=(1.0, 0.5, 0.0, -0.5, -1.0)):
+    """縦ゲージ（補足扱いで小さめ）。上 = +range_hu（赤）、中央 = 0（白）、下 = −range_hu（青）。右に目盛りとラベル、上に HU。s = 列の高さ / REF_H。"""
+    width, bar_w, scale = _px(GAUGE_W, s), _px(GAUGE_BAR_W, s), GAUGE_SCALE * s
+    img = np.full((height, width, 3), 255, np.uint8)
+    bar_h = int(height * GAUGE_BAR_H)
+    y0 = (height - bar_h) // 2
+    y1 = y0 + bar_h
+    x0 = _px(10, s)
+    t = np.linspace(range_hu, -range_hu, y1 - y0, dtype=np.float32)[:, None].repeat(bar_w, 1)
+    img[y0:y1, x0 : x0 + bar_w] = (residual_rgb01(t, range_hu) * 255.0).round().astype(np.uint8)
+    cv2.rectangle(img, (x0 - 1, y0 - 1), (x0 + bar_w, y1), (90, 90, 90), 1)  # 枠（白の中央が背景に溶けないように）
+    for frac in ticks:
+        v = int(round(frac * range_hu))
+        y = int(round(y0 + (1.0 - frac) / 2.0 * (y1 - y0 - 1)))
+        cv2.line(img, (x0 + bar_w + 1, y), (x0 + bar_w + 1 + _px(4, s), y), (40, 40, 40), 1)
+        cv2.putText(img, f"{v:+d}" if v else "0", (x0 + bar_w + _px(8, s), y + _px(4, s)), FONT, scale, (30, 30, 30), 1, cv2.LINE_AA)
+    cv2.putText(img, "HU", (x0, y0 - _px(8, s)), FONT, scale, (30, 30, 30), 1, cv2.LINE_AA)
+    return img.astype(np.float32) / 255.0
+
+
+def bordered(img01):
+    """画像の周りに 1px の薄いグレー枠。"""
+    return cv2.copyMakeBorder(img01, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=(BORDER, BORDER, BORDER))
+
+
+def build_panel(cols, labels, range_hu):
+    """cols: (H,W,3) float01 RGB の列（最後が R）。labels: 列ごとの文字列。戻り値 (Hp,Wp,3) float01 RGB。
+    [列 + ラベル帯] を白の余白で横に並べ、最後に R のゲージ。余白・帯・ゲージ・文字は列の高さ / REF_H の比率で決める。"""
+    if len(cols) != len(labels):
+        raise ValueError(f"cols と labels の数が違います: {len(cols)} vs {len(labels)}")
+    H = cols[0].shape[0]
+    s = H / float(REF_H)
+    pad = _px(PAD, s)
+    blocks = []
+    for c, t in zip(cols, labels):
+        b = bordered(np.ascontiguousarray(c, dtype=np.float32))
+        blocks.append(np.concatenate([b, label_strip(b.shape[1], t, s)], axis=0))
+    g = gauge(H + 2, range_hu, s)
+    g = np.concatenate([g, np.ones((blocks[0].shape[0] - g.shape[0], g.shape[1], 3), np.float32)], axis=0)
+    sep = np.ones((blocks[0].shape[0], pad, 3), np.float32)
+    row = [sep]
+    for b in blocks:
+        row += [b, sep]
+    row += [g, sep]
+    panel = np.concatenate(row, axis=1)
+    top = np.ones((pad, panel.shape[1], 3), np.float32)
+    return np.concatenate([top, panel, top], axis=0)
+
+
+def full_labels(epoch_or_tag):
+    """Stage 1 と同じ並び: [EID代表 | EID-like | PCD入力 | R]。"""
+    return ["EID512  y", f"EID-like512  G_A(z)   {epoch_or_tag}", "PCD512  z", "R = G_A(z) - z   [HU]"]

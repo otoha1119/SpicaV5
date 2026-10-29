@@ -3,6 +3,7 @@
 Photon-counting CT（PCD-CT）の再構成画像から、従来型 CT（EID-CT）風の画像を **非ペア学習**で生成する研究コード。
 
 - **Stage 1（本リポジトリの主体）**: PCD512 → EID-like512。別患者の PCD 画像群と EID 画像群から、PCD 固有の成分を除いて EID の分布に寄せる変換 G を学習する。
+- **Stage 1 v2**: Stage 1 と同じ PCD512 → EID-like512 を、fidelity付き一方向GANではなく標準CycleGANで学習する版。`bash start1_v2.sh <machine>` で起動する（詳細は `stage1_v2/README.md`）。
 - **Stage 2（着手 2026-09-08、§11）**: EID-like1024 → PCD1024 の教師あり同解像度回帰（U-Net + MSE、ILUMENATE = Koons et al., Med Phys 2025 準拠）。Stage 1 の出力を ×2 補間したものを入力、PCD1024 を教師にする。
 
 土台は Park, Baek, You, Choi, Seo, *"Unpaired image denoising using a generative adversarial network in X-ray CT"*, IEEE Access 2019（DOI 10.1109/access.2019.2934178。以下 **FE-GAN**）。GAN 損失に fidelity 項 λ‖G(z)−z‖² を埋め込んだ**一方向・cycle なし**の GAN で、学習フレームワークは [junyanz/pytorch-CycleGAN-and-pix2pix](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix)（commit 2a7afba）を `stage1/` に vendoring して借りている。本家からの変更はすべて `stage1/UPSTREAM.md` に記録する。
@@ -239,4 +240,3 @@ Stage 1 推論出力 <run>/infer/<重み>/<入力>/<時刻>/full/<case>/<slice>.
 - **run ディレクトリ**（正は `stage2/util/run_paths.py`）: `launch.yaml`（+ `launch_resume_*.yaml`）、`dataset_info.yaml`、`loss_log.txt`、`latest/` `best/`（val の `log.best_metric` 更新で自動、`bash start2.sh best` で手動。由来は `best.txt`）`weights/epoch_NNN/`（各 `net_G.pth` + `state.pth`、`.tmp` → rename で原子的）、`output_images/`、`tb/`
 - **Docker と TensorBoard の配線**: コンテナ（spicav5）・`docker/` のイメージと compose・`configs/machines.yaml` は Stage 1 と共用。`start2.sh` は `start.sh` と同じ手順（machines.yaml → compose 選択 → up / exec）。**両 sh とも、コンテナが起動済みならどのアクションでも `up` を呼ばず exec だけ行い、`build` は拒否する**（compose は設定が変わっていると `up -d` でコンテナを作り直し、中の学習を止めるため。止めるのは `down` だけ）。起動済みのコンテナは**作成時のマシン名（`SPICA_MACHINE`）・イメージ・データマウント元を今回の指定と照合**し、マシン名かイメージが違えば止める（マウントは exec では変えられない）。全 exec に今回のマシン名を `-e` で渡す。`bash start.sh tb` / `bash start2.sh tb` は、同じポートで run 単位の TensorBoard（学習が起動したもの）が動いていれば止めて全 run 表示に切り替える（2026-09-09）。TensorBoard は Stage 2 専用の `stage2_tb_port`（既定 6007）で、compose が `tb_port` と両方を公開し、各 Stage は自分のポートの TensorBoard だけを起動・停止する（同じマシンで両 Stage を同時に学習しても互いを止めない）。compose の設定（ポート等）を変えても起動済みのコンテナには反映されない（ポート未公開の注意が出る）。**中の処理が終わってから `down` → 起動し直す**
 - Stage 2 の設定の正は `stage2/configs/schema.py`。`configs/machines.yaml` は Stage 共通で、Stage 2 は使うキー（gpu_gen / host_data_root / container_data_root / num_threads / tb_port / eid_dir / pcd1024_dir / eidlike1024_dir / stage2_checkpoints_dir / stage2_tb_port）だけ検査する。Stage 1 の schema は未知キーを拒むので、Stage 2 のキーは `stage1/configs/schema.py` の MACHINE にも宣言してある（Stage 1 は使わない）
-
