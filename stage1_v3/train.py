@@ -5,6 +5,7 @@
   3. 再開（--resume_state）なら重み 2 つと optimizer / RNG / 進捗を復元
   4. epoch ループ: print_freq step ごとに scalar、image_freq step ごとに patch グリッド、save_latest_freq 枚ごとに latest/、
      epoch 末に lr 更新 → latest/ + weights/epoch_NNN/ + フル 512 画像（固定 PCD + ランダム PCD + 恒等経路 + n_draws 標準偏差）
+     → 自動採点（util/validator.py、R-S22 の 3 軸 + 恒等残差）。score 最良なら best/ を更新
 """
 
 import argparse
@@ -24,6 +25,7 @@ from configs.schema import MACHINE, TRAIN, ConfigError, validate, validate_share
 from data.dataset import ProjectionDataset  # noqa: E402
 from models.projection_model import ProjectionModel  # noqa: E402
 from util.monitor import TrainMonitor  # noqa: E402
+from util.validator import Validator  # noqa: E402
 from util.run_paths import DATASET_INFO_FILE, ckpt_dir, checkpoints_root  # noqa: E402
 
 
@@ -78,6 +80,7 @@ def main():
     total_iters = model.total_iters
     fixed = dataset.fixed_batch(train["log.n_images"])
     monitor = TrainMonitor(run_dir, train, len(dataset), fixed, dataset.eid_reference(), train["degrade.body_threshold_hu"])
+    validator = Validator(dataset, train, run_dir, monitor.tb)
     total_epochs = train["optim.n_epochs"] + train["optim.n_epochs_decay"]
     print_freq, image_freq, save_latest, save_epoch = train["log.print_freq"], train["log.image_freq"], train["log.save_latest_freq"], train["log.save_epoch_freq"]
     last_epoch, last_saved_epoch = None, None
@@ -110,6 +113,7 @@ def main():
             model.save(run_dir, "latest")
             model.save(run_dir, epoch)
             monitor.save_full_images(model, dataset.full_slices(epoch), epoch, total_iters)
+            validator.run(model, epoch, total_iters)
             last_saved_epoch = epoch
         last_epoch = epoch
         monitor.end_epoch(epoch, total_epochs, total_iters, model.lr_G, model.lr_D, time.time() - t_epoch)
@@ -119,6 +123,9 @@ def main():
         model.save(run_dir, "latest")
         model.save(run_dir, last_epoch)
         monitor.save_full_images(model, dataset.full_slices(last_epoch), last_epoch, total_iters)
+        validator.run(model, last_epoch, total_iters)
+    if validator.enabled and validator.best_epoch is not None:
+        monitor.write(f"[val] best: epoch {validator.best_epoch} (score {validator.best_score:.3f}){' → best/' if train['val.auto_best'] else ''}")
     monitor.write(f"[train] 完了: {run_dir}（latest: {ckpt_dir(run_dir, 'latest')}）")
     monitor.close()
 

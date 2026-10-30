@@ -35,6 +35,12 @@ sh の `--flag` は `configs/schema.py` にあるものだけ（学習は TRAIN 
 1. `ponly` で P だけの EID-like を作り、同じ `stats` で実 EID と並べる（R-S22 の校正）。Stage 2 プローブ（`bash start2.sh dataset` → U-Net）で実 EID 入力の出力を R-S27 の指標で比べる
 2. 通らなければ P + R（学習）。判定は R-S22 の 3 軸、`diag/R_ratio`（RMS(R(u))/RMS(R(y))。≫ 1 かつ D 分離維持 = R がドメイン検出器化）、`draws/std_ratio`（< 1 = R が P のノイズを消す denoise）、`draws/corr_dR_du`、`images/full/identity`。事前登録 `docs/experiments/EXP-*`
 
+## 自動採点と best
+
+epoch ごとに固定の PCD 32 枚（P → G）と実 EID 128 枚で R-S22 の指標（local_sd, nps_f_av, edge_grad_p99, hu_p50, hu_p90）を測り、`score = Σ |median_gen − median_eid| / IQR_eid + RMS(R(y))_eval / 20 HU` が最良の epoch を `best/` に自動保存する（`val.auto_best`、`best.txt` に内訳、TB `val/*`、`val_log.txt`）。GAN は最終 epoch が最良とは限らない（1 本目で HU 水準が epoch ごとに揺れた）。手動の `best <run> <epoch>` で上書きできる。
+
+D は本物と偽物を 1 バッチに連結して通す（2 本目から。1 本目は別 forward で、D の 1 層目の BN が偽物バッチの HU 水準差を消して R の HU 水準が揺れた）。
+
 ## 出力
 
 checkpoint は `stage1_v3/checkpoints/<run>/`（レイアウトは `util/run_paths.py`）。推論は `output/stage1_v3/`。推論用の重みは `net_G.pth`。

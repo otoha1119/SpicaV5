@@ -89,6 +89,11 @@ TRAIN = {
     "log.tb_full_size":      Key(int,   "--tb_full_size",    "TensorBoard のフルパネル列サイズ"),
     "log.save_epoch_freq":   Key(int,   "--save_epoch_freq", "checkpoint（weights/epoch_NNN/）とフル画像を保存する epoch 間隔"),
     "log.save_latest_freq":  Key(int,   "--save_latest_freq", "latest/ を保存する間隔（画像枚数。batch_size の倍数）"),
+    # val = epoch ごとの自動採点（util/validator.py）。R-S22 の 3 軸と恒等残差で best/ を自動更新する
+    "val.n_pcd_slices":      Key(int,   "--val_pcd_slices",  "採点用の固定 PCD スライス数（学習症例から乱択、P を 1 回掛けて G に通す）。0 で採点しない"),
+    "val.n_eid_slices":      Key(int,   "--val_eid_slices",  "参照の固定 実 EID スライス数（中央値と四分位を 1 回計算。恒等残差の eval RMS にも使う）"),
+    "val.auto_best":         Key(bool,  "--auto_best",       "true なら採点（score）が最良のとき best/ を自動更新（best.txt に score を記録）。手動の bash start1_v3.sh best は上書きできる"),
+    "val.target_ry_rms_hu":  Key(float, "--target_ry_rms_hu", "恒等残差 RMS(R(y))（eval mode）の目標 [HU]。score の正規化に使う（EXP-20261030-01 の H1 は 20）"),
 }
 
 # ---------------------------------------------------------------------------
@@ -365,6 +370,9 @@ def check_train_values(train, machine):
     if train["log.diff_range_hu"] <= 0: P.append("log.diff_range_hu は正")
     if train["log.tb_full_size"] < 64: P.append("log.tb_full_size ≥ 64")
     if train["log.save_epoch_freq"] < 1: P.append("log.save_epoch_freq ≥ 1")
+    if train["val.n_pcd_slices"] < 0 or train["val.n_eid_slices"] < 0: P.append("val.n_pcd_slices / n_eid_slices ≥ 0")
+    if train["val.n_pcd_slices"] > 0 and train["val.n_eid_slices"] < 8: P.append("採点するなら val.n_eid_slices ≥ 8（四分位を取るため）")
+    if train["val.target_ry_rms_hu"] <= 0: P.append("val.target_ry_rms_hu は正")
     slf = train["log.save_latest_freq"]
     if slf < bs or slf % bs: P.append(f"log.save_latest_freq ({slf}) は optim.batch_size ({bs}) の倍数")
     _check_machine(machine, P)

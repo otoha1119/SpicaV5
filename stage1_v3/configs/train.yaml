@@ -71,3 +71,9 @@ log:
   tb_full_size: 512
   save_epoch_freq: 1
   save_latest_freq: 4000
+
+val:                    # epoch ごとの自動採点（util/validator.py）。score = Σ_k |median_gen,k − median_eid,k| / IQR_eid,k（k = local_sd, nps_f_av, edge_grad_p99, hu_p50, hu_p90）+ RMS(R(y))_eval / target
+  n_pcd_slices: 32      # 固定 PCD スライス（学習症例から乱択、seed = patch_seed）
+  n_eid_slices: 128     # 固定 実 EID スライス（参照統計、恒等残差）
+  auto_best: true       # score 最良で best/ を自動更新
+  target_ry_rms_hu: 20.0

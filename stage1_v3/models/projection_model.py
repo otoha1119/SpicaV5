@@ -12,6 +12,7 @@
       ‖R(u)‖² = ‖E R‖² + Var_u R で、Var_u R は「P の実現への反応」なので罰してよい。確率性は P が担保する（R-S21））
       λ_id は lambda_id → lambda_id_final へ lambda_id_decay_epochs で線形減衰（0 なら一定）
 【BatchNorm】 PCD 経路（u）と EID 経路（y）は 1 つのバッチに連結して G に通す（別 forward だと BN のバッチ統計の違いだけで L_id ≈ 0 になり eval で再現しない。レビュー G1）。
+  D も本物 y と偽物 ŷ を連結して通す（D 更新・G 更新とも。別 forward だと偽物バッチの HU の水準差が 1 層目の BN で消えて D に見えず、R の HU 水準が揺れる。2026-10-30 の 1 本目で判明）。
 【高速化（008 と同じ）】 optim.precision bf16 = CUDA autocast（G / D の forward だけ。損失は FP32 に戻して計算。fgan_kl の exp は FP32）。optim.compile = nn.Module.compile(mode="max-autotune")。
   compile 時は CUDA Graph が出力 buffer を再利用するので、保持する出力は _run_net で clone する（D は 1 iteration に 3 回呼ぶ）
 【診断値（HU）】 R_u_rms / R_y_rms（残差の RMS）、R_ratio = R_u_rms / R_y_rms（≫ 1 かつ D 分離維持 = R がドメイン検出器化、レビュー D）、P_rms = RMS(u − x)、d_in = mean|fake_B − x|
@@ -183,9 +184,14 @@ class ProjectionModel:
         self.fake_B, self.idt_B = out[:n], out[n:]
         self.R_u, self.R_y = self.fake_B - self.u, self.idt_B - self.real_B
 
+    def _D_real_fake(self, fake):
+        """本物 y と偽物を 1 バッチに連結して D に通す（BN のドメイン分割対策。別 forward だと偽物バッチ全体の HU のずれが BN で消え、D が HU の水準を見られない。2026-10-30 run 2026_1030_1856 で HU 水準が epoch ごとに揺れた原因）。"""
+        n = self.real_B.shape[0]
+        v = self._run_net(self.netD, torch.cat([self.real_B, fake], dim=0))
+        return v[:n], v[n:]
+
     def backward_D(self):
-        v_real = self._run_net(self.netD, self.real_B)
-        v_fake = self._run_net(self.netD, self.fake_B.detach())
+        v_real, v_fake = self._D_real_fake(self.fake_B.detach())
         if self.gan_mode == "fgan_kl":
             D_real = self._D_from_v(v_real)
             J_D = D_real.mean() + v_fake.mean()  # E[D(x)] + E[log(1 − D(G(z)))]、log(1 − D) = v
@@ -199,7 +205,7 @@ class ProjectionModel:
         self.loss_D.backward()
 
     def backward_G(self):
-        v_fake = self._run_net(self.netD, self.fake_B)
+        _, v_fake = self._D_real_fake(self.fake_B)  # G の更新でも本物と連結（偽物だけだと BN が水準差を消し、G に HU の勾配が届かない）
         if self.gan_mode == "fgan_kl":
             self.loss_G_GAN = v_fake.mean()  # E[log(1 − D(G(z)))] = E[v]
         else:
