@@ -1,6 +1,9 @@
 """stage1_v3/degrade.py — 物理コア P（学習なし・確率的）。PCD512 の HU 画像に、ぼかし（MTF 低下）と NPS 整形ノイズを掛ける。
 
-  u = blur(x; σ_b) + σ_n · shape(w; c) · mask
+  mode gaussian      : u = blur(x; σ_b) + σ_n · shape(w; c) · mask
+  mode bilateral_blur: u = blur(bilateral(x; σ_color, σ_space); σ_b) + σ_n · shape(w; c) · mask
+                       bilateral（エッジ保存の平滑化）で PCD のノイズを EID 水準まで落とし（iterative recon の役回り）、弱い Gaussian でカーネル差（MTF）を合わせ、最後に NPS 整形ノイズを足す。
+                       単一の Gaussian ではノイズ 93 → 22 HU に σ ≈ 1.9 px が要り、中程度のエッジ（肺血管・縦隔境界）が実 EID より潰れる（2026-10-30、1 本目の目視）
     σ_b : Gaussian ぼかしの標準偏差 [px]（鮮鋭度の軸。R-S22 (b)）
     σ_n : 加算ノイズの標準偏差 [HU]（ノイズ量の軸。R-S22 (a)）
     c   : 白色ノイズ w に掛ける Gaussian の標準偏差 [px]（NPS の形。0 = 白色。大きいほど低周波寄り）。整形後は標本標準偏差で 1 に戻してから σ_n を掛ける
@@ -15,13 +18,16 @@ HU 写像・blooming・ビームハードニングのような内容依存の成
 import cv2
 import numpy as np
 
-PARAM_NAMES = ("blur_sigma_px", "noise_sigma_hu", "noise_corr_px")
+PARAM_NAMES = ("blur_sigma_px", "noise_sigma_hu", "noise_corr_px", "bilateral_sigma_color_hu", "bilateral_sigma_space_px")
 
 
 def degrade_config(train):
     """train の平坦 dict から P の設定だけを取り出す（launch.yaml / infer の引数の両方から同じ形で作る）。"""
     return {
         "enabled": bool(train["degrade.enabled"]),
+        "mode": str(train["degrade.mode"]),
+        "bil_color": (float(train["degrade.bilateral_sigma_color_hu_min"]), float(train["degrade.bilateral_sigma_color_hu_max"])),
+        "bil_space": (float(train["degrade.bilateral_sigma_space_px_min"]), float(train["degrade.bilateral_sigma_space_px_max"])),
         "blur": (float(train["degrade.blur_sigma_px_min"]), float(train["degrade.blur_sigma_px_max"])),
         "noise": (float(train["degrade.noise_sigma_hu_min"]), float(train["degrade.noise_sigma_hu_max"])),
         "corr": (float(train["degrade.noise_corr_px_min"]), float(train["degrade.noise_corr_px_max"])),
@@ -34,10 +40,13 @@ def sample_params(cfg, rng):
     """スライス 1 枚分の (σ_b, σ_n, c) を一様に引く。rng は numpy.random.Generator。enabled=false なら全部 0。"""
     if not cfg["enabled"]:
         return {k: 0.0 for k in PARAM_NAMES}
+    bil = cfg["mode"] == "bilateral_blur"
     return {
         "blur_sigma_px": float(rng.uniform(*cfg["blur"])),
         "noise_sigma_hu": float(rng.uniform(*cfg["noise"])),
         "noise_corr_px": float(rng.uniform(*cfg["corr"])),
+        "bilateral_sigma_color_hu": float(rng.uniform(*cfg["bil_color"])) if bil else 0.0,
+        "bilateral_sigma_space_px": float(rng.uniform(*cfg["bil_space"])) if bil else 0.0,
     }
 
 
@@ -46,6 +55,14 @@ def _gaussian_blur(img, sigma):
         return img
     k = int(2 * np.ceil(3.0 * sigma) + 1)
     return cv2.GaussianBlur(img, (k, k), sigmaX=sigma, sigmaY=sigma, borderType=cv2.BORDER_REFLECT_101)
+
+
+def _bilateral(img, sigma_color, sigma_space):
+    """エッジ保存の平滑化（cv2.bilateralFilter、float32）。sigma_color [HU]: この差より小さい画素は平均される（ノイズ ≈ 93 HU なら 2〜3 倍が目安）、sigma_space [px]: 空間の広がり。"""
+    if sigma_color <= 0 or sigma_space <= 0:
+        return img
+    d = int(2 * np.ceil(2.0 * sigma_space) + 1)
+    return cv2.bilateralFilter(img, d, sigma_color, sigma_space, borderType=cv2.BORDER_REFLECT_101)
 
 
 def shaped_noise(shape, corr_px, rng):
@@ -65,6 +82,10 @@ def apply_degrade(hu, params, cfg, rng):
     if not cfg["enabled"]:
         return hu
     x = np.ascontiguousarray(hu, dtype=np.float32)
+    if cfg["mode"] == "bilateral_blur":
+        x = _bilateral(x, params["bilateral_sigma_color_hu"], params["bilateral_sigma_space_px"])
+    elif cfg["mode"] != "gaussian":
+        raise ValueError(f"degrade.mode: {cfg['mode']}")
     u = _gaussian_blur(x, params["blur_sigma_px"])
     if params["noise_sigma_hu"] > 0:
         n = shaped_noise(x.shape, params["noise_corr_px"], rng) * np.float32(params["noise_sigma_hu"])

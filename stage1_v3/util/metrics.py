@@ -62,6 +62,9 @@ def analyze_slice(hu, thr, rng):
     A = np.stack([np.ones(ROI * ROI), yy.ravel(), xx.ravel(), yy.ravel() ** 2, xx.ravel() ** 2, (yy * xx).ravel()], axis=1)
     resid = []
     for r in rois:
+        if r.std() < 1e-6:  # 完全に一様な ROI（合成データなど）。lstsq が発散するので残差 0
+            resid.append(np.zeros((ROI, ROI), np.float64))
+            continue
         coef, *_ = np.linalg.lstsq(A, r.ravel(), rcond=None)
         resid.append((r.ravel() - A @ coef).reshape(ROI, ROI))
     resid = np.stack(resid)

@@ -16,11 +16,13 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import INFER, MACHINE, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate, validate_shared  # noqa: E402
+from configs.schema import INFER, LEGACY_TRAIN_DEFAULTS, MACHINE, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate, validate_shared  # noqa: E402
 from util.run_paths import STAGE, DATASET_INFO_FILE, INFER_WEIGHT, LAUNCH_FILE, checkpoints_root, find_run_dir, infer_output_dir, latest_launch  # noqa: E402
 
 G_KEYS = {"network.netG": "--netG", "network.ngf": "--ngf", "network.norm": "--norm", "data.hu_offset": "--hu_offset", "data.hu_min": "--hu_min", "data.hu_max": "--hu_max"}
-P_KEYS = {"degrade.enabled": "--p_enabled", "degrade.blur_sigma_px_min": "--p_blur_min", "degrade.blur_sigma_px_max": "--p_blur_max",
+P_KEYS = {"degrade.enabled": "--p_enabled", "degrade.mode": "--p_mode",
+          "degrade.bilateral_sigma_color_hu_min": "--p_bil_color_min", "degrade.bilateral_sigma_color_hu_max": "--p_bil_color_max",
+          "degrade.bilateral_sigma_space_px_min": "--p_bil_space_min", "degrade.bilateral_sigma_space_px_max": "--p_bil_space_max", "degrade.blur_sigma_px_min": "--p_blur_min", "degrade.blur_sigma_px_max": "--p_blur_max",
           "degrade.noise_sigma_hu_min": "--p_noise_min", "degrade.noise_sigma_hu_max": "--p_noise_max", "degrade.noise_corr_px_min": "--p_corr_min",
           "degrade.noise_corr_px_max": "--p_corr_max", "degrade.noise_body_only": "--p_body_only", "degrade.body_threshold_hu": "--p_body_threshold_hu"}
 DISPLAY_KEYS = {"log.display_hu_min": "--display_hu_min", "log.display_hu_max": "--display_hu_max", "log.preview_bits": "--preview_bits", "log.diff_range_hu": "--diff_range_hu"}
@@ -84,6 +86,8 @@ def main():
         launch = load_yaml(launch_path)
         if launch.get("stage") != STAGE:
             raise ConfigError(f"{launch_path} は {STAGE} の run ではありません")
+        for key, value in LEGACY_TRAIN_DEFAULTS.items():  # 旧 run（degrade.mode 以前）の launch も推論できるように
+            launch["train"].setdefault(key, value)
         ltrain = validate("train(launch)", launch["train"], TRAIN)
         info_path = run_dir / DATASET_INFO_FILE
         info = load_yaml(info_path)

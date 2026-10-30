@@ -306,7 +306,8 @@ class ProjectionDataset(Dataset):
         print(f"[ProjectionDataset] A=PCD512: {self.idx_a.n_cases} cases / {self.idx_a.n_slices} slices | "
               f"B=EID512: {self.idx_b.n_cases} cases / {self.idx_b.n_slices} slices | image {self.hw}, patch {self.patch}, sampling {sampling}, len {len(self)}"
               + (f", patches_per_slice {train['data.patches_per_slice']}" if sampling == "random" else "")
-              + f" | P {'on' if self.pcfg['enabled'] else 'off'} blur {self.pcfg['blur']} px, noise {self.pcfg['noise']} HU, corr {self.pcfg['corr']} px")
+              + f" | P {'on' if self.pcfg['enabled'] else 'off'} mode {self.pcfg['mode']}" + (f" bilateral color {self.pcfg['bil_color']} HU space {self.pcfg['bil_space']} px" if self.pcfg['mode'] == 'bilateral_blur' else "")
+              + f" blur {self.pcfg['blur']} px, noise {self.pcfg['noise']} HU, corr {self.pcfg['corr']} px")
 
     def info(self):
         return {"image_hw": list(self.hw), "patch": self.patch, "sampling": self.cfg["data.sampling"],

@@ -50,7 +50,8 @@ def parse_args():
     req("--hu_offset", type=int); req("--hu_min", type=int); req("--hu_max", type=int)
     req("--input_size", type=int)
     # P（run の launch.yaml から）
-    req("--p_enabled", type=parse_bool); req("--p_blur_min", type=float); req("--p_blur_max", type=float)
+    req("--p_enabled", type=parse_bool); req("--p_mode"); req("--p_blur_min", type=float); req("--p_blur_max", type=float)
+    req("--p_bil_color_min", type=float); req("--p_bil_color_max", type=float); req("--p_bil_space_min", type=float); req("--p_bil_space_max", type=float)
     req("--p_noise_min", type=float); req("--p_noise_max", type=float); req("--p_corr_min", type=float); req("--p_corr_max", type=float)
     req("--p_body_only", type=parse_bool); req("--p_body_threshold_hu", type=float)
     # 表示
@@ -89,7 +90,8 @@ def main():
     input_dir, out_dir = Path(a.input_dir), Path(a.out_dir)
     hu = (a.hu_offset, a.hu_min, a.hu_max)
     size = a.input_size
-    pcfg = {"enabled": bool(a.p_enabled and a.apply_degrade), "blur": (a.p_blur_min, a.p_blur_max), "noise": (a.p_noise_min, a.p_noise_max),
+    pcfg = {"enabled": bool(a.p_enabled and a.apply_degrade), "mode": a.p_mode, "bil_color": (a.p_bil_color_min, a.p_bil_color_max), "bil_space": (a.p_bil_space_min, a.p_bil_space_max),
+            "blur": (a.p_blur_min, a.p_blur_max), "noise": (a.p_noise_min, a.p_noise_max),
             "corr": (a.p_corr_min, a.p_corr_max), "body_only": a.p_body_only, "body_threshold_hu": a.p_body_threshold_hu}
     n_draws = a.n_draws if pcfg["enabled"] else 1
     rng = np.random.default_rng(a.seed)

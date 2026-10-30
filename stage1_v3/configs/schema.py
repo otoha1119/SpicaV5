@@ -45,6 +45,11 @@ TRAIN = {
     "loss.lambda_id_final":  Key(float, "--lambda_id_final", "減衰後の λ_id（lambda_id_decay_epochs > 0 のときだけ使う）"),
     # degrade = 物理コア P（学習なし。R-S23: σ・鮮鋭度はスライスごとに範囲から抽選。範囲は R-S22 の実測（bash start1_v3.sh <machine> stats）を含むまで広げる）
     "degrade.enabled":       Key(bool,  "--degrade",         "false で P を掛けない（u = x。従来の fidelity GAN + 恒等項の対照）"),
+    "degrade.mode":          Key(str,   "--degrade_mode",    "gaussian（一様ぼかし + ノイズ。1 本目）| bilateral_blur（エッジ保存の平滑化 → 弱いぼかし → ノイズ。中程度のエッジを実 EID 並みに残す。2026-10-30）"),
+    "degrade.bilateral_sigma_color_hu_min": Key(float, "--bil_color_min", "bilateral の sigma_color [HU] の下限（mode bilateral_blur のみ。PCD のノイズ SD ≈ 93 HU の 2〜3 倍が目安）"),
+    "degrade.bilateral_sigma_color_hu_max": Key(float, "--bil_color_max", "同 上限"),
+    "degrade.bilateral_sigma_space_px_min": Key(float, "--bil_space_min", "bilateral の sigma_space [px] の下限（mode bilateral_blur のみ）"),
+    "degrade.bilateral_sigma_space_px_max": Key(float, "--bil_space_max", "同 上限"),
     "degrade.blur_sigma_px_min": Key(float, "--blur_min",    "ぼかし（MTF 低下）の Gaussian σ [px] の下限。0 で無ぼかしを含む"),
     "degrade.blur_sigma_px_max": Key(float, "--blur_max",    "同 上限。PCD512 → EID512 の鮮鋭度差（edge 10–90 % 幅の比）から決める"),
     "degrade.noise_sigma_hu_min": Key(float, "--noise_min",  "加算ノイズの標準偏差 [HU] の下限（ぼかし後の画像に足す。局所 SD の目標 = 実 EID の一様 ROI の SD − PCD 側の SD の二乗差）"),
@@ -124,6 +129,7 @@ INFER = {
 }
 
 GAN_MODES = ("fgan_kl", "lsgan", "vanilla")
+DEGRADE_MODES = ("gaussian", "bilateral_blur")
 PRECISIONS = ("fp32", "bf16")
 NETGS = ("wavelet", "resnet_9blocks", "resnet_6blocks")
 NETDS = ("paper", "basic")
@@ -133,10 +139,12 @@ GPU_GENS = (0, 30, 40, 50)
 SAMPLINGS = ("random", "paper")
 
 # この 2 項目が追加される前の run（2026-10-30 の初回 run）を resume するためだけの移行値。新規 run の値は train.yaml にあり、設定欠落の暗黙補完には使わない
-LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False}
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False,
+                         "degrade.mode": "gaussian", "degrade.bilateral_sigma_color_hu_min": 0.0, "degrade.bilateral_sigma_color_hu_max": 0.0,
+                         "degrade.bilateral_sigma_space_px_min": 0.0, "degrade.bilateral_sigma_space_px_max": 0.0}
 
 # 重みの形と P の有無を決めるキー。再開で変えられない
-SHAPE_KEYS = ("network.netG", "network.netD", "network.ngf", "network.ndf", "network.norm", "degrade.enabled")
+SHAPE_KEYS = ("network.netG", "network.netD", "network.ngf", "network.ndf", "network.norm", "degrade.enabled", "degrade.mode")
 
 
 # ---------------------------------------------------------------------------
@@ -319,11 +327,15 @@ def _check_machine(machine, P):
 
 def check_degrade_values(train, P):
     d = {k.split(".", 1)[1]: v for k, v in train.items() if k.startswith("degrade.")}
-    for lo, hi in (("blur_sigma_px_min", "blur_sigma_px_max"), ("noise_sigma_hu_min", "noise_sigma_hu_max"), ("noise_corr_px_min", "noise_corr_px_max")):
+    if d["mode"] not in DEGRADE_MODES: P.append(f"degrade.mode は {DEGRADE_MODES}")
+    for lo, hi in (("blur_sigma_px_min", "blur_sigma_px_max"), ("noise_sigma_hu_min", "noise_sigma_hu_max"), ("noise_corr_px_min", "noise_corr_px_max"),
+                   ("bilateral_sigma_color_hu_min", "bilateral_sigma_color_hu_max"), ("bilateral_sigma_space_px_min", "bilateral_sigma_space_px_max")):
         if d[lo] < 0: P.append(f"degrade.{lo} ≥ 0")
         if d[hi] < d[lo]: P.append(f"degrade.{lo} ≤ degrade.{hi}")
-    if d["enabled"] and d["blur_sigma_px_max"] == 0 and d["noise_sigma_hu_max"] == 0:
+    if d["enabled"] and d["mode"] == "gaussian" and d["blur_sigma_px_max"] == 0 and d["noise_sigma_hu_max"] == 0:
         P.append("degrade.enabled なのにぼかしもノイズも上限 0（P が恒等になる。--degrade false にするか範囲を指定）")
+    if d["enabled"] and d["mode"] == "bilateral_blur" and (d["bilateral_sigma_color_hu_max"] <= 0 or d["bilateral_sigma_space_px_max"] <= 0):
+        P.append("degrade.mode bilateral_blur では bilateral_sigma_color_hu_max / sigma_space_px_max を正に")
 
 
 def check_train_values(train, machine):

@@ -24,12 +24,17 @@ loss:
 
 degrade:                # 物理コア P（学習なし、スライスごとに抽選。R-S23）
   enabled: true         # false で u = x（P なし。fidelity GAN + 恒等項だけの対照）
-  blur_sigma_px_min: 0.0      # ぼかし Gaussian σ [px]。実測前の仮置き（PCD512 と EID512 の edge 幅の比から決め直す）
+  mode: bilateral_blur  # gaussian = 一様ぼかし（1 本目・2 本目: blur 1.4〜2.4 で local_sd と edge_grad_p99 は合うが中程度のエッジが実 EID より潰れる）| bilateral_blur = エッジ保存の平滑化 → 弱いぼかし → ノイズ
+  bilateral_sigma_color_hu_min: 150.0   # mode bilateral_blur のみ。PCD のノイズ SD 93 HU の 2〜3 倍（実測前の仮置き。ponly + stats で local_sd / nps / edge_grad p90・p95・p99 を揃えて決める）
+  bilateral_sigma_color_hu_max: 250.0
+  bilateral_sigma_space_px_min: 1.5
+  bilateral_sigma_space_px_max: 3.0
+  blur_sigma_px_min: 0.5      # 弱いぼかし Gaussian σ [px]（カーネル差）。gaussian モードでは 1.4〜2.4（2026-10-30 校正）
   blur_sigma_px_max: 1.0
-  noise_sigma_hu_min: 10.0    # 加算ノイズ SD [HU]。実測前の仮置き（実 EID の一様 ROI の局所 SD から決め直す）
-  noise_sigma_hu_max: 40.0
-  noise_corr_px_min: 0.0      # ノイズの空間相関 σ [px]。0 = 白色
-  noise_corr_px_max: 1.0
+  noise_sigma_hu_min: 5.0     # 加算ノイズ SD [HU]。bilateral 後は PCD のノイズがほぼ消えるので、EID の 22 HU は主にここで足す（実測で決める）
+  noise_sigma_hu_max: 25.0
+  noise_corr_px_min: 0.5      # ノイズの空間相関 σ [px]。EID の nps_f_av 0.09（低域寄り）に合わせる
+  noise_corr_px_max: 2.0
   noise_body_only: true       # 空気にはノイズを足さない
   body_threshold_hu: -500
 

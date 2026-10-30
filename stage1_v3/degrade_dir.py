@@ -59,7 +59,7 @@ def main():
         machine = validate_shared(f"machines.{a.machine}", machines[a.machine], MACHINE)
         local, rest = split_local(overrides)
         applied = apply_overrides(rest, {"train": (train, TRAIN)})
-        bad = [k for k in applied if not k.lstrip("-").startswith(("blur", "noise", "corr", "body", "degrade", "hu_"))]
+        bad = [k for k in applied if not k.lstrip("-").startswith(("blur", "noise", "corr", "body", "degrade", "bil_", "hu_"))]
         if bad:
             raise ConfigError(f"ponly で上書きできるのは degrade.* と data.hu_* だけです: {bad}")
         P = []
@@ -91,7 +91,9 @@ def main():
     idx = CaseIndex(input_dir, checkpoints_root(machine) / ".case_index")
     paths = idx.all_paths if max_slices == 0 else idx.all_paths[:max_slices]
     rng = np.random.default_rng(seed)
-    print(f"[ponly] {input_dir} ({idx.n_cases} cases, {len(paths)} slices) → {out_dir} | blur {pcfg['blur']} px, noise {pcfg['noise']} HU, corr {pcfg['corr']} px, body_only {pcfg['body_only']}")
+    print(f"[ponly] {input_dir} ({idx.n_cases} cases, {len(paths)} slices) → {out_dir} | mode {pcfg['mode']}"
+          + (f", bilateral color {pcfg['bil_color']} HU space {pcfg['bil_space']} px" if pcfg['mode'] == 'bilateral_blur' else "")
+          + f", blur {pcfg['blur']} px, noise {pcfg['noise']} HU, corr {pcfg['corr']} px, body_only {pcfg['body_only']}")
     manifest = {"stage": STAGE, "kind": "ponly", "timestamp": now.isoformat(timespec="seconds"), "input_dir": str(input_dir), "seed": seed,
                 "degrade": {k: (list(v) if isinstance(v, tuple) else v) for k, v in pcfg.items()}, "applied": applied, "slices": []}
     for pth in tqdm(paths, unit="slice", dynamic_ncols=True):
