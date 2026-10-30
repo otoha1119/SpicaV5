@@ -68,7 +68,8 @@ def main():
     print(f"[train] projection G {train['network.netG']} D {train['network.netD']} gan {train['loss.gan_mode']} "
           f"lambda_fid {train['loss.lambda_fid']} lambda_id {train['loss.lambda_id']}→{train['loss.lambda_id_final']} over {train['loss.lambda_id_decay_epochs']} ep | "
           f"P {'on' if train['degrade.enabled'] else 'off'} | " + " ".join(f"{k} {v / 1e6:.2f}M" for k, v in npar.items())
-          + f" | lr_G {model.lr_G:.2e} lr_D {model.lr_D:.2e} | device {device}")
+          + f" | lr_G {model.lr_G:.2e} lr_D {model.lr_D:.2e} | precision {model.precision} | compile {model.compile_enabled}"
+          + (" (requested, CUDA only)" if model.compile_requested and not model.compile_enabled else "") + f" | device {device}")
     if a.resume_state:
         model.load_weights(Path(a.resume_state).parent)
         model.resume(a.resume_state, a.epoch_count)

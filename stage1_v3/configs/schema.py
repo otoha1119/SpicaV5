@@ -35,6 +35,8 @@ TRAIN = {
     "optim.n_epochs":        Key(int,   "--n_epochs",        "lr 一定の epoch 数。論文 300"),
     "optim.n_epochs_decay":  Key(int,   "--n_epochs_decay",  "lr を 0 へ線形減衰させる epoch 数。論文未記載（0 = 減衰なし）"),
     "optim.seed":            Key(int,   "--seed",            "python / numpy / torch の乱数 seed。cudnn.benchmark は有効なので完全決定ではない"),
+    "optim.precision":       Key(str,   "--precision",       "演算精度 fp32 | bf16。bf16 は CUDA の autocast（重み・optimizer state・損失の計算は FP32 のまま）。stage1_v2（008）の高速化と同じ"),
+    "optim.compile":         Key(bool,  "--compile",         "CUDA で G / D を torch.compile(mode='max-autotune') する（CPU では無効）。初回 iteration はコンパイルで遅い。Docker image に build-essential が要る（docker/Dockerfile.gen30/gen50）"),
     # loss
     "loss.gan_mode":         Key(str,   "--gan_mode",        "fgan_kl（論文 Eq.6: D := 1 − exp(v)、stage1 と同じ）| lsgan | vanilla（ablation）"),
     "loss.lambda_fid":       Key(float, "--lambda_fid",      "fidelity λ_fid · mean(R(u)²)（正規化単位 [−1,1]。論文 λ = 10）。R を小さく保つ力。1 draw（レビュー B: 2 draw 内積は denoise に盲目なので不採用）"),
@@ -117,12 +119,16 @@ INFER = {
 }
 
 GAN_MODES = ("fgan_kl", "lsgan", "vanilla")
+PRECISIONS = ("fp32", "bf16")
 NETGS = ("wavelet", "resnet_9blocks", "resnet_6blocks")
 NETDS = ("paper", "basic")
 NORMS = ("instance", "batch")
 INIT_TYPES = ("normal", "xavier", "kaiming", "orthogonal")
 GPU_GENS = (0, 30, 40, 50)
 SAMPLINGS = ("random", "paper")
+
+# この 2 項目が追加される前の run（2026-10-30 の初回 run）を resume するためだけの移行値。新規 run の値は train.yaml にあり、設定欠落の暗黙補完には使わない
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False}
 
 # 重みの形と P の有無を決めるキー。再開で変えられない
 SHAPE_KEYS = ("network.netG", "network.netD", "network.ngf", "network.ndf", "network.norm", "degrade.enabled")
@@ -325,6 +331,7 @@ def check_train_values(train, machine):
     if train["optim.n_epochs"] < 1: P.append("optim.n_epochs ≥ 1")
     if train["optim.n_epochs_decay"] < 0: P.append("optim.n_epochs_decay ≥ 0")
     if train["optim.seed"] < 0: P.append("optim.seed ≥ 0")
+    if train["optim.precision"] not in PRECISIONS: P.append(f"optim.precision は {PRECISIONS}")
     if train["loss.gan_mode"] not in GAN_MODES: P.append(f"loss.gan_mode は {GAN_MODES}")
     for k in ("lambda_fid", "lambda_id", "lambda_id_final"):
         if train[f"loss.{k}"] < 0: P.append(f"loss.{k} ≥ 0")

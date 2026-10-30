@@ -25,6 +25,8 @@ bash start1_v3.sh <machine> stats --dirs /workspace/DataSet/EID_v5,/workspace/Da
 bash start1_v3.sh <machine> tb
 ```
 
+新規 run は既定で BF16 autocast と CUDA 上の `torch.compile(mode="max-autotune")` を使う（008 と同じ。重みと optimizer state は FP32、checkpoint 形式は同じ）。初回 iteration はコンパイルで長い。従来条件は `--precision fp32 --compile false`。compile には build-essential 入りの image が要るので、古い image のマシンは `down → build`。
+
 sh の `--flag` は `configs/schema.py` にあるものだけ（学習は TRAIN と MACHINE、推論は INFER）。実効値は `<run>/launch.yaml`。再開で `network.*` と `degrade.enabled` は変えられない。
 
 ## 着手順（レビュー I）

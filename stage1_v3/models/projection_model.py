@@ -12,6 +12,8 @@
       ‖R(u)‖² = ‖E R‖² + Var_u R で、Var_u R は「P の実現への反応」なので罰してよい。確率性は P が担保する（R-S21））
       λ_id は lambda_id → lambda_id_final へ lambda_id_decay_epochs で線形減衰（0 なら一定）
 【BatchNorm】 PCD 経路（u）と EID 経路（y）は 1 つのバッチに連結して G に通す（別 forward だと BN のバッチ統計の違いだけで L_id ≈ 0 になり eval で再現しない。レビュー G1）。
+【高速化（008 と同じ）】 optim.precision bf16 = CUDA autocast（G / D の forward だけ。損失は FP32 に戻して計算。fgan_kl の exp は FP32）。optim.compile = nn.Module.compile(mode="max-autotune")。
+  compile 時は CUDA Graph が出力 buffer を再利用するので、保持する出力は _run_net で clone する（D は 1 iteration に 3 回呼ぶ）
 【診断値（HU）】 R_u_rms / R_y_rms（残差の RMS）、R_ratio = R_u_rms / R_y_rms（≫ 1 かつ D 分離維持 = R がドメイン検出器化、レビュー D）、P_rms = RMS(u − x)、d_in = mean|fake_B − x|
 """
 
@@ -29,6 +31,18 @@ from util.run_paths import CKPT_KINDS, NET_NAMES, ckpt_dir
 
 def _to_tuple(x):
     return tuple(_to_tuple(v) for v in x) if isinstance(x, (list, tuple)) else x
+
+
+def _quiet_inductor_autotune_success_logs():
+    """探索は維持し、成功した max-autotune 候補の大量表示だけ止める（008 と同じ）。"""
+    import torch._inductor.select_algorithm as select_algorithm
+
+    select_algorithm.PRINT_AUTOTUNE = False
+    import torch._inductor.config as inductor_config
+    if hasattr(inductor_config, "autotune_num_choices_displayed"):
+        inductor_config.autotune_num_choices_displayed = 0
+    if hasattr(inductor_config, "max_autotune_report_choices_stats"):
+        inductor_config.max_autotune_report_choices_stats = False
 
 
 def _swap_dirs(tmp, final, old, retries=10, wait=3.0):
@@ -71,10 +85,20 @@ class ProjectionModel:
         self.is_train = is_train
         self.launch_config = launch_config
         self.hu_per_unit = (train["data.hu_max"] - train["data.hu_min"]) / 2.0
+        self.precision = train["optim.precision"]
+        self.use_bf16 = self.precision == "bf16" and device.type == "cuda"
+        self.compile_requested = train["optim.compile"]
+        self.compile_enabled = self.compile_requested and device.type == "cuda"
+        if self.compile_enabled and not (shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc")):
+            raise RuntimeError("torch.compile に必要な C コンパイラがありません。Docker image を再ビルドしてください: bash start1_v3.sh <machine> down → bash start1_v3.sh <machine> build")
         self.netG = networks.build_G(train, device)
         self.model_names = list(NET_NAMES) if is_train else ["G"]
         if is_train:
             self.netD = networks.build_D(train, device)
+            if self.compile_enabled:
+                _quiet_inductor_autotune_success_logs()
+                for net in self.nets().values():  # nn.Module.compile は identity と state_dict のキーを保つ
+                    net.compile(mode="max-autotune")
             self.gan_mode = train["loss.gan_mode"]
             if self.gan_mode != "fgan_kl":
                 self.criterionGAN = networks.GANLoss(self.gan_mode).to(device)
@@ -129,6 +153,17 @@ class ProjectionModel:
         for net in self.nets().values():
             net.train(flag)
 
+    def _autocast(self):
+        """BF16 は GradScaler 不要。重みと optimizer state は FP32 のまま。"""
+        return torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16)
+
+    def _run_net(self, net, x):
+        """compiled module の CUDA Graph 出力を次の呼び出しによる上書きから守る（出力を FP32 に戻す）。"""
+        with self._autocast():
+            y = net(x)
+        y = y.float()
+        return y.clone() if self.compile_enabled else y
+
     # ------------------------------------------------------------------ 論文 Eq.(6) の D の値域: D := 1 − exp(v)
     @staticmethod
     def _D_from_v(v):
@@ -144,13 +179,13 @@ class ProjectionModel:
         """PCD 経路と EID 経路を連結して 1 回で G に通す（BN 対策）。"""
         n = self.u.shape[0]
         inp = torch.cat([self.u, self.real_B], dim=0)
-        out = self.netG(inp)
+        out = self._run_net(self.netG, inp)
         self.fake_B, self.idt_B = out[:n], out[n:]
         self.R_u, self.R_y = self.fake_B - self.u, self.idt_B - self.real_B
 
     def backward_D(self):
-        v_real = self.netD(self.real_B)
-        v_fake = self.netD(self.fake_B.detach())
+        v_real = self._run_net(self.netD, self.real_B)
+        v_fake = self._run_net(self.netD, self.fake_B.detach())
         if self.gan_mode == "fgan_kl":
             D_real = self._D_from_v(v_real)
             J_D = D_real.mean() + v_fake.mean()  # E[D(x)] + E[log(1 − D(G(z)))]、log(1 − D) = v
@@ -164,7 +199,7 @@ class ProjectionModel:
         self.loss_D.backward()
 
     def backward_G(self):
-        v_fake = self.netD(self.fake_B)
+        v_fake = self._run_net(self.netD, self.fake_B)
         if self.gan_mode == "fgan_kl":
             self.loss_G_GAN = v_fake.mean()  # E[log(1 − D(G(z)))] = E[v]
         else:
@@ -205,19 +240,19 @@ class ProjectionModel:
         """x: (N,1,H,W) 正規化済み → G(x) = x + R(x)。eval で通す（BN は running 統計）。"""
         was = self.netG.training
         self.netG.eval()
-        y = self.netG(x.to(self.device))
+        y = self._run_net(self.netG, x.to(self.device))
         self.netG.train(was)
-        return y.float()
+        return y
 
     @torch.no_grad()
     def views(self, batch):
         """表示用: バッチ先頭の A / U / fake_B / B / idt_B（eval で通す）。"""
         self.train_mode(False)
         a, u, b = batch["A"].to(self.device), batch["U"].to(self.device), batch["B"].to(self.device)
-        out = self.netG(torch.cat([u, b], dim=0))
+        out = self._run_net(self.netG, torch.cat([u, b], dim=0))
         self.train_mode(True)
         n = u.shape[0]
-        return {"A": a, "U": u, "fake_B": out[:n].float(), "B": b, "idt_B": out[n:].float()}
+        return {"A": a, "U": u, "fake_B": out[:n], "B": b, "idt_B": out[n:]}
 
     # ------------------------------------------------------------------ 保存 / 再開
     def _state(self):

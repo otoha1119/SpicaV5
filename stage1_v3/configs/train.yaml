@@ -12,6 +12,8 @@ optim:
   n_epochs: 300         # 論文 "300 epochs"
   n_epochs_decay: 0     # 論文未記載。減衰なし
   seed: 0
+  precision: bf16       # CUDA autocast（008 の高速化）。重み・optimizer・損失は FP32。fp32 で従来どおり
+  compile: true         # CUDA で torch.compile(max-autotune)。初回だけコンパイルで遅い。build-essential 入りの image が要る（down → build）
 
 loss:
   gan_mode: fgan_kl     # 論文 Eq.6（D := 1 − exp(v)）。stage1 と同じ実装
