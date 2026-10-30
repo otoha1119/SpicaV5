@@ -81,7 +81,7 @@ def _swap_dirs(tmp, final, old, retries=10, wait=3.0):
 
 class ProjectionModel:
     LOSS_NAMES = ("D", "D_real", "D_fake", "G_GAN", "G_fid", "G_id", "P_kfid", "P_com")
-    DIAG_NAMES = ("R_u_rms_HU", "R_y_rms_HU", "R_ratio", "P_rms_HU", "d_in_HU", "lambda_id", "P_k_sigma_px", "P_noise_amp_HU")
+    DIAG_NAMES = ("R_u_rms_HU", "R_y_rms_HU", "R_ratio", "P_rms_HU", "d_in_HU", "lambda_id", "P_k_sigma_px", "P_noise_amp_HU", "D_sep", "D_acc")
 
     def __init__(self, train, device, launch_config=None, is_train=True):
         self.cfg = train
@@ -219,6 +219,9 @@ class ProjectionModel:
 
     def backward_D(self):
         v_real, v_fake = self._D_real_fake(self.fake_B.detach())
+        with torch.no_grad():  # D の分離の診断: D_sep = mean(v_fake) − mean(v_real)（0 = 見分けていない、正 = D 優勢）、D_acc = patch 単位で v_fake > v_real の割合（0.5 = 当てずっぽう、1 = 完全に分離）
+            self.diag_D_sep = float(v_fake.mean() - v_real.mean())
+            self.diag_D_acc = float((v_fake.flatten() > v_real.flatten()).float().mean())
         if self.gan_mode == "fgan_kl":
             D_real = self._D_from_v(v_real)
             J_D = D_real.mean() + v_fake.mean()  # E[D(x)] + E[log(1 − D(G(z)))]、log(1 − D) = v
@@ -268,7 +271,8 @@ class ProjectionModel:
             r_y = float(self.R_y.detach().pow(2).mean().sqrt()) * h
             diag = {"R_u_rms_HU": r_u, "R_y_rms_HU": r_y, "R_ratio": r_u / max(r_y, 1e-6),
                     "P_rms_HU": float((self.u - self.real_A).pow(2).mean().sqrt()) * h,
-                    "d_in_HU": float((self.fake_B.detach() - self.real_A).abs().mean()) * h, "lambda_id": lam_id}
+                    "d_in_HU": float((self.fake_B.detach() - self.real_A).abs().mean()) * h, "lambda_id": lam_id,
+                    "D_sep": self.diag_D_sep, "D_acc": self.diag_D_acc}
             if self.learned_P:
                 body = self.real_A > (-500.0 - self.cfg["data.hu_min"]) / h - 1.0
                 sig = self.P_info["sigma"].detach().float()

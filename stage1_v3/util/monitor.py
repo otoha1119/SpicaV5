@@ -3,7 +3,7 @@
   ターミナル : 1 epoch = 1 本の tqdm バー。末尾に D / G_GAN / G_fid / G_id と R_u / R_y（HU）。epoch 末に 1 行の要約
   TensorBoard: <run>/tb/  global_step = total_iters（画像枚数。resume でつながる）
      loss/*          D, D_real, D_fake, G_GAN, G_fid, G_id, G_total
-     diag/*          R_u_rms_HU, R_y_rms_HU, R_ratio, P_rms_HU, d_in_HU, lambda_id
+     diag/*          R_u_rms_HU, R_y_rms_HU, R_ratio, P_rms_HU, d_in_HU, lambda_id, P_k_sigma_px, P_noise_amp_HU（learned）, D_sep, D_acc（D の分離。0 / 0.5 = 見分けていない）
      draws/*         epoch 末、固定スライスを n_draws 回引き直した出力の統計（R-S21 とレビューの検出指標）:
                        std_out_body_HU   出力の引き直し間標準偏差の体内平均（0 に近い = 決定的）
                        std_ratio         std(出力) / std(P(x))（< 1 = R が P のノイズを消している = denoise。≈ 1 で透過）
@@ -30,7 +30,7 @@ from util.residual_color import colorbar_rgb01, residual_rgb01, rgb_to_bgr
 from util.run_paths import LOSS_LOG_FILE, TB_DIR, epoch_images_dir, preview_dir
 
 LOSS_KEYS_BAR = ("D", "G_GAN", "G_fid", "G_id")
-DIAG_KEYS = ("R_u_rms_HU", "R_y_rms_HU", "R_ratio", "P_rms_HU", "d_in_HU", "lambda_id", "P_k_sigma_px", "P_noise_amp_HU")
+DIAG_KEYS = ("R_u_rms_HU", "R_y_rms_HU", "R_ratio", "P_rms_HU", "d_in_HU", "lambda_id", "P_k_sigma_px", "P_noise_amp_HU", "D_sep", "D_acc")
 GRID_PAD = 0.5
 STD_DISPLAY_MAX_HU = 100.0  # 標準偏差画像の表示レンジ（0 = 黒 … 100 HU = 白）
 to_u8 = lambda x01: (np.clip(x01, 0.0, 1.0) * 255.0).round().astype(np.uint8)  # noqa: E731
