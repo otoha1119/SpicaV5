@@ -106,7 +106,9 @@ class ProjectionModel:
             self.netD = networks.build_D(train, device)
             if self.compile_enabled:
                 _quiet_inductor_autotune_success_logs()
-                for net in self.nets().values():  # nn.Module.compile は identity と state_dict のキーを保つ
+                for name, net in self.nets().items():  # nn.Module.compile は identity と state_dict のキーを保つ
+                    if name == "P":  # P_θ は小さく（MLP + サンプル別 grouped conv）、途中結果を Python 側で使うので compile しない（CUDA Graph の出力上書きで落ちる。PC1 2026-10-30）
+                        continue
                     net.compile(mode="max-autotune")
             self.gan_mode = train["loss.gan_mode"]
             if self.gan_mode != "fgan_kl":
@@ -202,7 +204,8 @@ class ProjectionModel:
         if self.learned_P:
             with self._autocast():
                 u, info = self.netP(self.real_A)
-            self.u, self.P_info = u.float(), info
+            self.u = u.float().clone()
+            self.P_info = {k: (v.float().clone() if torch.is_tensor(v) else v) for k, v in info.items()}  # 後続の compiled graph に上書きされないよう clone
         inp = torch.cat([self.u, self.real_B], dim=0)
         out = self._run_net(self.netG, inp)
         self.fake_B, self.idt_B = out[:n], out[n:]
