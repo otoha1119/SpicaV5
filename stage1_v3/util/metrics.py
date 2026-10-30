@@ -76,6 +76,8 @@ def analyze_slice(hu, thr, rng):
     # (b) 強いエッジの勾配
     gxr, gyr = cv2.Sobel(hu, cv2.CV_32F, 1, 0, ksize=3) / 8.0, cv2.Sobel(hu, cv2.CV_32F, 0, 1, ksize=3) / 8.0
     gm = np.sqrt(gxr * gxr + gyr * gyr)[body]
+    out["edge_grad_p90"] = float(np.percentile(gm, 90))  # 中コントラストの構造（冠動脈・心筋境界）の鮮鋭度。p99 は骨・空気の強いエッジで決まる
+    out["edge_grad_p95"] = float(np.percentile(gm, 95))
     out["edge_grad_p99"] = float(np.percentile(gm, 99))
     out["edge_grad_top1_mean"] = float(gm[gm >= np.percentile(gm, 99)].mean())
     return out

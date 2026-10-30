@@ -37,7 +37,7 @@ sh の `--flag` は `configs/schema.py` にあるものだけ（学習は TRAIN 
 
 ## 自動採点と best
 
-epoch ごとに固定の PCD 32 枚（P → G）と実 EID 128 枚で R-S22 の指標（local_sd, nps_f_av, edge_grad_p99, hu_p50, hu_p90）を測り、`score = Σ |median_gen − median_eid| / IQR_eid + RMS(R(y))_eval / 20 HU` が最良の epoch を `best/` に自動保存する（`val.auto_best`、`best.txt` に内訳、TB `val/*`、`val_log.txt`）。GAN は最終 epoch が最良とは限らない（1 本目で HU 水準が epoch ごとに揺れた）。手動の `best <run> <epoch>` で上書きできる。
+epoch ごとに固定の PCD 32 枚（P → G）と実 EID 128 枚で R-S22 の指標（local_sd, nps_f_av, edge_grad_p90, edge_grad_p99, hu_p50, hu_p90）を測り、`score = Σ |median_gen − median_eid| / IQR_eid + RMS(R(y))_eval / 20 HU` が最良の epoch を `best/` に自動保存する（`val.auto_best`、`best.txt` に内訳、TB `val/*`、`val_log.txt`）。GAN は最終 epoch が最良とは限らない（1 本目で HU 水準が epoch ごとに揺れた）。手動の `best <run> <epoch>` で上書きできる。
 
 D は本物と偽物を 1 バッチに連結して通す（2 本目から。1 本目は別 forward で、D の 1 層目の BN が偽物バッチの HU 水準差を消して R の HU 水準が揺れた）。
 

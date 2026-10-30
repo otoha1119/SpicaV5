@@ -65,7 +65,7 @@ def main():
     now = datetime.datetime.now(jst)
     out_dir = stats_output_dir(now, root=a.out_root)
     out_dir.mkdir(parents=True)
-    keys = ("local_sd", "nps_f_peak", "nps_f_av", "edge_grad_p99", "edge_grad_top1_mean", "hu_p50", "hu_p90", "hu_p99", "air_mean")
+    keys = ("local_sd", "nps_f_peak", "nps_f_av", "edge_grad_p90", "edge_grad_p95", "edge_grad_p99", "edge_grad_top1_mean", "hu_p50", "hu_p90", "hu_p99", "air_mean")
     result = {"stage": STAGE, "timestamp": now.isoformat(timespec="seconds"), "body_threshold_hu": thr, "roi": ROI, "n_roi_per_slice": N_ROI, "dirs": {}}
     rng = np.random.default_rng(seed)
     for d in dirs:

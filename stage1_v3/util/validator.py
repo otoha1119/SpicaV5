@@ -20,7 +20,7 @@ from data.dataset import _load_hu, hu_to_norm
 from util.metrics import analyze_slice, summarize
 from util.run_paths import BEST_NOTE
 
-KEYS = ("local_sd", "nps_f_av", "edge_grad_p99", "hu_p50", "hu_p90")
+KEYS = ("local_sd", "nps_f_av", "edge_grad_p90", "edge_grad_p99", "hu_p50", "hu_p90")
 VAL_LOG_FILE = "val_log.txt"
 
 
