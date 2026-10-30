@@ -16,6 +16,7 @@
 /stage1/results/
 /stage2/checkpoints/
 /ablation/checkpoints/
+/stage1_v3/checkpoints/
 /runs/
 /output/
 *.pth

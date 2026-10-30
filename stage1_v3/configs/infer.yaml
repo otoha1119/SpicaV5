@@ -1,0 +1,15 @@
+# stage1_v3 推論（bash start1_v3.sh <マシン> infer）の設定。唯一の正は configs/schema.py の INFER。
+# 重みディレクトリ・入力フォルダは infer.sh の WEIGHT_DIR / INPUT_DIR（--weight_dir / --input_dir で上書き可）。デバイスは machines.yaml の gpu_gen（0 → cpu）。
+# G の構成・P の範囲・HU 正規化は run の launch.yaml から読む（学習時と同じ P を掛ける。Stage 2 データ生成の再現性）。
+# 出力は <repo>/output/stage1_v3/<run>_<重み>_<入力名>_<実行時刻>/。
+
+apply_degrade: true     # PCD 入力 → P → G（Stage 2 の学習データ）。実 EID 入力で恒等を確認するときは false
+n_draws: 1              # >1 で full_std/（P の引き直し間の標準偏差 [HU]、R-S21 の判定）を書く
+max_slices: 0           # 0 で全スライス。動作確認は 4 など
+batch_slices: 1
+save_residual: false    # R = 出力 − P(x) と P の寄与 u − x
+save_panel: false       # [出力 | P(x) | 入力 | R + ゲージ]
+
+io:
+  read_workers: 4
+  write_workers: 2

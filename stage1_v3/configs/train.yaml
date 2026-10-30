@@ -1,0 +1,71 @@
+# stage1_v3/configs/train.yaml — 射影型 Stage 1（P + R + 恒等項）の学習パラメータ。唯一の正は configs/schema.py（欠落・未知・型違いはエラー、既定値なし）。
+# 書き方: 小数は必ず点を付ける（2.0e-4, 10.0）。真偽値は true / false。
+# 数値の出典: 論文 = Park et al. 2019（G / D / lr / batch / epoch / λ_fid）。degrade.* と λ_id は本研究の設計値で、EXP の事前登録で確定する
+# （degrade.* の範囲は bash start1_v3.sh <machine> stats の実測を含むように決める。ここの値は実測前の仮置き）。
+
+optim:
+  lr_G: 2.0e-4          # 論文 0.0002
+  lr_D: 2.0e-4          # 論文 0.0002
+  beta1: 0.5            # 論文未記載（junyanz 慣行）
+  beta2: 0.999          # 論文未記載
+  batch_size: 40        # 論文 "mini-batch size of 40"。EID 側（恒等項）も同数を同じ step で通す
+  n_epochs: 300         # 論文 "300 epochs"
+  n_epochs_decay: 0     # 論文未記載。減衰なし
+  seed: 0
+
+loss:
+  gan_mode: fgan_kl     # 論文 Eq.6（D := 1 − exp(v)）。stage1 と同じ実装
+  lambda_fid: 10.0      # 論文 "We empirically choose λ = 10"（main の 100 は恒等寄りの原因と診断、F5）。正規化単位。10 で RMS ≈ 176 HU が許容された実績（2026_0907_2222）
+  lambda_id: 1000.0     # 恒等項。正規化単位では 1 HU = 3.64e-4 なので、RMS 50 HU で mean(R²) ≈ 3.3e-4 → ×1000 ≈ 0.33（GAN 項 O(1) と同程度）。レビュー F の指摘で λ_fid/10 は棄却
+  lambda_id_decay_epochs: 0   # 0 = 一定。Krishnan 2025 型（初期大 → 減衰）を試すときは epoch 数と lambda_id_final を指定
+  lambda_id_final: 1000.0
+
+degrade:                # 物理コア P（学習なし、スライスごとに抽選。R-S23）
+  enabled: true         # false で u = x（P なし。fidelity GAN + 恒等項だけの対照）
+  blur_sigma_px_min: 0.0      # ぼかし Gaussian σ [px]。実測前の仮置き（PCD512 と EID512 の edge 幅の比から決め直す）
+  blur_sigma_px_max: 1.0
+  noise_sigma_hu_min: 10.0    # 加算ノイズ SD [HU]。実測前の仮置き（実 EID の一様 ROI の局所 SD から決め直す）
+  noise_sigma_hu_max: 40.0
+  noise_corr_px_min: 0.0      # ノイズの空間相関 σ [px]。0 = 白色
+  noise_corr_px_max: 1.0
+  noise_body_only: true       # 空気にはノイズを足さない
+  body_threshold_hu: -500
+
+network:
+  netG: wavelet         # 論文 Fig.3（stage1 と同じ）。残差 R は常に G の生出力（out = in + R）
+  netD: paper           # 論文 Fig.3、受容野 22（R-S11）
+  ngf: 32               # 論文 Fig.3
+  ndf: 32               # 論文 Fig.3
+  norm: batch           # wavelet / paper は BN 固定（この値は resnet / basic のときだけ使う）
+  init_type: normal     # 論文 "Gaussian distribution with a mean of 0"
+  init_gain: 0.01       # 論文 "standard deviation of 0.01"
+
+data:
+  sampling: random
+  use_eval_only_cases: false
+  patch_size: 128       # 論文
+  patch_stride: 1
+  patches_per_image: 40
+  samples_per_epoch: 24000   # batch 40 → 600 step/epoch
+  patches_per_slice: 8  # 全 Stage 8。P の抽選単位
+  patch_seed: 0
+  serial_batches: false
+  hu_offset: 1400
+  hu_min: -1400
+  hu_max: 4096
+
+log:
+  print_freq: 100
+  image_freq: 500
+  n_images: 4
+  full_slice: PCD-002/PCD-002-215.png
+  eid_slice: EID-001/EID-001-089.png
+  n_full_random: 1
+  n_draws: 8            # 固定スライスで P を 8 回引き直し、標準偏差画像（R-S21）を epoch 末に出す
+  display_hu_min: -1400
+  display_hu_max: 3000
+  preview_bits: 16
+  diff_range_hu: 300
+  tb_full_size: 512
+  save_epoch_freq: 1
+  save_latest_freq: 4000
