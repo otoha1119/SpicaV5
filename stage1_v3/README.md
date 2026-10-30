@@ -20,7 +20,7 @@ bash start1_v3.sh <machine> resume <run> [latest|best|epoch] [--flag value]
 bash start1_v3.sh <machine> best <run> <epoch>
 bash start1_v3.sh <machine> infer --weight_dir /workspace/stage1_v3/checkpoints/<run>/best --input_dir /workspace/DataSet/PCD512_v2 [--n_draws 8 --save_residual true]
 bash start1_v3.sh <machine> infer --weight_dir ... --input_dir /workspace/DataSet/EID_v5 --apply_degrade false   # 実 EID で恒等の確認（R(y) の RMS）
-bash start1_v3.sh <machine> ponly --input_dir /workspace/DataSet/PCD512_v2 [--max_slices 50] [--blur_max 1.5 ...]  # P 単独（学習なし）
+bash start1_v3.sh <machine> ponly --input_dir ... --degrade_mode gaussian|bilateral_blur [--blur_max 1.5 ...]  # 固定 P 単独（learned は重みが要るので infer --apply_degrade true）
 bash start1_v3.sh <machine> stats --dirs /workspace/DataSet/EID_v5,/workspace/DataSet/PCD512_v2,<ponly の full>  # R-S22 の計測
 bash start1_v3.sh <machine> tb
 ```

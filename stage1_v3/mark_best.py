@@ -13,7 +13,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import MACHINE, ConfigError, validate_shared  # noqa: E402
-from util.run_paths import BEST_NOTE, CKPT_KINDS, LAUNCH_FILE, checkpoints_root, ckpt_dir, ckpt_path, saved_tags  # noqa: E402
+from util.run_paths import BEST_NOTE, CKPT_KINDS, LAUNCH_FILE, OPTIONAL_CKPT_KINDS, checkpoints_root, ckpt_dir, ckpt_path, saved_tags  # noqa: E402
 
 
 def main():
@@ -35,6 +35,10 @@ def main():
             raise ConfigError(f"run が見つかりません: {run_dir}")
         srcs = [ckpt_path(run_dir, a.epoch, k) for k in CKPT_KINDS]
         missing = [str(s) for s in srcs if not s.is_file()]
+        kinds = list(CKPT_KINDS)
+        for k in OPTIONAL_CKPT_KINDS:  # net_P.pth（learned）はあればコピー
+            if ckpt_path(run_dir, a.epoch, k).is_file():
+                srcs.append(ckpt_path(run_dir, a.epoch, k)); kinds.append(k)
         if missing:
             raise ConfigError(f"epoch {a.epoch} の checkpoint が揃っていません: {missing}（保存済み tag: {saved_tags(run_dir)}）")
     except ConfigError as e:
@@ -45,7 +49,7 @@ def main():
     if tmp.exists():
         shutil.rmtree(tmp)
     tmp.mkdir(parents=True)
-    for kind, src in zip(CKPT_KINDS, srcs):
+    for kind, src in zip(kinds, srcs):
         shutil.copy2(src, tmp / kind)
         print(f"[best] {src.relative_to(run_dir)} -> best/{kind}")
     if old.exists():

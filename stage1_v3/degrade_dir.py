@@ -68,6 +68,8 @@ def main():
             raise ConfigError(" / ".join(P))
         if not train["degrade.enabled"]:
             raise ConfigError("degrade.enabled が false（P が無い）。--degrade true にしてください")
+        if train["degrade.mode"] == "learned":
+            raise ConfigError("degrade.mode learned の P は学習済み重みが要るので ponly では作れません。bash start1_v3.sh <machine> infer --weight_dir <run>/best --apply_degrade true を使うか、--degrade_mode gaussian|bilateral_blur を指定")
         input_dir = Path(local.get("--input_dir", a.input_dir))
         if not input_dir.is_dir():
             raise ConfigError(f"入力フォルダがありません: {input_dir}")

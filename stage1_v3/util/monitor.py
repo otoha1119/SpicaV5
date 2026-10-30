@@ -30,7 +30,7 @@ from util.residual_color import colorbar_rgb01, residual_rgb01, rgb_to_bgr
 from util.run_paths import LOSS_LOG_FILE, TB_DIR, epoch_images_dir, preview_dir
 
 LOSS_KEYS_BAR = ("D", "G_GAN", "G_fid", "G_id")
-DIAG_KEYS = ("R_u_rms_HU", "R_y_rms_HU", "R_ratio", "P_rms_HU", "d_in_HU", "lambda_id")
+DIAG_KEYS = ("R_u_rms_HU", "R_y_rms_HU", "R_ratio", "P_rms_HU", "d_in_HU", "lambda_id", "P_k_sigma_px", "P_noise_amp_HU")
 GRID_PAD = 0.5
 STD_DISPLAY_MAX_HU = 100.0  # 標準偏差画像の表示レンジ（0 = 黒 … 100 HU = 白）
 to_u8 = lambda x01: (np.clip(x01, 0.0, 1.0) * 255.0).round().astype(np.uint8)  # noqa: E731

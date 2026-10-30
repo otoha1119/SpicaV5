@@ -67,8 +67,13 @@ class Validator:
         rows = []
         for p in self.pcd_paths:
             hu = _load_hu(p, self.offset)
-            u, _ = self.ds.degrade_full(hu, rng)
-            y = model.predict(torch.from_numpy(hu_to_norm(u, hu_min, hu_max))[None, None])
+            xn = torch.from_numpy(hu_to_norm(hu, hu_min, hu_max))[None, None]
+            if model.learned_P:
+                un = model.degrade(xn, generator=torch.Generator(device=model.device).manual_seed(int(rng.integers(0, 2**31))))
+            else:
+                u, _ = self.ds.degrade_full(hu, rng)
+                un = torch.from_numpy(hu_to_norm(u, hu_min, hu_max))[None, None]
+            y = model.predict(un)
             rows.append(analyze_slice(to_hu(y), self.thr, rng))
         gen = {k: summarize(rows, k) for k in KEYS}
         dist = {k: abs(gen[k]["median"] - self.ref[k]["median"]) / self.ref[k]["iqr"] if np.isfinite(gen[k]["median"]) else float("nan") for k in KEYS}

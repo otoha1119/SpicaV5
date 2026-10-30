@@ -29,6 +29,17 @@ from util.validator import Validator  # noqa: E402
 from util.run_paths import DATASET_INFO_FILE, ckpt_dir, checkpoints_root  # noqa: E402
 
 
+def learned_full(model, full, train):
+    """degrade.mode learned のとき、フル画像の U と U_draws を P_θ で作る（dataset は u = x を返すため）。"""
+    if not model.learned_P or full is None:
+        return full
+    full["U"] = torch.cat([model.degrade(full["A"][i : i + 1]).cpu() for i in range(full["A"].shape[0])])
+    n_draws = train["log.n_draws"]
+    if n_draws > 1:
+        full["U_draws"] = torch.cat([model.degrade(full["A"][0:1]).cpu() for _ in range(n_draws)])
+    return full
+
+
 def main():
     p = argparse.ArgumentParser(description="射影型 Stage 1 学習ループ（run_train.py から exec される）")
     p.add_argument("--launch", required=True)
@@ -112,7 +123,7 @@ def main():
             monitor.write(f"saving the model at the end of epoch {epoch}, iters {total_iters}")
             model.save(run_dir, "latest")
             model.save(run_dir, epoch)
-            monitor.save_full_images(model, dataset.full_slices(epoch), epoch, total_iters)
+            monitor.save_full_images(model, learned_full(model, dataset.full_slices(epoch), train), epoch, total_iters)
             validator.run(model, epoch, total_iters)
             last_saved_epoch = epoch
         last_epoch = epoch
@@ -122,7 +133,7 @@ def main():
         monitor.write(f"saving the final model (epoch {last_epoch}, iters {total_iters})")
         model.save(run_dir, "latest")
         model.save(run_dir, last_epoch)
-        monitor.save_full_images(model, dataset.full_slices(last_epoch), last_epoch, total_iters)
+        monitor.save_full_images(model, learned_full(model, dataset.full_slices(last_epoch), train), last_epoch, total_iters)
         validator.run(model, last_epoch, total_iters)
     if validator.enabled and validator.best_epoch is not None:
         monitor.write(f"[val] best: epoch {validator.best_epoch} (score {validator.best_score:.3f}){' → best/' if train['val.auto_best'] else ''}")

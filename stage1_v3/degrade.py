@@ -2,6 +2,7 @@
 
   mode gaussian      : u = blur(x; σ_b) + σ_n · shape(w; c) · mask
   mode bilateral_blur: u = blur(bilateral(x; σ_color, σ_space); σ_b) + σ_n · shape(w; c) · mask
+  mode learned       : データ側では何もしない（u = x を渡し、models/degrade_net.py の P_θ が GPU 上で u を作る。2026-10-30、固定 P からの転換）
                        bilateral（エッジ保存の平滑化）で PCD のノイズを EID 水準まで落とし（iterative recon の役回り）、弱い Gaussian でカーネル差（MTF）を合わせ、最後に NPS 整形ノイズを足す。
                        単一の Gaussian ではノイズ 93 → 22 HU に σ ≈ 1.9 px が要り、中程度のエッジ（肺血管・縦隔境界）が実 EID より潰れる（2026-10-30、1 本目の目視）
     σ_b : Gaussian ぼかしの標準偏差 [px]（鮮鋭度の軸。R-S22 (b)）
@@ -38,7 +39,7 @@ def degrade_config(train):
 
 def sample_params(cfg, rng):
     """スライス 1 枚分の (σ_b, σ_n, c) を一様に引く。rng は numpy.random.Generator。enabled=false なら全部 0。"""
-    if not cfg["enabled"]:
+    if not cfg["enabled"] or cfg["mode"] == "learned":
         return {k: 0.0 for k in PARAM_NAMES}
     bil = cfg["mode"] == "bilateral_blur"
     return {
@@ -79,7 +80,7 @@ def shaped_noise(shape, corr_px, rng):
 
 def apply_degrade(hu, params, cfg, rng):
     """hu: float32 (H, W) の HU 画像 → P(x) の HU 画像（float32、同じ形）。params は sample_params の戻り値。"""
-    if not cfg["enabled"]:
+    if not cfg["enabled"] or cfg["mode"] == "learned":
         return hu
     x = np.ascontiguousarray(hu, dtype=np.float32)
     if cfg["mode"] == "bilateral_blur":

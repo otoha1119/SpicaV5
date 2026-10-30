@@ -21,6 +21,8 @@ from util.run_paths import STAGE, DATASET_INFO_FILE, INFER_WEIGHT, LAUNCH_FILE, 
 
 G_KEYS = {"network.netG": "--netG", "network.ngf": "--ngf", "network.norm": "--norm", "data.hu_offset": "--hu_offset", "data.hu_min": "--hu_min", "data.hu_max": "--hu_max"}
 P_KEYS = {"degrade.enabled": "--p_enabled", "degrade.mode": "--p_mode",
+          "degrade.learned_z_dim": "--p_learned_z_dim", "degrade.learned_kernel_size": "--p_learned_kernel_size", "degrade.learned_noise_kernel_size": "--p_learned_noise_kernel_size",
+          "degrade.learned_amp_ch": "--p_learned_amp_ch", "degrade.learned_sigma_max_hu": "--p_learned_sigma_max_hu",
           "degrade.bilateral_sigma_color_hu_min": "--p_bil_color_min", "degrade.bilateral_sigma_color_hu_max": "--p_bil_color_max",
           "degrade.bilateral_sigma_space_px_min": "--p_bil_space_min", "degrade.bilateral_sigma_space_px_max": "--p_bil_space_max", "degrade.blur_sigma_px_min": "--p_blur_min", "degrade.blur_sigma_px_max": "--p_blur_max",
           "degrade.noise_sigma_hu_min": "--p_noise_min", "degrade.noise_sigma_hu_max": "--p_noise_max", "degrade.noise_corr_px_min": "--p_corr_min",
@@ -94,6 +96,8 @@ def main():
         hw = info.get("image_hw") if isinstance(info, dict) else None
         if not (isinstance(hw, list) and len(hw) == 2 and hw[0] == hw[1] and isinstance(hw[0], int)):
             raise ConfigError(f"{info_path} の image_hw が不正です: {hw}")
+        if infer["apply_degrade"] and ltrain["degrade.enabled"] and ltrain["degrade.mode"] == "learned" and not (weight_dir / "net_P.pth").is_file():
+            raise ConfigError(f"degrade.mode learned の run ですが重みディレクトリに net_P.pth がありません: {weight_dir}")
         if infer["apply_degrade"] and not ltrain["degrade.enabled"]:
             raise ConfigError("apply_degrade: true ですが、この run は degrade.enabled: false で学習しています（P の範囲が無い）。--apply_degrade false にしてください")
         g_argv = [x for k, flag in G_KEYS.items() for x in (flag, str(ltrain[k]))] + ["--input_size", str(hw[0])]

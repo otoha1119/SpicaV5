@@ -26,6 +26,7 @@ sys.path.insert(0, str(HERE))
 from data.dataset import CaseIndex, denormalize, hu_to_norm, read_stored, residual_stored, stored_to_hu, write_png  # noqa: E402
 from degrade import apply_degrade, sample_params  # noqa: E402
 from models import networks  # noqa: E402
+from models.degrade_net import LearnedDegrade  # noqa: E402
 from util.panel import build_panel  # noqa: E402
 from util.residual_color import colorbar_filename, colorbar_rgb01, residual_rgb01, residual_rgb8, rgb_to_bgr  # noqa: E402
 from util.run_paths import INFER_WEIGHT  # noqa: E402
@@ -51,6 +52,7 @@ def parse_args():
     req("--input_size", type=int)
     # P（run の launch.yaml から）
     req("--p_enabled", type=parse_bool); req("--p_mode"); req("--p_blur_min", type=float); req("--p_blur_max", type=float)
+    req("--p_learned_z_dim", type=int); req("--p_learned_kernel_size", type=int); req("--p_learned_noise_kernel_size", type=int); req("--p_learned_amp_ch", type=int); req("--p_learned_sigma_max_hu", type=float)
     req("--p_bil_color_min", type=float); req("--p_bil_color_max", type=float); req("--p_bil_space_min", type=float); req("--p_bil_space_max", type=float)
     req("--p_noise_min", type=float); req("--p_noise_max", type=float); req("--p_corr_min", type=float); req("--p_corr_max", type=float)
     req("--p_body_only", type=parse_bool); req("--p_body_threshold_hu", type=float)
@@ -96,6 +98,14 @@ def main():
     n_draws = a.n_draws if pcfg["enabled"] else 1
     rng = np.random.default_rng(a.seed)
     net, weight_path = build_generator(a, device)
+    netP = None
+    learned = pcfg["enabled"] and a.p_mode == "learned"
+    if learned:
+        hu_per_unit = (a.hu_max - a.hu_min) / 2.0
+        netP = LearnedDegrade(a.p_learned_z_dim, a.p_learned_kernel_size, a.p_learned_noise_kernel_size, a.p_learned_amp_ch, a.p_learned_sigma_max_hu / hu_per_unit)
+        netP.load_state_dict(torch.load(Path(a.weight_dir) / "net_P.pth", map_location="cpu", weights_only=True))
+        netP.to(device).eval()
+        gen = torch.Generator(device=device).manual_seed(a.seed)
     idx = CaseIndex(input_dir, a.index_cache_dir)
     paths = idx.all_paths if a.max_slices == 0 else idx.all_paths[: a.max_slices]
     print(f"[infer] device={device} G={weight_path} P={'on' if pcfg['enabled'] else 'off'} n_draws={n_draws}")
@@ -173,15 +183,26 @@ def main():
                 break
             # P: スライスごと・draw ごとに抽選。(n_items, n_draws) の u
             us, params = [], []
-            for _, _, x_hu in items:
-                ud, pd = [], []
-                for _ in range(n_draws):
-                    prm = sample_params(pcfg, rng)
-                    ud.append(apply_degrade(x_hu, prm, pcfg, rng))
-                    pd.append(prm)
-                us.append(ud)
-                params.append(pd)
-            xs = torch.from_numpy(np.stack([hu_to_norm(u, a.hu_min, a.hu_max) for ud in us for u in ud])[:, None]).to(device)
+            if learned:  # P_θ を GPU で（draw ごとに別の z, ε）
+                xn = torch.from_numpy(np.stack([hu_to_norm(x_hu, a.hu_min, a.hu_max) for _, _, x_hu in items])[:, None]).to(device)
+                with torch.inference_mode():
+                    un = torch.cat([netP(xn, generator=gen)[0].float() for _ in range(n_draws)], dim=0)  # (n_draws*n_items) draw-major
+                un = un.view(n_draws, len(items), 1, *un.shape[-2:]).transpose(0, 1).reshape(-1, 1, *un.shape[-2:])  # item-major
+                u_hu = (un.cpu().numpy()[:, 0] + 1.0) / 2.0 * (a.hu_max - a.hu_min) + a.hu_min
+                for k in range(len(items)):
+                    us.append([u_hu[k * n_draws + d] for d in range(n_draws)])
+                    params.append([{"learned": True} for _ in range(n_draws)])
+                xs = un
+            else:
+                for _, _, x_hu in items:
+                    ud, pd = [], []
+                    for _ in range(n_draws):
+                        prm = sample_params(pcfg, rng)
+                        ud.append(apply_degrade(x_hu, prm, pcfg, rng))
+                        pd.append(prm)
+                    us.append(ud)
+                    params.append(pd)
+                xs = torch.from_numpy(np.stack([hu_to_norm(u, a.hu_min, a.hu_max) for ud in us for u in ud])[:, None]).to(device)
             t = time.time()
             with torch.inference_mode():
                 ys = net(xs).cpu().numpy()[:, 0]

@@ -4,7 +4,7 @@
   launch.yaml                 解決済み設定（train / machine / degrade の範囲）。resume 時は launch_resume_<日時秒>.yaml を追加
   dataset_info.yaml           PCD / EID の画像サイズ、症例・スライス数、sampling、P の設定
   loss_log.txt
-  latest/ best/               重みディレクトリ: net_G.pth（G = in + R、推論に使う）, net_D.pth, state.pth（optimizer ×2 / RNG / 進捗 / 実効設定）
+  latest/ best/               重みディレクトリ: net_G.pth（G = in + R、推論に使う）, net_D.pth, state.pth（optimizer ×2 / RNG / 進捗 / 実効設定）, net_P.pth（degrade.mode learned のときだけ。推論の P にも使う）
   best.txt
   weights/epoch_NNN/          save_epoch_freq ごとの checkpoint
   output_images/epoch_NNN/<slice>_pcd.png, _u.png（P(x)）, _eidlike.png, _R.png, <fixed>_std.png（n_draws の標準偏差 [HU]）, <eid>_idt.png（G(y)）, _Ry.png
@@ -38,8 +38,10 @@ DATASET_INFO_FILE = "dataset_info.yaml"
 LOSS_LOG_FILE = "loss_log.txt"
 TB_DIR = "tb"
 OUTPUT_IMAGES_DIR = "output_images"
-NET_NAMES = ("G", "D")
-CKPT_KINDS = tuple(f"net_{n}.pth" for n in NET_NAMES) + ("state.pth",)
+NET_NAMES = ("G", "D")                 # 常にある。degrade.mode learned の run はさらに "P"（学習型劣化 P_θ、net_P.pth）
+OPTIONAL_NET_NAMES = ("P",)
+CKPT_KINDS = tuple(f"net_{n}.pth" for n in NET_NAMES) + ("state.pth",)   # 必須
+OPTIONAL_CKPT_KINDS = tuple(f"net_{n}.pth" for n in OPTIONAL_NET_NAMES)
 INFER_WEIGHT = "net_G.pth"
 BEST_NOTE = "best.txt"
 

@@ -43,9 +43,16 @@ TRAIN = {
     "loss.lambda_id":        Key(float, "--lambda_id",       "恒等項 λ_id · mean(R(y)²)（実 EID y を G に入れたときの残差。設計 L_id）。正規化単位では RMS 20 HU ≈ MSE 5e-5 なので λ_fid より 2 桁以上大きい値が要る（レビュー F）。0 で無し（= P + fidelity GAN）"),
     "loss.lambda_id_decay_epochs": Key(int, "--lambda_id_decay_epochs", "λ_id を初期値から lambda_id_final まで線形に下げる epoch 数（Krishnan 2025 型の減衰。0 = 一定）"),
     "loss.lambda_id_final":  Key(float, "--lambda_id_final", "減衰後の λ_id（lambda_id_decay_epochs > 0 のときだけ使う）"),
+    "loss.lambda_k_fid":     Key(float, "--lambda_k_fid",    "learned: カーネル側の fidelity λ_k · mean((x ⊛ k − x)²)（k を δ から遠ざけすぎない。ノイズ側には掛けない）。0 で無し"),
+    "loss.lambda_k_com":     Key(float, "--lambda_k_com",    "learned: カーネル重心の正則化 λ_com · E[COM²]（px²。ぼかしが平行移動にならないように）"),
     # degrade = 物理コア P（学習なし。R-S23: σ・鮮鋭度はスライスごとに範囲から抽選。範囲は R-S22 の実測（bash start1_v3.sh <machine> stats）を含むまで広げる）
     "degrade.enabled":       Key(bool,  "--degrade",         "false で P を掛けない（u = x。従来の fidelity GAN + 恒等項の対照）"),
-    "degrade.mode":          Key(str,   "--degrade_mode",    "gaussian（一様ぼかし + ノイズ。1 本目）| bilateral_blur（エッジ保存の平滑化 → 弱いぼかし → ノイズ。中程度のエッジを実 EID 並みに残す。2026-10-30）"),
+    "degrade.mode":          Key(str,   "--degrade_mode",    "gaussian（一様ぼかし + ノイズ。1〜2 本目）| bilateral_blur（エッジ保存の平滑化 → 弱いぼかし → ノイズ）| learned（学習型の確率的劣化 P_θ: u = x ⊛ k(z) + σ(x) ⊙ (h(z) ⊛ ε)。models/degrade_net.py。2026-10-30 の転換、docs/decisions/20261030_stage1-v3-learned-degradation.md）"),
+    "degrade.learned_z_dim": Key(int,   "--learned_z_dim",   "learned: カーネル生成の乱数 z の次元"),
+    "degrade.learned_kernel_size": Key(int, "--learned_kernel_size", "learned: ぼかしカーネル k(z) の大きさ（奇数、px）"),
+    "degrade.learned_noise_kernel_size": Key(int, "--learned_noise_kernel_size", "learned: ノイズ整形フィルタ h(z) の大きさ（奇数、px。NPS の形）"),
+    "degrade.learned_amp_ch": Key(int,  "--learned_amp_ch",  "learned: 振幅ネット σ(x) のチャネル数"),
+    "degrade.learned_sigma_max_hu": Key(float, "--learned_sigma_max_hu", "learned: ノイズ振幅 σ(x) の上限 [HU]（sigmoid × これ。実 EID の局所 SD 22 HU の数倍）"),
     "degrade.bilateral_sigma_color_hu_min": Key(float, "--bil_color_min", "bilateral の sigma_color [HU] の下限（mode bilateral_blur のみ。PCD のノイズ SD ≈ 93 HU の 2〜3 倍が目安）"),
     "degrade.bilateral_sigma_color_hu_max": Key(float, "--bil_color_max", "同 上限"),
     "degrade.bilateral_sigma_space_px_min": Key(float, "--bil_space_min", "bilateral の sigma_space [px] の下限（mode bilateral_blur のみ）"),
@@ -129,7 +136,7 @@ INFER = {
 }
 
 GAN_MODES = ("fgan_kl", "lsgan", "vanilla")
-DEGRADE_MODES = ("gaussian", "bilateral_blur")
+DEGRADE_MODES = ("gaussian", "bilateral_blur", "learned")
 PRECISIONS = ("fp32", "bf16")
 NETGS = ("wavelet", "resnet_9blocks", "resnet_6blocks")
 NETDS = ("paper", "basic")
@@ -141,10 +148,13 @@ SAMPLINGS = ("random", "paper")
 # この 2 項目が追加される前の run（2026-10-30 の初回 run）を resume するためだけの移行値。新規 run の値は train.yaml にあり、設定欠落の暗黙補完には使わない
 LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False,
                          "degrade.mode": "gaussian", "degrade.bilateral_sigma_color_hu_min": 0.0, "degrade.bilateral_sigma_color_hu_max": 0.0,
-                         "degrade.bilateral_sigma_space_px_min": 0.0, "degrade.bilateral_sigma_space_px_max": 0.0}
+                         "degrade.bilateral_sigma_space_px_min": 0.0, "degrade.bilateral_sigma_space_px_max": 0.0,
+                         "degrade.learned_z_dim": 16, "degrade.learned_kernel_size": 21, "degrade.learned_noise_kernel_size": 9, "degrade.learned_amp_ch": 16, "degrade.learned_sigma_max_hu": 100.0,
+                         "loss.lambda_k_fid": 0.0, "loss.lambda_k_com": 0.0}
 
 # 重みの形と P の有無を決めるキー。再開で変えられない
-SHAPE_KEYS = ("network.netG", "network.netD", "network.ngf", "network.ndf", "network.norm", "degrade.enabled", "degrade.mode")
+SHAPE_KEYS = ("network.netG", "network.netD", "network.ngf", "network.ndf", "network.norm", "degrade.enabled", "degrade.mode",
+              "degrade.learned_z_dim", "degrade.learned_kernel_size", "degrade.learned_noise_kernel_size", "degrade.learned_amp_ch")
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +344,12 @@ def check_degrade_values(train, P):
         if d[hi] < d[lo]: P.append(f"degrade.{lo} ≤ degrade.{hi}")
     if d["enabled"] and d["mode"] == "gaussian" and d["blur_sigma_px_max"] == 0 and d["noise_sigma_hu_max"] == 0:
         P.append("degrade.enabled なのにぼかしもノイズも上限 0（P が恒等になる。--degrade false にするか範囲を指定）")
+    if d["mode"] == "learned":
+        if d["learned_z_dim"] < 1: P.append("degrade.learned_z_dim ≥ 1")
+        for k in ("learned_kernel_size", "learned_noise_kernel_size"):
+            if d[k] < 3 or d[k] % 2 == 0: P.append(f"degrade.{k} は 3 以上の奇数")
+        if d["learned_amp_ch"] < 1: P.append("degrade.learned_amp_ch ≥ 1")
+        if d["learned_sigma_max_hu"] <= 0: P.append("degrade.learned_sigma_max_hu は正")
     if d["enabled"] and d["mode"] == "bilateral_blur" and (d["bilateral_sigma_color_hu_max"] <= 0 or d["bilateral_sigma_space_px_max"] <= 0):
         P.append("degrade.mode bilateral_blur では bilateral_sigma_color_hu_max / sigma_space_px_max を正に")
 
@@ -350,7 +366,7 @@ def check_train_values(train, machine):
     if train["optim.seed"] < 0: P.append("optim.seed ≥ 0")
     if train["optim.precision"] not in PRECISIONS: P.append(f"optim.precision は {PRECISIONS}")
     if train["loss.gan_mode"] not in GAN_MODES: P.append(f"loss.gan_mode は {GAN_MODES}")
-    for k in ("lambda_fid", "lambda_id", "lambda_id_final"):
+    for k in ("lambda_fid", "lambda_id", "lambda_id_final", "lambda_k_fid", "lambda_k_com"):
         if train[f"loss.{k}"] < 0: P.append(f"loss.{k} ≥ 0")
     if train["loss.lambda_id_decay_epochs"] < 0: P.append("loss.lambda_id_decay_epochs ≥ 0")
     check_degrade_values(train, P)

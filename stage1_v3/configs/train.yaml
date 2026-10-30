@@ -21,10 +21,17 @@ loss:
   lambda_id: 1000.0     # 恒等項。正規化単位では 1 HU = 3.64e-4 なので、RMS 50 HU で mean(R²) ≈ 3.3e-4 → ×1000 ≈ 0.33（GAN 項 O(1) と同程度）。レビュー F の指摘で λ_fid/10 は棄却
   lambda_id_decay_epochs: 0   # 0 = 一定。Krishnan 2025 型（初期大 → 減衰）を試すときは epoch 数と lambda_id_final を指定
   lambda_id_final: 1000.0
+  lambda_k_fid: 10.0    # learned: カーネル側 fidelity（論文 λ と同じ桁から。ノイズ側には掛けない）
+  lambda_k_com: 1.0     # learned: カーネル重心の正則化（px²）
 
 degrade:                # 物理コア P（学習なし、スライスごとに抽選。R-S23）
   enabled: true         # false で u = x（P なし。fidelity GAN + 恒等項だけの対照）
-  mode: bilateral_blur  # gaussian = 一様ぼかし（1 本目・2 本目: blur 1.4〜2.4 で local_sd と edge_grad_p99 は合うが中程度のエッジが実 EID より潰れる）| bilateral_blur = エッジ保存の平滑化 → 弱いぼかし → ノイズ
+  mode: learned         # learned = 学習型の確率的劣化 P_θ（3 本目〜。models/degrade_net.py）| gaussian = 一様ぼかし（1〜2 本目）| bilateral_blur = エッジ保存の平滑化 → 弱いぼかし → ノイズ
+  learned_z_dim: 16             # learned のみ。以下 5 つは重みの形を決めるので resume で変えられない
+  learned_kernel_size: 21       # ぼかしカーネル k(z) [px]
+  learned_noise_kernel_size: 9  # ノイズ整形フィルタ h(z) [px]
+  learned_amp_ch: 16            # 振幅ネット σ(x)
+  learned_sigma_max_hu: 100.0   # σ(x) の上限 [HU]
   bilateral_sigma_color_hu_min: 150.0   # mode bilateral_blur のみ。PCD のノイズ SD 93 HU の 2〜3 倍（実測前の仮置き。ponly + stats で local_sd / nps / edge_grad p90・p95・p99 を揃えて決める）
   bilateral_sigma_color_hu_max: 250.0
   bilateral_sigma_space_px_min: 1.5

@@ -15,6 +15,8 @@
   D も本物 y と偽物 ŷ を連結して通す（D 更新・G 更新とも。別 forward だと偽物バッチの HU の水準差が 1 層目の BN で消えて D に見えず、R の HU 水準が揺れる。2026-10-30 の 1 本目で判明）。
 【高速化（008 と同じ）】 optim.precision bf16 = CUDA autocast（G / D の forward だけ。損失は FP32 に戻して計算。fgan_kl の exp は FP32）。optim.compile = nn.Module.compile(mode="max-autotune")。
   compile 時は CUDA Graph が出力 buffer を再利用するので、保持する出力は _run_net で clone する（D は 1 iteration に 3 回呼ぶ）
+【learned P（degrade.mode learned、2026-10-30 の転換）】 u = P_θ(x, z, ε) を models/degrade_net.py が GPU で作る（dataset は u = x を渡す）。P_θ は G と同じ optimizer。
+  損失に λ_k_fid · mean((x ⊛ k − x)²)（カーネル側だけの fidelity）と λ_com · COM² を足す。ノイズ側には fidelity を掛けない。net_P.pth を保存し推論でも使う
 【診断値（HU）】 R_u_rms / R_y_rms（残差の RMS）、R_ratio = R_u_rms / R_y_rms（≫ 1 かつ D 分離維持 = R がドメイン検出器化、レビュー D）、P_rms = RMS(u − x)、d_in = mean|fake_B − x|
 """
 
@@ -27,6 +29,7 @@ import numpy as np
 import torch
 
 from models import networks
+from models.degrade_net import LearnedDegrade
 from util.run_paths import CKPT_KINDS, NET_NAMES, ckpt_dir
 
 
@@ -77,8 +80,8 @@ def _swap_dirs(tmp, final, old, retries=10, wait=3.0):
 
 
 class ProjectionModel:
-    LOSS_NAMES = ("D", "D_real", "D_fake", "G_GAN", "G_fid", "G_id")
-    DIAG_NAMES = ("R_u_rms_HU", "R_y_rms_HU", "R_ratio", "P_rms_HU", "d_in_HU", "lambda_id")
+    LOSS_NAMES = ("D", "D_real", "D_fake", "G_GAN", "G_fid", "G_id", "P_kfid", "P_com")
+    DIAG_NAMES = ("R_u_rms_HU", "R_y_rms_HU", "R_ratio", "P_rms_HU", "d_in_HU", "lambda_id", "P_k_sigma_px", "P_noise_amp_HU")
 
     def __init__(self, train, device, launch_config=None, is_train=True):
         self.cfg = train
@@ -93,7 +96,12 @@ class ProjectionModel:
         if self.compile_enabled and not (shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc")):
             raise RuntimeError("torch.compile に必要な C コンパイラがありません。Docker image を再ビルドしてください: bash start1_v3.sh <machine> down → bash start1_v3.sh <machine> build")
         self.netG = networks.build_G(train, device)
-        self.model_names = list(NET_NAMES) if is_train else ["G"]
+        self.learned_P = train["degrade.enabled"] and train["degrade.mode"] == "learned"
+        self.model_names = (["G", "P"] if self.learned_P else ["G"]) + (["D"] if is_train else [])
+        if self.learned_P:
+            self.netP = LearnedDegrade(train["degrade.learned_z_dim"], train["degrade.learned_kernel_size"], train["degrade.learned_noise_kernel_size"],
+                                       train["degrade.learned_amp_ch"], train["degrade.learned_sigma_max_hu"] / self.hu_per_unit).to(device)
+            self.lambda_k_fid, self.lambda_k_com = train["loss.lambda_k_fid"], train["loss.lambda_k_com"]
         if is_train:
             self.netD = networks.build_D(train, device)
             if self.compile_enabled:
@@ -105,7 +113,8 @@ class ProjectionModel:
                 self.criterionGAN = networks.GANLoss(self.gan_mode).to(device)
             self.lambda_fid = train["loss.lambda_fid"]
             betas = (train["optim.beta1"], train["optim.beta2"])
-            self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=train["optim.lr_G"], betas=betas)
+            g_params = list(self.netG.parameters()) + (list(self.netP.parameters()) if self.learned_P else [])
+            self.optimizer_G = torch.optim.Adam(g_params, lr=train["optim.lr_G"], betas=betas)
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=train["optim.lr_D"], betas=betas)
             self.optimizers = [self.optimizer_G, self.optimizer_D]
             self.schedulers = []
@@ -173,12 +182,27 @@ class ProjectionModel:
     # ------------------------------------------------------------------ forward / backward
     def set_input(self, batch):
         self.real_A = batch["A"].to(self.device, non_blocking=True)
-        self.u = batch["U"].to(self.device, non_blocking=True)
+        self.u = batch["U"].to(self.device, non_blocking=True)  # learned なら u = x（P_θ は forward で掛ける）
         self.real_B = batch["B"].to(self.device, non_blocking=True)
+
+    def degrade(self, x, generator=None):
+        """learned のとき x → u = P_θ(x, z, ε)。eval で通す（表示・採点・推論用。勾配なし）。learned でなければ x をそのまま返す。"""
+        if not self.learned_P:
+            return x
+        was = self.netP.training
+        self.netP.eval()
+        with torch.no_grad(), self._autocast():
+            u, _ = self.netP(x.to(self.device), generator=generator)
+        self.netP.train(was)
+        return u.float()
 
     def forward(self):
         """PCD 経路と EID 経路を連結して 1 回で G に通す（BN 対策）。"""
         n = self.u.shape[0]
+        if self.learned_P:
+            with self._autocast():
+                u, info = self.netP(self.real_A)
+            self.u, self.P_info = u.float(), info
         inp = torch.cat([self.u, self.real_B], dim=0)
         out = self._run_net(self.netG, inp)
         self.fake_B, self.idt_B = out[:n], out[n:]
@@ -214,6 +238,13 @@ class ProjectionModel:
         self.loss_G_id = torch.mean(self.R_y ** 2)
         lam_id = self.lambda_id()
         self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid + lam_id * self.loss_G_id
+        if self.learned_P:  # カーネル側の fidelity と重心の正則化（ノイズ側には掛けない）
+            self.loss_P_kfid = torch.mean((self.P_info["blurred"].float() - self.real_A) ** 2)
+            self.loss_P_com = self.P_info["com2"].float().mean()
+            self.loss_G = self.loss_G + self.lambda_k_fid * self.loss_P_kfid + self.lambda_k_com * self.loss_P_com
+        else:
+            self.loss_P_kfid = torch.zeros((), device=self.device)
+            self.loss_P_com = torch.zeros((), device=self.device)
         self.loss_G.backward()
         return lam_id
 
@@ -235,6 +266,11 @@ class ProjectionModel:
             diag = {"R_u_rms_HU": r_u, "R_y_rms_HU": r_y, "R_ratio": r_u / max(r_y, 1e-6),
                     "P_rms_HU": float((self.u - self.real_A).pow(2).mean().sqrt()) * h,
                     "d_in_HU": float((self.fake_B.detach() - self.real_A).abs().mean()) * h, "lambda_id": lam_id}
+            if self.learned_P:
+                body = self.real_A > (-500.0 - self.cfg["data.hu_min"]) / h - 1.0
+                sig = self.P_info["sigma"].detach().float()
+                diag["P_k_sigma_px"] = float(self.P_info["k_sigma_px"].detach().float().mean())
+                diag["P_noise_amp_HU"] = float(sig[body].mean()) * h if body.any() else float(sig.mean()) * h
         self.losses = {k: float(getattr(self, "loss_" + k).detach()) for k in self.LOSS_NAMES}
         self.losses["G_total"] = float(self.loss_G.detach())
         self.losses.update(diag)
@@ -255,6 +291,8 @@ class ProjectionModel:
         """表示用: バッチ先頭の A / U / fake_B / B / idt_B（eval で通す）。"""
         self.train_mode(False)
         a, u, b = batch["A"].to(self.device), batch["U"].to(self.device), batch["B"].to(self.device)
+        if self.learned_P:
+            u = self.degrade(a, generator=torch.Generator(device=self.device).manual_seed(0))
         out = self._run_net(self.netG, torch.cat([u, b], dim=0))
         self.train_mode(True)
         n = u.shape[0]
