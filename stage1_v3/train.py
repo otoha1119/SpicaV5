@@ -46,7 +46,8 @@ def v4_full(model, full, train):
     if not model.v4 or full is None:
         return full
     base = train["data.patch_seed"] * 1_000_003 + 303 + int(full["epoch"])
-    gen = lambda i, seed, eps0=False: model.generate(full["A"][i : i + 1], generator=torch.Generator(device=model.device).manual_seed(seed), eps_zero=eps0)  # noqa: E731
+    xc_of = (lambda i: full["XC"][i : i + 1]) if model.precomputed else (lambda i: None)  # noqa: E731  precomputed: dataset.full_slices が dn_dir から読んだ x_c
+    gen = lambda i, seed, eps0=False: model.generate(full["A"][i : i + 1], generator=torch.Generator(device=model.device).manual_seed(seed), eps_zero=eps0, x_c=xc_of(i))  # noqa: E731
     outs = [gen(i, base + i) for i in range(full["A"].shape[0])]
     for key, name in (("XC", "x_c"), ("G", "g"), ("U", "u")):
         full[key] = torch.cat([o[name].cpu() for o in outs])
@@ -116,7 +117,7 @@ def main():
     else:
         model.make_schedulers(a.epoch_count)
     if model.v4:
-        print(f"[train] Dn (frozen, fp32): {model.dn_source}")  # 実際に読んだ重み（resume は run 内の複製）
+        print(f"[train] Dn {'precomputed (pipeline.dn_dir)' if model.precomputed else '(frozen, fp32)'}: {model.dn_source}")  # 実際に読んだ重み（resume は run 内の複製）/ precomputed の dn_dir
     total_iters = model.total_iters
     fixed = dataset.fixed_batch(train["log.n_images"])
     monitor = TrainMonitor(run_dir, train, len(dataset), fixed, dataset.eid_reference(), train["degrade.body_threshold_hu"])

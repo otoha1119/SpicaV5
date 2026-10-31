@@ -4,7 +4,9 @@
   (b) 鮮鋭度の代理: 体内の強いエッジ（|∇| 上位 1 %）での勾配の大きさ [HU/px]（線計測 eval/line_metrics.py の edge 10–90 % 幅の代わり。参考値）
   (c) HU: 体内（HU > body_threshold）の p50 / p90 / p99、空気（体外）の平均
   (d) ノイズ自己相関: 一様 ROI の ρ(1..4)（軸 (d,0),(0,d) と対角 (d,d),(d,−d) の平均）、noise_rho_max_1..4（Chebyshev 殻全体の |ρ| 最大）、
-      noise_corr_d0（殻全体で |ρ| < 0.05 になる最小距離。v4 の Dn の n2n.min_dist / cell_size = 2·d₀ を決める。決定 §6.1）
+      noise_corr_d0（殻全体で |ρ| < 0.05 になる最小距離。v4 の Dn の n2n.min_dist / cell_size = 2·d₀、blindspot.radius を決める。決定 §6.1）
+  (e) ノイズ PSD: 一様 ROI のノイズの平均ペリオドグラムを画像サイズに補間した 2 次元 PSD（util/metrics.noise_psd、bm3d の規約）を
+      noise_psd_<フォルダ名>.npy に書く（denoise.yaml の bm3d.psd_path → bash start1_v3.sh <machine> dnfixed / dncheck --method bm3d）
 
   bash start1_v3.sh <machine> stats --dirs A,B,C [--max_slices 200] [--seed 0]
   出力: <repo>/output/stage1_v3/stats_<時刻>/stats.yaml（フォルダごとの中央値と四分位）と summary.txt（横並びの表）
@@ -23,7 +25,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import MACHINE, TRAIN, ConfigError, validate, validate_shared  # noqa: E402
 from data.dataset import CaseIndex, read_stored, stored_to_hu  # noqa: E402
-from util.metrics import ROI, N_ROI, analyze_slice, summarize  # noqa: E402
+from util.metrics import ROI, N_ROI, analyze_slice, noise_psd, summarize  # noqa: E402
 from util.run_paths import STAGE, checkpoints_root, stats_output_dir  # noqa: E402
 
 def main():
@@ -76,16 +78,27 @@ def main():
         paths = list(idx.all_paths)
         if max_slices and len(paths) > max_slices:
             paths = [paths[i] for i in sorted(rng.choice(len(paths), max_slices, replace=False))]
-        rows = []
+        rows, size = [], None
         for pth in paths:
             hu = stored_to_hu(read_stored(pth), offset)
+            if size is None:
+                size = hu.shape
+            elif hu.shape != size:
+                raise RuntimeError(f"{d}: 画像サイズが揃っていません {hu.shape} != {size}（{pth}）")
             rows.append(analyze_slice(hu, thr, rng))
         valid = [r for r in rows if r is not None]
+        psd_path, sigma_white = None, float("nan")
+        if valid and size[0] == size[1]:
+            psd, sigma_white = noise_psd(np.concatenate([r["noise_rois"] for r in valid]), size[0])
+            psd_path = out_dir / f"noise_psd_{Path(d).name}.npy"
+            np.save(psd_path, psd)
+            print(f"[stats] {d}: noise PSD {psd.shape} → {psd_path}（白色換算 σ {sigma_white:.1f} HU）")
         nps_mean = np.mean([r["nps_radial"] for r in valid], axis=0).tolist() if valid else []
         rho_mean = np.nanmean([r["noise_rho"] for r in valid], axis=0).tolist() if valid else []
         rho_max_mean = np.nanmean([r["noise_rho_max"] for r in valid], axis=0).tolist() if valid else []
         result["dirs"][str(d)] = {"n_slices": len(paths), "n_valid": len(valid), **{k: summarize(valid, k) for k in keys}, "nps_radial_mean": nps_mean,
-                                  "noise_rho_mean": rho_mean, "noise_rho_max_mean": rho_max_mean, "n_corr_d0_within_8": int(sum(np.isfinite(r["noise_corr_d0"]) for r in valid))}
+                                  "noise_rho_mean": rho_mean, "noise_rho_max_mean": rho_max_mean, "n_corr_d0_within_8": int(sum(np.isfinite(r["noise_corr_d0"]) for r in valid)),
+                                  "noise_psd_path": (str(psd_path) if psd_path else None), "noise_psd_sigma_white_equiv_hu": sigma_white, "image_hw": (list(size) if size else None)}
         print(f"[stats] {d}: {len(valid)}/{len(paths)} slices")
     with open(out_dir / "stats.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(result, f, allow_unicode=True, sort_keys=False)

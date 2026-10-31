@@ -43,23 +43,30 @@ v3 の行き詰まり（ぼかした PCD ノイズが「指紋」として残り
 
 - 経路: `x → Dn（凍結 denoiser）→ x_c → G: x_c + R(x_c) → ⊛ k(z) → + σ(x_c) ⊙ (h(z) ⊛ ε)、σ ∈ [σ_min, σ_max] → u`。D は実 EID y と u。恒等経路 `y → G` は v3 と同じ（Dn も k もノイズも通さない）
 - 損失: `L_GAN(u) + λ_fid ‖R(x_c)‖² + λ_id ‖R(y)‖² + λ_k ‖x_c ⊛ k − x_c‖² + λ_com COM²`。ε に依存する項は L_GAN だけ（C2）。σ の下限 `degrade.learned_sigma_min_hu`（実 EID の局所 SD 22.7、C3）
-- Dn は PCD512 だけで Neighbor2Neighbor（Huang et al., CVPR 2021）を事前学習して凍結する（`models/denoiser.py`、`train_denoiser.py`、`configs/denoise.yaml`）。GAN の勾配は入れない（C1）。セル幅 `n2n.cell_size` と最小距離 `n2n.min_dist` は `stats` の `noise_corr_d0`（|ρ(d)| < 0.05 になる最小距離）から決める
+- Dn は PCD512 だけで自己教師あり学習して凍結する（`models/denoiser.py`、`train_denoiser.py`、`configs/denoise.yaml` の `dn.method`）。GAN の勾配は入れない（C1）
+  - `n2n`: Neighbor2Neighbor（Huang et al., CVPR 2021）。セル幅 `n2n.cell_size` と最小距離 `n2n.min_dist` は `stats` の `noise_corr_d0` から決める。**初回（cell 4 / min_dist 2）は実 PCD で不合格**（残留 SD 44 HU、edge_ratio p90 0.68。実測 ρ(1) = 0.56, ρ(2) = 0.13, d₀ = 6。4 倍 sub-sample 画像で学習してフル解像度で推論するので、1〜2 px の相関ノイズを構造として残す）
+  - `blindspot`（本命）: 構造化 blind-spot。Noise2Void（Krull et al., CVPR 2019）のマスク方式を Structured N2V（Broaddus et al., ISBI 2020）の円盤盲点（`blindspot.radius`、格子 `blindspot.stride`、環からの乱択で埋める `fill: neighbor`、中心画素だけの `loss`）に拡張し、フル解像度で学習・推論する。起動行に U-Net の受容野（124 px、ch 48 / 3 段）を出す。1 patch の計算量は n2n の 16 倍（256² をそのまま通す）
+  - `bm3d`（対照、学習なし）: BM3D（PyPI `bm3d`、Mäkinen / Azzari / Foi 2020）に `stats` が書く実測ノイズ PSD（`noise_psd_<入力名>.npy`、規約 E|FFT2(noise)|²、白色 σ なら σ²·H·W）を渡す。CPU で数秒 / 512² なので学習ステップ内では回せず、`dnfixed` でデータを先に denoise し、学習は `pipeline.dn_source: precomputed` + `pipeline.dn_dir` で x_c を読む。**`bm3d` は `docker/requirements-*.txt` に追加したので image の再ビルドが要る**（`down → build`）
 - 合否（`check_denoiser.py`、§6.4 の表）: Dn(x) の一様 ROI 局所 SD ≤ 6 HU、edge_grad p90/p95/p99 ≥ 0.8 × x、残差 x − Dn(x) の edge_grad p99 ≤ 残差 SD の 3 倍。閾値は `configs/denoise.yaml` の `check.*`。終了コード 0 = 全項目 PASS
 - 判定（v4 の学習中）: `val/fingerprint_sd_HU` = ε = 0 で生成した u の局所 SD の中央値（score に `/ val.target_fingerprint_sd_hu` で加算）、`draws/std_out_body_HU`（u の引き直し間 SD）、`draws/std_v_body_HU`（ε = 0、z だけ引き直し）、`draws/std_eps_body_HU`（ノイズだけ）、`diag/Dn_resid_rms_HU`。パネルは `[x | Dn(x) | G(x_c) | u | R(x_c)]`、`images/full/eps0` が指紋
 
 ```bash
-bash start1_v3.sh <machine> stats --dirs /workspace/DataSet/PCD512_v2      # noise_rho_1..4 と noise_corr_d0 → denoise.yaml の n2n.min_dist / cell_size = 2·d₀
-bash start1_v3.sh <machine> v4 [--flag value]                               # 通し: dn → dncheck（FAIL なら停止）→ 学習（--pipeline_mode v4 --dn_weights <dn の latest>）。--flag は学習にだけ渡す
-bash start1_v3.sh <machine> dn [--n_epochs 50 --cell_size 4 --min_dist 2]   # Dn の学習だけ（configs/denoise.yaml、schema の DENOISE）。resume は無い（毎回新規）
-bash start1_v3.sh <machine> dncheck [--weights PATH] [--input_dir DIR] [--n_slices N]   # Dn の合否。--weights 省略時は train.yaml の pipeline.dn_weights
+bash start1_v3.sh <machine> stats --dirs /workspace/DataSet/PCD512_v2      # noise_rho_1..4 と noise_corr_d0（→ n2n.cell_size / blindspot.radius）、noise_psd_PCD512_v2.npy（→ bm3d.psd_path）
+bash start1_v3.sh <machine> v4 [--flag value]                               # 通し（weights 経路）: dn → dncheck（FAIL なら停止）→ 学習（--pipeline_mode v4 --dn_weights <dn の latest>）。--flag は学習にだけ渡す
+bash start1_v3.sh <machine> dn [--n_epochs 50 --method blindspot --bs_radius 3 --bs_stride 8]   # Dn の学習だけ（n2n | blindspot。configs/denoise.yaml、schema の DENOISE）。resume は無い（毎回新規）
+bash start1_v3.sh <machine> dncheck [--weights PATH] [--method bm3d --psd_path P] [--input_dir DIR] [--n_slices N]   # Dn の合否。--weights 省略時は train.yaml の pipeline.dn_weights。--method bm3d は固定 denoiser を同じ表に掛ける
+# precomputed 経路（BM3D 対照）: stats（PSD）→ dnfixed → dncheck --method bm3d → train --dn_source precomputed
+bash start1_v3.sh <machine> dnfixed --input_dir /workspace/DataSet/PCD512_v2 --psd_path /workspace/output/stage1_v3/stats_<時刻>/noise_psd_PCD512_v2.npy [--max_slices 0 --workers 8]
+bash start1_v3.sh <machine> dncheck --method bm3d --psd_path /workspace/output/stage1_v3/stats_<時刻>/noise_psd_PCD512_v2.npy
+bash start1_v3.sh <machine> --pipeline_mode v4 --dn_source precomputed --dn_dir /workspace/output/stage1_v3/dnfixed_PCD512_v2_<時刻> --dn_weights ""
 bash start1_v3.sh <machine> --dn_weights /workspace/stage1_v3/checkpoints/denoiser/<run>/latest/net_Dn.pth   # 学習だけ（train.yaml が v4 なので dn_weights を選ぶ）
 bash start1_v3.sh <machine> --pipeline_mode v3 --dn_weights ""              # 従来の v3
 bash start1_v3.sh <machine> infer --weight_dir .../best --input_dir /workspace/DataSet/PCD512_v2 --n_draws 8   # v4: full/ = u、full_eps0/ = 指紋（infer.eps_zero）、full_std/、manifest.yaml に G / P / Dn の sha256
 ```
 
-出力: Dn は `stage1_v3/checkpoints/denoiser/<run>/`（`latest/net_Dn.pth`、`weights/epoch_NNN/`、`tb/`、`output_images/epoch_NNN/<slice>_panel.png` = [x | Dn(x) | 残差]）と、最新 run の複製 `checkpoints/denoiser/latest/`（`train.yaml` の `pipeline.dn_weights` の既定）。v4 の run は Dn を `<run>/net_Dn.pth` と各重みディレクトリに複製する（resume / infer / best はそちらを優先）。`dncheck` は `output/stage1_v3/dncheck_<時刻>/summary.yaml`。
-TensorBoard（`tb`）: Dn は `loss/rec, loss/reg, loss/total, n2n/gamma, lr, check/*`（§6.4 の指標を固定スライスで毎 epoch）。
-設定キー: `pipeline.mode` / `pipeline.dn_weights`（resume で mode は変えられない）、`degrade.learned_sigma_min_hu`、`val.target_fingerprint_sd_hu`、`infer.yaml` の `eps_zero`、`configs/denoise.yaml`（`data.* / n2n.* / model.* / optim.* / log.* / check.*`、すべて schema.py の DENOISE）。
+出力: Dn は `stage1_v3/checkpoints/denoiser/<run>/`（`latest/net_Dn.pth`、`weights/epoch_NNN/`、`tb/`、`output_images/epoch_NNN/<slice>_panel.png` = [x | Dn(x) | 残差]）と、最新 run の複製 `checkpoints/denoiser/latest/`（`train.yaml` の `pipeline.dn_weights` の既定）。v4（weights）の run は Dn を `<run>/net_Dn.pth` と各重みディレクトリに複製する（resume / infer / best はそちらを優先）。precomputed の run は `launch.yaml` の `dn:` に `dn_dir` と manifest の sha256 を残し、推論は `dn_dir/full/` から同じ相対パスの x_c を読む（無いスライスはエラー）。`dnfixed` は `output/stage1_v3/dnfixed_<入力名>_<時刻>/full/` と `manifest.yaml`。`dncheck` は `output/stage1_v3/dncheck_<時刻>/summary.yaml`（`method`、`dn` の素性、`compare` の 1 行 = blindspot の重み vs bm3d の横並び用）。
+TensorBoard（`tb`）: Dn は `loss/rec, loss/reg, loss/total, n2n/gamma（n2n のみ）, lr, check/*`（§6.4 の指標を固定スライスで毎 epoch）。
+設定キー: `pipeline.mode` / `pipeline.dn_source`（weights | precomputed）/ `pipeline.dn_weights` / `pipeline.dn_dir`（resume で mode と dn_source は変えられない。v4 は weights & dn_weights ≠ "" & dn_dir == "" か precomputed & dn_dir ≠ "" & dn_weights == "" のどちらか一方）、`degrade.learned_sigma_min_hu`、`val.target_fingerprint_sd_hu`、`infer.yaml` の `eps_zero`、`configs/denoise.yaml`（`dn.method / data.* / n2n.* / blindspot.* / bm3d.* / model.* / optim.* / log.* / check.*`、すべて schema.py の DENOISE）。
 
 ## 自動採点と best
 

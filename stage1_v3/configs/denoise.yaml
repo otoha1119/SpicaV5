@@ -1,8 +1,15 @@
-# stage1_v3/configs/denoise.yaml — v4 の Dn（PCD512 の自己教師あり denoiser）の学習と合否判定。唯一の正は configs/schema.py の DENOISE（欠落・未知・型違いはエラー、既定値なし）。
-# 出典: Neighbor2Neighbor（Huang et al., CVPR 2021, arXiv 2101.02824）。CT 向けの変更はセル幅 s と 2 画素の最小距離 d₀ をノイズ相関長から決めることだけ
-# （docs/decisions/20261031_stage1-v3-noise-path-analysis.md §6）。d₀ は bash start1_v3.sh <machine> stats --dirs <PCD512> の noise_corr_d0 で確かめる（PCD の見込み 2〜3 → s = 4〜6）。
-# 起動: bash start1_v3.sh <machine> dn [--flag value]。合否: bash start1_v3.sh <machine> dncheck。両方まとめて v4 学習まで: bash start1_v3.sh <machine> v4
+# stage1_v3/configs/denoise.yaml — v4 の Dn（PCD512 の denoiser）の学習と合否判定。唯一の正は configs/schema.py の DENOISE（欠落・未知・型違いはエラー、既定値なし）。
+# dn.method で切り替える（docs/decisions/20261031_stage1-v3-noise-path-analysis.md §6）:
+#   n2n       = Neighbor2Neighbor（Huang et al., CVPR 2021, arXiv 2101.02824）。初回（cell 4 / min_dist 2）は実 PCD512 で不合格（残留 SD 44 HU、edge_ratio p90 0.68。
+#               4 倍 sub-sample 画像で学習してフル解像度で推論するため、1〜2 px の相関ノイズが残る）
+#   blindspot = 構造化 blind-spot（Noise2Void: Krull et al., CVPR 2019 のマスク + Structured Noise2Void: Broaddus et al., ISBI 2020 の円盤盲点）。フル解像度で学習・推論。本命
+#   bm3d      = BM3D + 実測 PSD（学習なし、対照）。bash start1_v3.sh <machine> stats --dirs <PCD512>（noise_psd_<名前>.npy）→ dnfixed → dncheck --method bm3d → train --dn_source precomputed
+# 実測（PCD512 の一様 ROI、2026-10-31）: ρ(1) = 0.56, ρ(2) = 0.13, ρ(3) = 0.09, ρ(4) = 0.08, noise_corr_d0(|ρ| < 0.05) = 6
+# 起動: bash start1_v3.sh <machine> dn [--flag value]（n2n / blindspot）。合否: bash start1_v3.sh <machine> dncheck。両方まとめて v4 学習まで: bash start1_v3.sh <machine> v4
 # 書き方: 小数は必ず点を付ける。真偽値は true / false。
+
+dn:
+  method: blindspot     # n2n | blindspot | bm3d。n2n.* / blindspot.* / bm3d.* は該当方式だけが使う（キーは全部要る）
 
 data:
   input_dir: /workspace/DataSet/PCD512_v2   # PCD512（実 EID には掛けない）
@@ -15,11 +22,21 @@ data:
   hu_max: 4096
   patch_seed: 0
 
-n2n:
-  cell_size: 4          # s = 2·d₀（§6.1 の見込み d₀ ≈ 2）。stats の noise_corr_d0 で確かめて直す
+n2n:                    # method n2n のみ
+  cell_size: 4          # s = 2·d₀（§6.1 の見込み d₀ ≈ 2）。stats の noise_corr_d0 で確かめて直す（実測 d₀ = 6 → s = 12 なら patch 384）
   min_dist: 2           # セル内の 2 画素の最小 Chebyshev 距離 d₀
   gamma_max: 2.0        # 論文既定 γ = 2
   gamma_ramp_epochs: 12 # 0 → 2 を最初の 1/4（50 epoch の 12）で
+
+blindspot:              # method blindspot のみ（フル解像度。1 patch の計算量は n2n の cell_size² 倍 = 16 倍なので samples_per_epoch を見直す）
+  radius: 3             # 盲点の半径 r [px]（ρ(3) = 0.09 まで隠す。d₀ = 6 を全部隠すなら 5、stride 12）
+  stride: 8             # 中心の格子間隔（≥ 2r + 2）。中心密度 1/64 = 1.6 %
+  fill: neighbor        # 環 r < d ≤ 2r+1 から画素ごとに乱択
+  loss: l2              # 中心画素だけの L2
+
+bm3d:                   # method bm3d のみ（dnfixed / dncheck --method bm3d。dn では使えない）
+  psd_path: ""          # stats の noise_psd_<入力名>.npy（dnfixed のとき必須）
+  profile: np           # np | refilter
 
 model:
   ch: 48                # 論文の U-Net 幅

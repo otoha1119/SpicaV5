@@ -74,9 +74,10 @@ class Validator:
             xn = torch.from_numpy(hu_to_norm(hu, hu_min, hu_max))[None, None]
             if self.v4:
                 seed = int(rng.integers(0, 2**31))
-                gen = model.generate(xn, generator=torch.Generator(device=model.device).manual_seed(seed))
+                xc = torch.from_numpy(hu_to_norm(self.ds.xc_hu(p), hu_min, hu_max))[None, None] if model.precomputed else None  # precomputed: dn_dir の Dn(x)
+                gen = model.generate(xn, generator=torch.Generator(device=model.device).manual_seed(seed), x_c=xc)
                 rows.append(analyze_slice(to_hu(gen["u"]), self.thr, rng))
-                fp = model.generate(xn, generator=torch.Generator(device=model.device).manual_seed(seed), eps_zero=True)
+                fp = model.generate(xn, generator=torch.Generator(device=model.device).manual_seed(seed), eps_zero=True, x_c=xc)
                 fp_rows.append(analyze_slice(to_hu(fp["u"]), self.thr, rng))
                 continue
             if model.learned_P:

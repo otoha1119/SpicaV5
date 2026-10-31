@@ -6,7 +6,9 @@
 
 pipeline:
   mode: v4              # v3 | v4。resume で変えられない
-  dn_weights: /workspace/stage1_v3/checkpoints/denoiser/latest/net_Dn.pth   # v4: bash start1_v3.sh <machine> dn の最新の重み（run 開始時に run 内へ net_Dn.pth として複製）。v3 では ""
+  dn_source: weights    # v4 の Dn の与え方: weights（学習型 Dn = n2n / blindspot の net_Dn.pth を凍結）| precomputed（dnfixed で先に denoise した dn_dir を読む。BM3D 用）。resume で変えられない
+  dn_weights: /workspace/stage1_v3/checkpoints/denoiser/latest/net_Dn.pth   # v4 + weights: bash start1_v3.sh <machine> dn の最新の重み（run 開始時に run 内へ net_Dn.pth として複製）。v3 / precomputed では ""
+  dn_dir: ""            # v4 + precomputed: dnfixed の出力（/workspace/output/stage1_v3/dnfixed_<入力名>_<時刻>。full/ と manifest.yaml）。それ以外では ""
 
 optim:
   lr_G: 2.0e-4          # 論文 0.0002

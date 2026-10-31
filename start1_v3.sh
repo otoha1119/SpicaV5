@@ -1,6 +1,6 @@
 #!/bin/bash
 # 射影型 Stage 1（P + R + 恒等項） のホスト側入口。
-#   bash start1_v3.sh [machine] [train|v4|dn|dncheck|infer|ponly|stats|resume|best|tb|build|shell|down] [...]
+#   bash start1_v3.sh [machine] [train|v4|dn|dncheck|dnfixed|infer|ponly|stats|resume|best|tb|build|shell|down] [...]
 #   例: bash start1_v3.sh PC3                                   # 学習（P + R + 恒等項）
 #       bash start1_v3.sh PC3 resume 2026_1031_1200 latest
 #       bash start1_v3.sh PC3 infer --weight_dir /workspace/stage1_v3/checkpoints/<run>/best --input_dir /workspace/DataSet/PCD512_v2
@@ -9,7 +9,9 @@
 #       bash start1_v3.sh PC3 stats --dirs /workspace/DataSet/EID_v5,/workspace/DataSet/PCD512_v2      # R-S22 の計測（noise_corr_d0 も）
 #       bash start1_v3.sh PC3 v4                                 # v4 の通し: dn → dncheck → 学習（--pipeline_mode v4）。--flag は学習にだけ渡す
 #       bash start1_v3.sh PC3 dn [--n_epochs 50]                 # Dn（PCD denoiser、configs/denoise.yaml）の学習だけ
-#       bash start1_v3.sh PC3 dncheck [--weights PATH]           # Dn の合否（決定 §6.4）。省略時は train.yaml の pipeline.dn_weights
+#       bash start1_v3.sh PC3 dncheck [--weights PATH]           # Dn の合否（決定 §6.4）。省略時は train.yaml の pipeline.dn_weights。--method bm3d なら固定 denoiser
+#       bash start1_v3.sh PC3 dnfixed [--input_dir DIR] [--max_slices N] [--workers K] [--psd_path P]   # 固定 Dn（BM3D + stats の PSD）でデータを先に denoise（学習なし）
+#                                                                # → bash start1_v3.sh PC3 --dn_source precomputed --dn_dir <dnfixed の出力> --dn_weights ""
 set -euo pipefail
 
 if [ -f /.dockerenv ]; then
@@ -27,7 +29,7 @@ BEST_EPOCH=""
 MACHINE_ARG=""
 
 usage() {
-  echo "usage: bash start1_v3.sh [machine] [train|v4|dn|dncheck|infer|ponly|stats|tb|build|shell|down] [--flag value ...]"
+  echo "usage: bash start1_v3.sh [machine] [train|v4|dn|dncheck|dnfixed|infer|ponly|stats|tb|build|shell|down] [--flag value ...]"
   echo "       bash start1_v3.sh [machine] resume <run> [latest|best|epoch] [--flag value ...]"
   echo "       bash start1_v3.sh [machine] best <run> <epoch>"
 }
@@ -35,7 +37,7 @@ usage() {
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
-    train|v4|dn|dncheck|infer|ponly|stats|tb|shell|down) ACTION="$1"; shift ;;
+    train|v4|dn|dncheck|dnfixed|infer|ponly|stats|tb|shell|down) ACTION="$1"; shift ;;
     build) ACTION="build"; BUILD="--build"; shift ;;
     resume)
       ACTION="train"; shift
@@ -143,6 +145,7 @@ case "$ACTION" in
     tb_kill
     exec_it -e SPICA_TB_PORT="$TB_PORT" spicav5 bash stage1_v3/denoise.sh "$@" ;;
   dncheck) exec_it spicav5 bash stage1_v3/dncheck.sh "$@" ;;
+  dnfixed) exec_it spicav5 bash stage1_v3/dnfixed.sh "$@" ;;
   v4)
     tb_kill
     exec_it -e SPICA_TB_PORT="$TB_PORT" spicav5 bash stage1_v3/pipeline_v4.sh "$@" ;;

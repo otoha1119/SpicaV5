@@ -11,6 +11,11 @@
     (c) 体内 HU の p50 / p90 / p99、体外の平均
   body_mask(hu, thr): 体内（浸食済み）の bool マスク
   residual_edge_ratio(resid, body, roi_yx): 残差 x − Dn(x) の「残像」指標（決定 §6.4）= 体内 edge_grad p99 ÷ 一様 ROI の SD。戻り値 (ratio, resid_sd, resid_edge_p99)
+  noise_psd(resid_rois, size): 一様 ROI のトレンド除去後ノイズ（analyze_slice の noise_rois、(n, ROI, ROI)）の平均ペリオドグラム → bm3d の規約の (size, size) PSD
+    bm3d（PyPI、Mäkinen / Azzari / Foi）の sigma_psd は E|FFT2(noise)|²（fftshift なし、DC が [0,0]）。白色 σ なら一定 σ²·N·M（bm3d が float σ を内部で展開する値と同じ。
+    実測で確認: float σ と σ²·N·M の PSD で出力が一致）。ROI の 32×32 ペリオドグラム P32 = mean|FFT2(roi)|² は同じ規約の 32×32 版なので、
+    fftshift → (size, size) に線形補間（cycles/px の軸は不変）→ ifftshift → × size²/32² で画像サイズの PSD になる。
+    DC（トレンド除去で 0）は隣接 4 bin の平均で埋める（0 のままだと BM3D が DC 成分を「ノイズ無し」と扱う。補間の種にするためだけ）
   summarize(rows, key): 中央値と四分位
 """
 
@@ -83,6 +88,25 @@ def residual_edge_ratio(resid, body, roi_yx):
     return p99 / max(sd, 1e-6), sd, p99
 
 
+def noise_psd(resid_rois, size):
+    """resid_rois: (n, ROI, ROI) の平均 0 ノイズ → (size, size) float64 の PSD（bm3d の規約）。戻り値 (psd, sigma_white_equiv) で sigma = sqrt(mean(psd) / size²) [HU]。"""
+    rois = np.asarray(resid_rois, dtype=np.float64)
+    if rois.ndim != 3 or rois.shape[0] == 0:
+        raise ValueError(f"(n, ROI, ROI) のノイズ ROI が要る: {rois.shape}")
+    n, h, w = rois.shape
+    p32 = np.zeros((h, w), np.float64)
+    for r in rois:
+        r = r - r.mean()
+        p32 += np.abs(np.fft.fft2(r)) ** 2
+    p32 /= n
+    p32[0, 0] = 0.25 * (p32[0, 1] + p32[1, 0] + p32[0, -1] + p32[-1, 0])
+    sh = np.fft.fftshift(p32)
+    big = cv2.resize(sh.astype(np.float32), (int(size), int(size)), interpolation=cv2.INTER_LINEAR).astype(np.float64)
+    psd = np.fft.ifftshift(big) * (float(size) ** 2 / float(h * w))
+    psd = np.maximum(psd, 0.0)
+    return psd, float(np.sqrt(psd.mean() / (float(size) ** 2)))
+
+
 def radial_nps(patches):
     """patches: (n, ROI, ROI) HU（平均を引いた一様 ROI）→ 1D radial NPS と周波数軸 [cycles/px]。NPS = |FFT|² · (Δx Δy / (Nx Ny))、Δ = 1 px。"""
     n = patches.shape[0]
@@ -137,6 +161,7 @@ def analyze_slice(hu, thr, rng):
         coef, *_ = np.linalg.lstsq(A, r.ravel(), rcond=None)
         resid.append((r.ravel() - A @ coef).reshape(ROI, ROI))
     resid = np.stack(resid)
+    out["noise_rois"] = resid.astype(np.float32)  # noise_psd 用（stats が PSD を書く）
     out["local_sd"] = float(np.mean([r.std() for r in resid]))
     radial, freq = radial_nps(resid)
     if radial[1:].sum() > 0:

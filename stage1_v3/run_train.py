@@ -7,7 +7,7 @@
   5. start1_v3.sh 経由なら、この run の tb/ を logdir にして TensorBoard を起動する
 
 再開: --resume <run> [--resume_tag latest|best|<epoch>]。基準は選んだ checkpoint の state.pth に入っている実効設定。重みの形と P の有無・pipeline.mode（SHAPE_KEYS）は変えられない。
-v4 は pipeline.dn_weights（net_Dn.pth）の存在を run 作成前に確認する（resume は run 内の複製でもよい）。
+v4 は pipeline.dn_weights（net_Dn.pth）の存在を run 作成前に確認する（resume は run 内の複製でもよい）。pipeline.dn_source precomputed なら代わりに pipeline.dn_dir（dnfixed の出力）。
 """
 
 import argparse
@@ -60,17 +60,25 @@ def start_tensorboard(run_dir, port):
     print(f"[run_train] TensorBoard: http://localhost:{port} → {tb_dir}（全 run は bash start1_v3.sh <マシン> tb）", flush=True)
 
 
-def dn_info(train, run_dir, tag):
-    """v4: 実際に使う Dn（run 内の複製 → pipeline.dn_weights）のパスと sha256。launch.yaml の dn: 節（設定キーではない。推論の manifest と照合する）。"""
-    if train["pipeline.mode"] != "v4":
-        return None
-    cands = ([ckpt_path(run_dir, tag, DN_WEIGHT), run_dir / DN_WEIGHT] if tag else []) + [Path(train["pipeline.dn_weights"])]
-    path = next(c for c in cands if c.is_file())
+def _sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
-    return {"path": str(path), "sha256": h.hexdigest()}
+    return h.hexdigest()
+
+
+def dn_info(train, run_dir, tag):
+    """v4: 実際に使う Dn のパスと sha256。launch.yaml の dn: 節（設定キーではない。推論の manifest と照合する）。
+    weights: run 内の複製 → pipeline.dn_weights の順の net_Dn.pth。precomputed: pipeline.dn_dir と その manifest.yaml の sha256。"""
+    if train["pipeline.mode"] != "v4":
+        return None
+    if train["pipeline.dn_source"] == "precomputed":
+        dn_dir = Path(train["pipeline.dn_dir"])
+        return {"source": "precomputed", "dir": str(dn_dir), "manifest_sha256": _sha256(dn_dir / "manifest.yaml")}
+    cands = ([ckpt_path(run_dir, tag, DN_WEIGHT), run_dir / DN_WEIGHT] if tag else []) + [Path(train["pipeline.dn_weights"])]
+    path = next(c for c in cands if c.is_file())
+    return {"source": "weights", "path": str(path), "sha256": _sha256(path)}
 
 
 def sections(train, machine):
@@ -78,8 +86,12 @@ def sections(train, machine):
 
 
 def check_paths(train, machine, dn_fallbacks=()):
-    """v4 は pipeline.dn_weights（または resume なら run 内の複製 dn_fallbacks）が存在すること。"""
-    if train["pipeline.mode"] == "v4" and not Path(train["pipeline.dn_weights"]).is_file() and not any(Path(f).is_file() for f in dn_fallbacks):
+    """v4 + weights は pipeline.dn_weights（または resume なら run 内の複製 dn_fallbacks）が、v4 + precomputed は pipeline.dn_dir/full と manifest.yaml が存在すること。"""
+    if train["pipeline.mode"] == "v4" and train["pipeline.dn_source"] == "precomputed":
+        dn_dir = Path(train["pipeline.dn_dir"])
+        if not (dn_dir / "full").is_dir() or not (dn_dir / "manifest.yaml").is_file():
+            raise ConfigError(f"pipeline.dn_dir に full/ と manifest.yaml がありません: {dn_dir}（bash start1_v3.sh <machine> dnfixed で作る。合否は dncheck --method bm3d）")
+    elif train["pipeline.mode"] == "v4" and not Path(train["pipeline.dn_weights"]).is_file() and not any(Path(f).is_file() for f in dn_fallbacks):
         raise ConfigError(f"pipeline.dn_weights がありません: {train['pipeline.dn_weights']}（bash start1_v3.sh <machine> dn で作る。合否は dncheck）")
     for k in ("pcd_dir", "eid_dir"):
         if not Path(machine[k]).is_dir():

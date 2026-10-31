@@ -14,3 +14,4 @@ Pillow>=10,<13
 tensorboard>=2.15,<3
 tqdm>=4.66,<5
 pydicom>=3.0,<4
+bm3d>=4.0,<5             # stage1_v3 の固定 Dn（BM3D + 実測 PSD、dnfixed / dncheck --method bm3d。2026-10-31）

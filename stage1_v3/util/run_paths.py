@@ -6,7 +6,7 @@
   loss_log.txt
   latest/ best/               重みディレクトリ: net_G.pth（G = in + R、推論に使う）, net_D.pth, state.pth（optimizer ×2 / RNG / 進捗 / 実効設定）, net_P.pth（degrade.mode learned のときだけ。推論の P にも使う）,
                               net_Dn.pth（pipeline.mode v4 のときだけ。凍結 denoiser の複製。推論の Dn にも使う）
-  net_Dn.pth                  v4: pipeline.dn_weights の複製（run の自己完結用。resume / infer はこちらを優先）
+  net_Dn.pth                  v4 + dn_source weights: pipeline.dn_weights の複製（run の自己完結用。resume / infer はこちらを優先）。dn_source precomputed では無い（launch.yaml の dn: に dn_dir と manifest の sha256）
   best.txt
   weights/epoch_NNN/          save_epoch_freq ごとの checkpoint
   output_images/epoch_NNN/<slice>_pcd.png, _u.png（P(x)）, _eidlike.png, _R.png, <fixed>_std.png（n_draws の標準偏差 [HU]）, <eid>_idt.png（G(y)）, _Ry.png
@@ -31,6 +31,8 @@ dncheck（check_denoiser.py）の出力は <repo>/output/stage1_v3/dncheck_<時�
     full_panel/                        [出力 | P(x) | 入力 | R + ゲージ]（save_panel）
     R_colorbar_pm<range>HU.png, infer.yaml, draws_summary.yaml
 P 単独生成（bash start1_v3.sh <machine> ponly）は <repo>/output/stage1_v3/ponly_<入力名>_<実行時刻>/full/ と manifest.yaml。
+固定 Dn（bash start1_v3.sh <machine> dnfixed、denoise_dir.py、BM3D）は <repo>/output/stage1_v3/dnfixed_<入力名>_<実行時刻>/full/<case>/<slice>.png（= Dn(x)）と manifest.yaml
+  （method / PSD の sha256 / スライス一覧）。train の pipeline.dn_source precomputed + pipeline.dn_dir がこのディレクトリを指す。
 """
 
 import os
@@ -140,6 +142,10 @@ def infer_output_dir(run_dir, weight_dir, input_dir, now, root=None):
 
 def ponly_output_dir(input_dir, now, root=None):
     return output_root(root) / f"ponly_{Path(input_dir).name}_{now.strftime(INFER_STAMP_FORMAT)}"
+
+
+def dnfixed_output_dir(input_dir, now, root=None):
+    return output_root(root) / f"dnfixed_{Path(input_dir).name}_{now.strftime(INFER_STAMP_FORMAT)}"
 
 
 def stats_output_dir(now, root=None):

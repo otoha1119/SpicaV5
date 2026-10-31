@@ -6,6 +6,8 @@ Stage 1 ``task: degrade`` と同じ A = PCD512、B = EID512、症例列挙、pat
 【P】 A のスライスを読むたびに degrade.sample_params でスライス 1 枚分の (σ_b, σ_n, c) を引き、フル 512 の HU 画像に apply_degrade を掛けてから patch を切る
       （patches_per_slice 枚の patch は同じ 1 回の P を共有 = スライス単位の抽選、R-S23）。B（実 EID）には P を掛けない。
 【出力】 {"A": x patch, "U": P(x) patch, "B": y patch, "P": (3,) の params, "A_paths", "B_paths"}。すべて正規化 [−1, 1]。
+【precomputed Dn】 pipeline.mode v4 + pipeline.dn_source precomputed のときだけ、A の各 patch / フル画像と同じ位置の x_c = Dn(x) を pipeline.dn_dir/full/<同じ相対パス> から読み、
+      "XC" として足す（fixed_batch / full_slices も同じ）。無ければエラー。それ以外のモードでは "XC" を返さない（従来と同じ dict）。
 【正規化】 hu = stored − 1400 → clip(−1400, 4096) → [−1, 1]。P は clip の前（HU）で掛ける。
 """
 
@@ -303,6 +305,13 @@ class ProjectionDataset(Dataset):
             raise ValueError(sampling)
         self._u_cache = None  # (a_path, u_hu, params): 同じスライスの連続 patch は同じ 1 回の P を共有
         self._np_rng = None
+        self.precomputed = train["pipeline.mode"] == "v4" and train["pipeline.dn_source"] == "precomputed"
+        self.dn_dir = None
+        if self.precomputed:
+            self.dn_dir = Path(train["pipeline.dn_dir"])
+            if not (self.dn_dir / "full").is_dir():
+                raise RuntimeError(f"pipeline.dn_dir に full/ がありません（bash start1_v3.sh <machine> dnfixed の出力を指定）: {self.dn_dir}")
+            self.xc_hu(self.idx_a.all_paths[0])  # 最初の 1 枚で存在と形を確かめる
         print(f"[ProjectionDataset] A=PCD512: {self.idx_a.n_cases} cases / {self.idx_a.n_slices} slices | "
               f"B=EID512: {self.idx_b.n_cases} cases / {self.idx_b.n_slices} slices | image {self.hw}, patch {self.patch}, sampling {sampling}, len {len(self)}"
               + (f", patches_per_slice {train['data.patches_per_slice']}" if sampling == "random" else "")
@@ -317,6 +326,7 @@ class ProjectionDataset(Dataset):
                 "b_domain": "EID512", "b_cases": self.idx_b.n_cases, "b_slices": self.idx_b.n_slices,
                 "use_eval_only_cases": self.cfg["data.use_eval_only_cases"],
                 "degrade": {k: (list(v) if isinstance(v, tuple) else v) for k, v in self.pcfg.items()},
+                "dn_precomputed_dir": (str(self.dn_dir) if self.precomputed else None),
                 "fixed_slice": str(self.fixed_path), "eid_slice": str(self.eid_ref_path)}
 
     # ------------------------------------------------------------------ 乱数
@@ -354,6 +364,20 @@ class ProjectionDataset(Dataset):
         self._u_cache = (key, u, params)
         return u, params
 
+    # ------------------------------------------------------------------ precomputed Dn
+    def xc_path(self, a_path):
+        return self.dn_dir / "full" / Path(a_path).relative_to(self.dir_a)
+
+    def xc_hu(self, a_path):
+        """x_c = Dn(x) の HU（dn_dir/full/<同じ相対パス>）。無い・サイズ違いはエラー。"""
+        pth = self.xc_path(a_path)
+        if not pth.is_file():
+            raise FileNotFoundError(f"precomputed Dn のスライスがありません: {pth}（dnfixed を --max_slices 0 で全スライスに掛ける）")
+        hu = _load_hu(str(pth), self.offset)
+        if hu.shape != self.hw:
+            raise ValueError(f"precomputed Dn の画像サイズが違います: {hu.shape} != {self.hw} ({pth})")
+        return hu
+
     # ------------------------------------------------------------------ patch
     def _crop(self, hu, pos):
         if hu.shape != self.hw:
@@ -365,8 +389,11 @@ class ProjectionDataset(Dataset):
         x_hu = _load_hu(a_path, self.offset)
         u_hu, params = self._u_full(a_path, index)
         y_hu = _load_hu(b_path, self.offset)
-        return {"A": self._crop(x_hu, a_pos), "U": self._crop(u_hu, a_pos), "B": self._crop(y_hu, b_pos),
+        item = {"A": self._crop(x_hu, a_pos), "U": self._crop(u_hu, a_pos), "B": self._crop(y_hu, b_pos),
                 "P": torch.from_numpy(params_to_array(params)), "A_paths": a_path, "B_paths": b_path}
+        if self.precomputed:
+            item["XC"] = self._crop(self.xc_hu(a_path), a_pos)
+        return item
 
     def __getitem__(self, index):
         k = self.cfg["data.patches_per_slice"]
@@ -387,10 +414,13 @@ class ProjectionDataset(Dataset):
             rng = np.random.default_rng(self.cfg["data.patch_seed"] * 1_000_003 + 7 + i)
             a_path, a_pos, b_path, b_pos = it
             u_hu, params = self.degrade_full(_load_hu(a_path, self.offset), rng)
-            out.append({"A": self._crop(_load_hu(a_path, self.offset), a_pos), "U": self._crop(u_hu, a_pos), "B": self._crop(_load_hu(b_path, self.offset), b_pos),
-                        "P": torch.from_numpy(params_to_array(params))})
+            o = {"A": self._crop(_load_hu(a_path, self.offset), a_pos), "U": self._crop(u_hu, a_pos), "B": self._crop(_load_hu(b_path, self.offset), b_pos),
+                 "P": torch.from_numpy(params_to_array(params))}
+            if self.precomputed:
+                o["XC"] = self._crop(self.xc_hu(a_path), a_pos)
+            out.append(o)
         self._u_cache = None
-        return {k: torch.stack([o[k] for o in out]) for k in ("A", "U", "B", "P")}
+        return {k: torch.stack([o[k] for o in out]) for k in out[0]}
 
     def full_slices(self, epoch):
         """固定 PCD 1 枚 + ランダム PCD。各スライスに P を 1 回（epoch で変わる seed）。固定スライスは n_draws 回引き直した U_draws も返す（標準偏差画像用）。"""
@@ -414,9 +444,12 @@ class ProjectionDataset(Dataset):
             for _ in range(n_draws):
                 u, _ = self.degrade_full(hu, rng)
                 draws.append(torch.from_numpy(hu_to_norm(u, self.hu_min, self.hu_max)).unsqueeze(0))
-        return {"paths": paths, "kinds": ["fixed"] + ["random"] * len(randoms),
+        full = {"paths": paths, "kinds": ["fixed"] + ["random"] * len(randoms),
                 "A": torch.stack(A), "U": torch.stack(U), "P": torch.stack(P),
                 "U_draws": torch.stack(draws) if draws else None}
+        if self.precomputed:
+            full["XC"] = torch.stack([torch.from_numpy(hu_to_norm(self.xc_hu(p), self.hu_min, self.hu_max)).unsqueeze(0) for p in paths])
+        return full
 
     def eid_reference(self):
         hu = _load_hu(str(self.eid_ref_path), self.offset)

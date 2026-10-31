@@ -11,6 +11,8 @@
         --eps_zero で full_eps0/（ε = 0 の u = 指紋。z は draw 0 と同じ = generator の状態を保存して引き直すので full − full_eps0 がノイズの実現値そのもの）、
         --save_residual で full_xc/（Dn(x)）と full_R/（R(x_c) = G(x_c) − x_c）。パネルは [u | Dn(x) | x | R(x_c)]。
         --apply_degrade 無しなら v3 と同じく G だけ（恒等の確認）。manifest.yaml に G / P / Dn の重みのパスと sha256 を残す
+        --dn_dir（precomputed Dn の run。run_infer が launch の pipeline.dn_dir を渡す）: Dn を掛けず、入力スライスごとに <dn_dir>/full/<同じ相対パス> を x_c として読む（無ければエラー）。
+        manifest.yaml の Dn は {source: precomputed, dir, manifest_sha256} と学習時（launch の dn:）との一致
 """
 
 import argparse
@@ -62,7 +64,7 @@ def parse_args():
     req("--p_learned_z_dim", type=int); req("--p_learned_kernel_size", type=int); req("--p_learned_noise_kernel_size", type=int); req("--p_learned_amp_ch", type=int); req("--p_learned_sigma_max_hu", type=float)
     req("--p_learned_sigma_min_hu", type=float)
     # v4（run の launch から）
-    req("--pipeline_mode", choices=("v3", "v4")); req("--dn_weights")  # v3 では ""
+    req("--pipeline_mode", choices=("v3", "v4")); req("--dn_weights"); req("--dn_dir")  # v3 では ""。v4 はどちらか一方（weights: --dn_weights、precomputed: --dn_dir）
     req("--p_bil_color_min", type=float); req("--p_bil_color_max", type=float); req("--p_bil_space_min", type=float); req("--p_bil_space_max", type=float)
     req("--p_noise_min", type=float); req("--p_noise_max", type=float); req("--p_corr_min", type=float); req("--p_corr_max", type=float)
     req("--p_body_only", type=parse_bool); req("--p_body_threshold_hu", type=float)
@@ -131,23 +133,34 @@ def main():
         netP.to(device).eval()
         gen = torch.Generator(device=device).manual_seed(a.seed)
         weights["P"] = {"path": str(p_path), "sha256": sha256(p_path)}
+    precomputed = v4 and bool(a.dn_dir)
     if v4:
-        if not a.dn_weights or not Path(a.dn_weights).is_file():
-            raise FileNotFoundError(f"v4 の Dn の重みがありません: {a.dn_weights!r}")
-        netDn = load_denoiser(a.dn_weights, device)
-        weights["Dn"] = {"path": str(a.dn_weights), "sha256": sha256(a.dn_weights)}
+        if precomputed:
+            if a.dn_weights:
+                raise ValueError("--dn_dir と --dn_weights は同時に指定できません")
+            dn_dir = Path(a.dn_dir)
+            if not (dn_dir / "full").is_dir() or not (dn_dir / "manifest.yaml").is_file():
+                raise FileNotFoundError(f"precomputed Dn の dn_dir に full/ と manifest.yaml がありません: {dn_dir}")
+            weights["Dn"] = {"source": "precomputed", "dir": str(dn_dir), "manifest_sha256": sha256(dn_dir / "manifest.yaml")}
+            key = "manifest_sha256"
+        else:
+            if not a.dn_weights or not Path(a.dn_weights).is_file():
+                raise FileNotFoundError(f"v4 の Dn の重みがありません: {a.dn_weights!r}")
+            netDn = load_denoiser(a.dn_weights, device)
+            weights["Dn"] = {"source": "weights", "path": str(a.dn_weights), "sha256": sha256(a.dn_weights)}
+            key = "sha256"
         run_dir = find_run_dir(a.weight_dir)
         dn_at_train = None
         if run_dir is not None:
             with open(latest_launch(run_dir), encoding="utf-8") as f:
-                dn_at_train = yaml.safe_load(f).get("dn")  # run_train が書いた {path, sha256}
+                dn_at_train = yaml.safe_load(f).get("dn")  # run_train が書いた {source, path, sha256} / {source, dir, manifest_sha256}
         weights["Dn"]["at_train"] = dn_at_train
-        weights["Dn"]["matches_train"] = bool(isinstance(dn_at_train, dict) and dn_at_train.get("sha256") == weights["Dn"]["sha256"])
+        weights["Dn"]["matches_train"] = bool(isinstance(dn_at_train, dict) and dn_at_train.get(key) == weights["Dn"][key])
         if not weights["Dn"]["matches_train"]:
-            print(f"[infer] 注意: 使う Dn の sha256 が学習時（launch.yaml の dn:）と一致しません: {dn_at_train}")
+            print(f"[infer] 注意: 使う Dn が学習時（launch.yaml の dn:）と一致しません: {dn_at_train}")
     idx = CaseIndex(input_dir, a.index_cache_dir)
     paths = idx.all_paths if a.max_slices == 0 else idx.all_paths[: a.max_slices]
-    print(f"[infer] device={device} pipeline={a.pipeline_mode} G={weight_path} P={'on' if pcfg['enabled'] else 'off'} n_draws={n_draws}" + (f" Dn={a.dn_weights} eps_zero={eps_zero}" if v4 else ""))
+    print(f"[infer] device={device} pipeline={a.pipeline_mode} G={weight_path} P={'on' if pcfg['enabled'] else 'off'} n_draws={n_draws}" + (f" Dn={a.dn_dir + ' (precomputed)' if precomputed else a.dn_weights} eps_zero={eps_zero}" if v4 else ""))
     print(f"[infer] input={input_dir} ({idx.n_cases} cases, {idx.n_slices} slices, 推論 {len(paths)} 枚) {size} -> {size}: {out_dir}")
     if a.save_panel and a.display_hu_min >= a.display_hu_max:
         raise ValueError("--display_hu_min < --display_hu_max にしてください")
@@ -170,6 +183,16 @@ def main():
         if stored.shape != (size, size):
             raise ValueError(f"入力は {size}×{size} のみです: {stored.shape} {p}")
         return stored, stored_to_hu(stored, a.hu_offset)
+
+    def load_xc(p):
+        """precomputed: <dn_dir>/full/<入力と同じ相対パス> の Dn(x) を HU で。"""
+        q = Path(a.dn_dir) / "full" / Path(p).relative_to(input_dir)
+        if not q.is_file():
+            raise FileNotFoundError(f"precomputed Dn のスライスがありません: {q}（dnfixed を同じ入力の全スライスに掛ける）")
+        st = read_stored(q)
+        if st.shape != (size, size):
+            raise ValueError(f"precomputed Dn の画像サイズが違います: {st.shape} {q}")
+        return stored_to_hu(st, a.hu_offset)
 
     def drain(limit):
         t = time.time()
@@ -225,14 +248,15 @@ def main():
             t = time.time()
             if v4:  # 全経路。outs = u（draw 0 が full/）、gin = x_c（R の基準）、rsrc = G(x_c)、u0 = ε = 0 の u（z は draw 0 と同じ）
                 xn = torch.from_numpy(np.stack([hu_to_norm(x_hu, a.hu_min, a.hu_max) for _, _, x_hu in items])[:, None]).to(device)
+                xcn = torch.from_numpy(np.stack([hu_to_norm(load_xc(p), a.hu_min, a.hu_max) for p, _, _ in items])[:, None]).to(device) if precomputed else None
                 with torch.inference_mode():
                     state0 = gen.get_state()  # draw 0 の直前の状態（z が先に引かれる）
-                    draws = [generate_v4(netDn, net, netP, xn, generator=gen) for _ in range(n_draws)]
+                    draws = [generate_v4(netDn, net, netP, xn, generator=gen, x_c=xcn) for _ in range(n_draws)]
                     u0 = None
                     if eps_zero:
                         state_end = gen.get_state()
                         gen.set_state(state0)  # 同じ z で ε = 0 → full − full_eps0 = ノイズの実現値
-                        u0 = generate_v4(netDn, net, netP, xn, generator=gen, eps_zero=True)["u"].cpu().numpy()[:, 0]
+                        u0 = generate_v4(netDn, net, netP, xn, generator=gen, eps_zero=True, x_c=xcn)["u"].cpu().numpy()[:, 0]
                         gen.set_state(state_end)
                 ys = np.stack([d["u"].cpu().numpy()[:, 0] for d in draws], axis=1).reshape(len(items) * n_draws, *xn.shape[-2:])  # item-major
                 gin = draws[0]["x_c"].cpu().numpy()[:, 0]

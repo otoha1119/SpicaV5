@@ -24,7 +24,9 @@
   損失: L_GAN(u) + λ_fid mean(R(x_c)²) + λ_id mean(R(y)²) + λ_k mean((x_c ⊛ k − x_c)²)（同じ z。x_c 基準）+ λ_com COM²。
   fidelity・恒等・カーネル項のどれも ε と σ に依存しない（u を経由する項は L_GAN だけ。C2・C3。この性質を崩す変更をしないこと）
   Dn の重みは pipeline.dn_weights から読み、最初の save で run 直下と各重みディレクトリに net_Dn.pth として複製する（run の自己完結。resume / infer はそちらを優先）
-  generate(x, generator, eps_zero) が {x_c, g, v, u} を返す（表示・採点・推論。eps_zero=True = 指紋）。degrade(x) は generate()["u"]。predict(x) は G だけ（恒等の確認）
+  generate(x, generator, eps_zero, x_c) が {x_c, g, v, u} を返す（表示・採点・推論。eps_zero=True = 指紋）。degrade(x) は generate()["u"]。predict(x) は G だけ（恒等の確認）
+【precomputed Dn（pipeline.dn_source precomputed、2026-10-31）】 BM3D など学習ステップ内で回せない Dn は、dnfixed で先に掛けた x_c をデータ側（ProjectionDataset の "XC"）から受け取る。
+  netDn は None（重みを持たない。net_Dn.pth も複製しない）。_forward_v4 は batch["XC"]、generate / generate_v4 は引数 x_c を使う（無ければエラー）。それ以外は weights の v4 と同じ経路
   追加の診断値: Dn_resid_rms_HU = 体内の RMS(x − x_c)。P_rms_HU は v4 では全経路の RMS(u − x)（v3 の RMS(P(x) − x) とは意味が違う）
 【FP32 の約束（v4）】 凍結 Dn の forward と、ε = 0 の指紋（generate(eps_zero=True)）は常に FP32（autocast 無効）。正規化単位 1 = 2748 HU なので bf16 の量子化段差は
   軟部組織で 5〜11 HU になり、指紋 SD ≤ 6 HU の判定に対して無視できない。学習時の G / D / P_θ は従来どおり bf16 autocast
@@ -92,14 +94,22 @@ def _swap_dirs(tmp, final, old, retries=10, wait=3.0):
 
 
 @torch.no_grad()
-def generate_v4(netDn, netG, netP, x, generator=None, eps_zero=False, autocast=None):
+def generate_v4(netDn, netG, netP, x, generator=None, eps_zero=False, autocast=None, x_c=None):
     """v4 の生成経路（eval、勾配なし）。x: (N,1,H,W) 正規化済み → {"x_c", "g", "v", "u", "sigma"}（すべて FP32）。
     z と ε は generator から引く。eps_zero=True なら ε = 0（z は通常どおり）= 指紋（決定的に残るノイズ）。学習（ProjectionModel.forward）と同じ順序・同じ部品。
-    Dn は常に FP32。eps_zero=True（指紋の計測）は G / P も FP32（autocast を渡されても無効にする。bf16 の段差 5〜11 HU が 6 HU の閾値に効くため）。"""
+    Dn は常に FP32。eps_zero=True（指紋の計測）は G / P も FP32（autocast を渡されても無効にする。bf16 の段差 5〜11 HU が 6 HU の閾値に効くため）。
+    netDn が None（precomputed）のときは x_c（同じ形、正規化済み）を渡す。"""
     off = lambda: torch.autocast(device_type=x.device.type, enabled=False)  # noqa: E731
     ac = autocast if (autocast is not None and not eps_zero) else off
-    with off():
-        x_c = netDn(x.float()).float()
+    if netDn is None:
+        if x_c is None:
+            raise RuntimeError("generate_v4: Dn が無い（precomputed）のに x_c が渡されていません")
+        if tuple(x_c.shape) != tuple(x.shape):
+            raise ValueError(f"generate_v4: x_c の形 {tuple(x_c.shape)} が x {tuple(x.shape)} と違います")
+        x_c = x_c.to(x.device).float()
+    else:
+        with off():
+            x_c = netDn(x.float()).float()
     with ac():
         g = netG(x_c).float()
         n = x.shape[0]
@@ -139,11 +149,15 @@ class ProjectionModel:
                                        train["degrade.learned_amp_ch"], train["degrade.learned_sigma_max_hu"] / self.hu_per_unit, sigma_min_norm=sigma_min).to(device)
             self.lambda_k_fid, self.lambda_k_com = train["loss.lambda_k_fid"], train["loss.lambda_k_com"]
         self.netDn, self.dn_source = None, None
-        if self.v4:  # 凍結 denoiser。optimizer に入れず、compile もしない（小さく、出力を Python 側で使うので CUDA Graph の上書きを避ける。P_θ と同じ理由）
+        self.precomputed = self.v4 and train["pipeline.dn_source"] == "precomputed"
+        if self.v4 and not self.precomputed:  # 凍結 denoiser。optimizer に入れず、compile もしない（小さく、出力を Python 側で使うので CUDA Graph の上書きを避ける。P_θ と同じ理由）
             dn_path = Path(train["pipeline.dn_weights"])
             if dn_path.is_file():
                 self.netDn, self.dn_source = load_denoiser(dn_path, device), dn_path
             self._dn_copied_to_run = False
+        if self.precomputed:
+            self.dn_source = Path(train["pipeline.dn_dir"])
+            self._dn_copied_to_run = True
         if is_train:
             self.netD = networks.build_D(train, device)
             if self.compile_enabled:
@@ -176,6 +190,8 @@ class ProjectionModel:
         return out
 
     def _require_dn(self):
+        if self.precomputed:
+            raise RuntimeError("precomputed Dn の run に netDn はありません（x_c はデータ側から渡す）")
         if self.netDn is None:
             raise RuntimeError(f"v4 の Dn の重みが読めていません（pipeline.dn_weights = {self.cfg['pipeline.dn_weights']!r} が無く、run にも net_Dn.pth が無い）")
         return self.netDn
@@ -236,11 +252,12 @@ class ProjectionModel:
         self.real_A = batch["A"].to(self.device, non_blocking=True)
         self.u = batch["U"].to(self.device, non_blocking=True)  # learned なら u = x（P_θ は forward で掛ける）
         self.real_B = batch["B"].to(self.device, non_blocking=True)
+        self.xc_in = batch["XC"].to(self.device, non_blocking=True) if (self.precomputed and "XC" in batch) else None
 
-    def degrade(self, x, generator=None):
-        """learned のとき x → u = P_θ(x, z, ε)。eval で通す（表示・採点・推論用。勾配なし）。learned でなければ x をそのまま返す。v4 は全経路（Dn → G → k → ノイズ）の u。"""
+    def degrade(self, x, generator=None, x_c=None):
+        """learned のとき x → u = P_θ(x, z, ε)。eval で通す（表示・採点・推論用。勾配なし）。learned でなければ x をそのまま返す。v4 は全経路（Dn → G → k → ノイズ）の u（precomputed は x_c 必須）。"""
         if self.v4:
-            return self.generate(x, generator)["u"]
+            return self.generate(x, generator, x_c=x_c)["u"]
         if not self.learned_P:
             return x
         was = self.netP.training
@@ -269,8 +286,13 @@ class ProjectionModel:
     def _forward_v4(self):
         x, y = self.real_A, self.real_B
         n = x.shape[0]
-        with torch.no_grad(), torch.autocast(device_type=self.device.type, enabled=False):  # Dn は FP32（上の FP32 の約束）
-            x_c = self._require_dn()(x.float())
+        if self.precomputed:
+            if self.xc_in is None:
+                raise RuntimeError("precomputed Dn の run なのに batch に XC がありません（ProjectionDataset が pipeline.dn_dir から読む）")
+            x_c = self.xc_in
+        else:
+            with torch.no_grad(), torch.autocast(device_type=self.device.type, enabled=False):  # Dn は FP32（上の FP32 の約束）
+                x_c = self._require_dn()(x.float())
         self.x_c = x_c.float()
         out = self._run_net(self.netG, torch.cat([self.x_c, y], dim=0))
         self.g, self.idt_B = out[:n], out[n:]
@@ -363,13 +385,14 @@ class ProjectionModel:
         return self.losses
 
     @torch.no_grad()
-    def generate(self, x, generator=None, eps_zero=False):
-        """v4: x → {x_c, g, v, u, sigma}（eval、勾配なし。generate_v4）。eps_zero=True で ε = 0（指紋）。"""
+    def generate(self, x, generator=None, eps_zero=False, x_c=None):
+        """v4: x → {x_c, g, v, u, sigma}（eval、勾配なし。generate_v4）。eps_zero=True で ε = 0（指紋）。precomputed では x_c（正規化済み、x と同じ形）が必須。"""
         if not self.v4:
             raise RuntimeError("generate は pipeline.mode v4 のみ（v3 は degrade / predict）")
         was_g, was_p = self.netG.training, self.netP.training
         self.netG.eval(); self.netP.eval()
-        out = generate_v4(self._require_dn(), self.netG, self.netP, x.to(self.device), generator=generator, eps_zero=eps_zero, autocast=self._autocast)
+        out = generate_v4(None if self.precomputed else self._require_dn(), self.netG, self.netP, x.to(self.device), generator=generator, eps_zero=eps_zero, autocast=self._autocast,
+                          x_c=(x_c.to(self.device) if x_c is not None else None))
         self.netG.train(was_g); self.netP.train(was_p)
         if self.compile_enabled:
             out = {k: v.clone() for k, v in out.items()}
@@ -391,7 +414,7 @@ class ProjectionModel:
         self.train_mode(False)
         a, u, b = batch["A"].to(self.device), batch["U"].to(self.device), batch["B"].to(self.device)
         if self.v4:  # [x | Dn(x) | u | R(x_c) | y | y+R(y) | R(y)]（U = x_c、fake_B = u、R = g − x_c）
-            gen = self.generate(a, generator=torch.Generator(device=self.device).manual_seed(0))
+            gen = self.generate(a, generator=torch.Generator(device=self.device).manual_seed(0), x_c=(batch["XC"] if self.precomputed else None))
             idt = self._run_net(self.netG, b)
             self.train_mode(True)
             return {"A": a, "U": gen["x_c"], "fake_B": gen["u"], "B": b, "idt_B": idt, "R": gen["g"] - gen["x_c"]}
@@ -422,7 +445,7 @@ class ProjectionModel:
         for name, net in self.nets().items():
             torch.save(net.state_dict(), tmp / f"net_{name}.pth")
         torch.save(self._state(), tmp / "state.pth")
-        if self.v4:  # 凍結 Dn も各重みディレクトリに複製（best / infer / mark_best が重みディレクトリだけで完結する）。run 直下には最初の 1 回だけ
+        if self.v4 and not self.precomputed:  # 凍結 Dn も各重みディレクトリに複製（best / infer / mark_best が重みディレクトリだけで完結する）。run 直下には最初の 1 回だけ
             save_denoiser(self._require_dn(), tmp / DN_WEIGHT)
             if not self._dn_copied_to_run and not (Path(run_dir) / DN_WEIGHT).is_file():
                 save_denoiser(self.netDn, Path(run_dir) / DN_WEIGHT)
@@ -436,7 +459,7 @@ class ProjectionModel:
                 raise FileNotFoundError(f"重みがありません: {path}（重みディレクトリの中身: {CKPT_KINDS}）")
             net.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
             net.to(self.device)
-        if self.v4:  # Dn: 重みディレクトリ → run 直下 → pipeline.dn_weights の順（run の複製を優先）
+        if self.v4 and not self.precomputed:  # Dn: 重みディレクトリ → run 直下 → pipeline.dn_weights の順（run の複製を優先）
             weight_dir = Path(weight_dir)
             cands = [weight_dir / DN_WEIGHT] + [d / DN_WEIGHT for d in (weight_dir.parent, weight_dir.parent.parent)]
             found = next((c for c in cands if c.is_file()), None)

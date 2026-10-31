@@ -4,7 +4,8 @@
   2. 重みディレクトリ（--weight_dir）に net_G.pth があることを確認し、run の最新 launch から G の構成・P の範囲・HU 正規化を、dataset_info.yaml から学習画像サイズを取る。
      表示設定（log.display_hu_min/max・preview_bits・diff_range_hu）は**現在の configs/train.yaml**
   3. 出力 <repo>/output/stage1_v3/<run>_<重み>_<入力名>_<時刻>/ に infer.yaml を保存して inference_dir.py を exec
-  v4 の run は Dn の重みを 重みディレクトリ/net_Dn.pth → <run>/net_Dn.pth → launch の pipeline.dn_weights の順で探して渡す（apply_degrade のとき必須）
+  v4 の run は Dn の重みを 重みディレクトリ/net_Dn.pth → <run>/net_Dn.pth → launch の pipeline.dn_weights の順で探して渡す（apply_degrade のとき必須）。
+  pipeline.dn_source precomputed の run は代わりに launch の pipeline.dn_dir（dnfixed の出力。入力の全スライスの Dn(x) が要る）を --dn_dir で渡す
 """
 
 import argparse
@@ -102,14 +103,19 @@ def main():
         if infer["apply_degrade"] and not ltrain["degrade.enabled"]:
             raise ConfigError("apply_degrade: true ですが、この run は degrade.enabled: false で学習しています（P の範囲が無い）。--apply_degrade false にしてください")
         v4 = ltrain["pipeline.mode"] == "v4"
-        dn_weights = ""
+        dn_weights, dn_dir = "", ""
         if v4 and infer["apply_degrade"]:
-            cands = [weight_dir / DN_WEIGHT, run_dir / DN_WEIGHT, Path(ltrain["pipeline.dn_weights"])]
-            found = next((c for c in cands if c.is_file()), None)
-            if found is None:
-                raise ConfigError(f"pipeline.mode v4 の run ですが Dn の重み {DN_WEIGHT} が見つかりません（探した場所: {[str(c) for c in cands]}）")
-            dn_weights = str(found)
-        g_argv = [x for k, flag in G_KEYS.items() for x in (flag, str(ltrain[k]))] + ["--input_size", str(hw[0]), "--pipeline_mode", ltrain["pipeline.mode"], "--dn_weights", dn_weights]
+            if ltrain["pipeline.dn_source"] == "precomputed":
+                dn_dir = ltrain["pipeline.dn_dir"]
+                if not (Path(dn_dir) / "full").is_dir() or not (Path(dn_dir) / "manifest.yaml").is_file():
+                    raise ConfigError(f"precomputed Dn の run ですが pipeline.dn_dir に full/ と manifest.yaml がありません: {dn_dir}")
+            else:
+                cands = [weight_dir / DN_WEIGHT, run_dir / DN_WEIGHT, Path(ltrain["pipeline.dn_weights"])]
+                found = next((c for c in cands if c.is_file()), None)
+                if found is None:
+                    raise ConfigError(f"pipeline.mode v4 の run ですが Dn の重み {DN_WEIGHT} が見つかりません（探した場所: {[str(c) for c in cands]}）")
+                dn_weights = str(found)
+        g_argv = [x for k, flag in G_KEYS.items() for x in (flag, str(ltrain[k]))] + ["--input_size", str(hw[0]), "--pipeline_mode", ltrain["pipeline.mode"], "--dn_weights", dn_weights, "--dn_dir", dn_dir]
         p_argv = [x for k, flag in P_KEYS.items() for x in (flag, str(ltrain[k]))]
         cur = validate("train", load_yaml(a.train), TRAIN)
         d_argv = [x for k, flag in DISPLAY_KEYS.items() for x in (flag, str(cur[k]))]
@@ -130,7 +136,7 @@ def main():
     with open(out_dir / "infer.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump({"stage": STAGE, "timestamp": now.isoformat(timespec="seconds"), "machine_name": a.machine, "device": device, "run_dir": str(run_dir),
                         "launch": str(launch_path), "weight_dir": str(weight_dir), "input_dir": str(input_dir), "infer": infer,
-                        "generator": {k: ltrain[k] for k in G_KEYS}, "degrade": {k: ltrain[k] for k in P_KEYS}, "pipeline_mode": ltrain["pipeline.mode"], "dn_weights": dn_weights,
+                        "generator": {k: ltrain[k] for k in G_KEYS}, "degrade": {k: ltrain[k] for k in P_KEYS}, "pipeline_mode": ltrain["pipeline.mode"], "dn_weights": dn_weights, "dn_dir": dn_dir,
                         "image_hw": hw, "display": {k: cur[k] for k in DISPLAY_KEYS},
                         "overrides": list(overrides), "applied": applied, "argv": argv}, f, allow_unicode=True, sort_keys=False)
     print(f"[run_infer] {weight_dir} × {input_dir} → {out_dir}", flush=True)

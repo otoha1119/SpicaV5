@@ -33,7 +33,9 @@ Key = namedtuple("Key", "type flag doc")
 TRAIN = {
     # pipeline（v3 = 従来、v4 = Dn → G → k(z) → +ノイズ。docs/decisions/20261031_stage1-v3-noise-path-analysis.md §3）
     "pipeline.mode":         Key(str,   "--pipeline_mode",   "v3（u = P_θ(x) → G、従来）| v4（x → Dn → G → ⊛ k(z) → + σ ⊙ (h ⊛ ε)。乱数ノイズを最後に足し、後ろに学習ネットを置かない）。重みの形と経路を決めるので resume で変えられない"),
-    "pipeline.dn_weights":   Key(str,   "--dn_weights",      "v4: 凍結 denoiser の重み net_Dn.pth（コンテナ内パス。bash start1_v3.sh <machine> dn の出力 checkpoints/denoiser/latest/net_Dn.pth）。v4 では存在必須。v3 では空文字 \"\" を書く（使わない）"),
+    "pipeline.dn_source":    Key(str,   "--dn_source",       "v4 の Dn の与え方: weights（学習型 Dn の net_Dn.pth を凍結して学習中に掛ける。n2n / blindspot）| precomputed（bash start1_v3.sh <machine> dnfixed で先に denoise したデータ pipeline.dn_dir から x_c を読む。BM3D など学習ステップ内で回せない Dn 用）。経路を決めるので resume で変えられない。v3 では weights を書く（使わない）"),
+    "pipeline.dn_weights":   Key(str,   "--dn_weights",      "v4 + dn_source weights: 凍結 denoiser の重み net_Dn.pth（コンテナ内パス。bash start1_v3.sh <machine> dn の出力 checkpoints/denoiser/latest/net_Dn.pth）。存在必須。v3 と dn_source precomputed では空文字 \"\" を書く（使わない）"),
+    "pipeline.dn_dir":       Key(str,   "--dn_dir",          "v4 + dn_source precomputed: dnfixed の出力ディレクトリ（full/<case>/<slice>.png = Dn(x) と manifest.yaml を持つ。コンテナ内パス）。PCD の全スライスが同じ相対パスで要る。それ以外では空文字 \"\""),
     # optim（論文 Sec. III: lr 0.0002、batch 40、300 epoch。β・decay は未記載）
     "optim.lr_G":            Key(float, "--lr_G",            "G（残差 R）の学習率。論文 0.0002（G / D 共通）"),
     "optim.lr_D":            Key(float, "--lr_D",            "D の学習率。論文 0.0002"),
@@ -147,11 +149,17 @@ INFER = {
 }
 
 # ---------------------------------------------------------------------------
-# configs/denoise.yaml — v4 の Dn（PCD512 の自己教師あり denoiser、Neighbor2Neighbor 型）の学習・合否（train_denoiser.py / check_denoiser.py）
-#   出典: Huang et al., "Neighbor2Neighbor: Self-Supervised Denoising from Single Noisy Images," CVPR 2021（arXiv 2101.02824）。
-#   CT 向けの変更はセル幅 s と 2 画素の最小距離 d₀ をノイズ相関長（bash start1_v3.sh <machine> stats の noise_corr_d0）から決めることだけ（決定 §6.2）
+# configs/denoise.yaml — v4 の Dn（PCD512 の denoiser）の学習・合否（train_denoiser.py / check_denoiser.py / denoise_dir.py）。dn.method で 3 方式を切り替える:
+#   n2n       : Neighbor2Neighbor（Huang et al., CVPR 2021, arXiv 2101.02824）。CT 向けの変更はセル幅 s と 2 画素の最小距離 d₀ をノイズ相関長
+#               （bash start1_v3.sh <machine> stats の noise_corr_d0）から決めることだけ（決定 §6.2）。初回（cell 4 / min_dist 2）は実 PCD で残留 SD 44 HU・edge_ratio p90 0.68 で不合格:
+#               学習は 4 倍 sub-sample 画像（ノイズが白く見える）で、推論はフル解像度（ノイズが 1〜2 px の塊）なので、相関成分が残る
+#   blindspot : 構造化 blind-spot（Noise2Void: Krull et al., CVPR 2019, arXiv 1811.10980 のマスク方式を、Structured Noise2Void: Broaddus et al., ISBI 2020,
+#               arXiv 2001.01689 の円盤盲点に拡張）。フル解像度で学習・推論するので上の不一致が無い。本命
+#   bm3d      : BM3D（PyPI bm3d、Mäkinen / Azzari / Foi）に stats で測ったノイズ PSD を渡す固定 denoiser（学習なし、対照）。学習ステップ内では回せないので
+#               bash start1_v3.sh <machine> dnfixed でデータを先に denoise し、train は pipeline.dn_source precomputed で読む
 # ---------------------------------------------------------------------------
 DENOISE = {
+    "dn.method":             Key(str,   "--method",          "n2n | blindspot | bm3d（上の説明）。n2n.* は n2n だけ、blindspot.* は blindspot だけ、bm3d.* は bm3d だけが使う（他方式では値は無視するがキーは要る）"),
     "data.input_dir":        Key(str,   "--input_dir",       "PCD512 のフォルダ（コンテナ内パス。<case>/<slice>.png）。実 EID には掛けないので PCD だけ"),
     "data.use_eval_only_cases": Key(bool, "--use_eval_only_cases", "false なら configs/eval_only.yaml の評価専用症例を学習から除外（train.yaml と同じ規則）"),
     "data.patch_size":       Key(int,   "--patch_size",      "patch の一辺（§6.2 は 256）。cell_size で割り切れ、割った後が 2^n_levels の倍数であること"),
@@ -161,10 +169,16 @@ DENOISE = {
     "data.hu_min":           Key(int,   "--hu_min",          "正規化窓の下限 HU（train.yaml と同じ。Dn は v4 の G と同じ正規化単位で動く）"),
     "data.hu_max":           Key(int,   "--hu_max",          "正規化窓の上限 HU（train.yaml と同じ）"),
     "data.patch_seed":       Key(int,   "--patch_seed",      "preview / check 用の固定スライス選択と sub-sample の乱数 seed"),
-    "n2n.cell_size":         Key(int,   "--cell_size",       "Neighbor2Neighbor のセル幅 s [px]（偶数）。s ≥ 2·d₀。PCD の見込み 4〜6（§6.1）"),
-    "n2n.min_dist":          Key(int,   "--min_dist",        "セル内で選ぶ 2 画素の最小 Chebyshev 距離 d₀ [px]（1 ≤ d₀ < s）。|ρ(d)| < 0.05 になる最小距離（stats の noise_corr_d0）"),
-    "n2n.gamma_max":         Key(float, "--gamma_max",       "正則化項の重み γ の最終値（論文既定 2）"),
-    "n2n.gamma_ramp_epochs": Key(int,   "--gamma_ramp_epochs", "γ を 0 から gamma_max へ線形に上げる epoch 数（§6.2: 全体の 1/4）。0 なら最初から gamma_max"),
+    "n2n.cell_size":         Key(int,   "--cell_size",       "n2n のみ: Neighbor2Neighbor のセル幅 s [px]（偶数）。s ≥ 2·d₀。PCD の見込み 4〜6（§6.1）"),
+    "n2n.min_dist":          Key(int,   "--min_dist",        "n2n のみ: セル内で選ぶ 2 画素の最小 Chebyshev 距離 d₀ [px]（1 ≤ d₀ < s）。|ρ(d)| < 0.05 になる最小距離（stats の noise_corr_d0）"),
+    "n2n.gamma_max":         Key(float, "--gamma_max",       "n2n のみ: 正則化項の重み γ の最終値（論文既定 2）。blindspot には γ が無い（無視）"),
+    "n2n.gamma_ramp_epochs": Key(int,   "--gamma_ramp_epochs", "n2n のみ: γ を 0 から gamma_max へ線形に上げる epoch 数（§6.2: 全体の 1/4）。0 なら最初から gamma_max"),
+    "blindspot.radius":      Key(int,   "--bs_radius",       "blindspot のみ: 盲点の半径 r [px]。中心からユークリッド距離 ≤ r の円盤を隠す（Broaddus 2020 の structured blind spot）。stats の noise_corr_d0 − 1 以上（PCD 実測 d₀ = 6 → r = 3 で ρ ≤ 0.09 の殻まで隠す）"),
+    "blindspot.stride":      Key(int,   "--bs_stride",       "blindspot のみ: 中心の格子間隔 [px]（画像ごとに一様乱数の全体オフセット）。≥ 2r + 2 で円盤が重ならない。中心密度 = 1/stride²（N2V の 0.5〜2 % 相当 = 8〜12）"),
+    "blindspot.fill":        Key(str,   "--bs_fill",         "blindspot のみ: 隠した画素の埋め方。neighbor = 同じ中心の環 r < d ≤ 2r+1 から画素ごとに乱択した値（隣の円盤に入る位置は候補から外す。N2V の random-neighbour 方式）。今は neighbor だけ"),
+    "blindspot.loss":        Key(str,   "--bs_loss",         "blindspot のみ: 中心画素だけで取る損失 l2 | l1（N2V は L2）"),
+    "bm3d.psd_path":         Key(str,   "--psd_path",        "bm3d のみ: stats が書くノイズ PSD の .npy（output/stage1_v3/stats_<時刻>/noise_psd_<入力名>.npy。画像と同じ H×W、bm3d の規約 = E|FFT2(noise)|²、DC が [0,0]）。空文字は不可（dnfixed / dncheck --method bm3d で存在必須）"),
+    "bm3d.profile":          Key(str,   "--bm3d_profile",    "bm3d のみ: bm3d.bm3d(z, sigma_psd, profile) にそのまま渡す np | refilter"),
     "model.ch":              Key(int,   "--ch",              "U-Net の基本チャネル数（論文 48）"),
     "model.n_levels":        Key(int,   "--n_levels",        "U-Net の down / up の段数（2 倍ずつ。論文は 3 段相当）"),
     "optim.lr":              Key(float, "--lr",              "Adam の学習率（論文 3e-4）"),
@@ -190,6 +204,11 @@ DENOISE = {
 }
 
 PIPELINE_MODES = ("v3", "v4")
+DN_SOURCES = ("weights", "precomputed")
+DN_METHODS = ("n2n", "blindspot", "bm3d")
+BLINDSPOT_FILLS = ("neighbor",)
+BLINDSPOT_LOSSES = ("l2", "l1")
+BM3D_PROFILES = ("np", "refilter")
 GAN_MODES = ("fgan_kl", "lsgan", "vanilla")
 DEGRADE_MODES = ("gaussian", "bilateral_blur", "learned")
 PRECISIONS = ("fp32", "bf16")
@@ -206,10 +225,11 @@ LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False,
                          "degrade.bilateral_sigma_space_px_min": 0.0, "degrade.bilateral_sigma_space_px_max": 0.0,
                          "degrade.learned_z_dim": 16, "degrade.learned_kernel_size": 21, "degrade.learned_noise_kernel_size": 9, "degrade.learned_amp_ch": 16, "degrade.learned_sigma_max_hu": 100.0,
                          "loss.lambda_k_fid": 0.0, "loss.lambda_k_com": 0.0,
-                         "pipeline.mode": "v3", "pipeline.dn_weights": "", "degrade.learned_sigma_min_hu": 0.0, "val.target_fingerprint_sd_hu": 0.0}
+                         "pipeline.mode": "v3", "pipeline.dn_weights": "", "degrade.learned_sigma_min_hu": 0.0, "val.target_fingerprint_sd_hu": 0.0,
+                         "pipeline.dn_source": "weights", "pipeline.dn_dir": ""}
 
 # 重みの形と P の有無を決めるキー。再開で変えられない
-SHAPE_KEYS = ("pipeline.mode", "network.netG", "network.netD", "network.ngf", "network.ndf", "network.norm", "degrade.enabled", "degrade.mode",
+SHAPE_KEYS = ("pipeline.mode", "pipeline.dn_source", "network.netG", "network.netD", "network.ngf", "network.ndf", "network.norm", "degrade.enabled", "degrade.mode",
               "degrade.learned_z_dim", "degrade.learned_kernel_size", "degrade.learned_noise_kernel_size", "degrade.learned_amp_ch")
 
 
@@ -415,15 +435,26 @@ def check_pipeline_values(train, P):
     if mode not in PIPELINE_MODES:
         P.append(f"pipeline.mode は {PIPELINE_MODES}")
         return
+    if train["pipeline.dn_source"] not in DN_SOURCES:
+        P.append(f"pipeline.dn_source は {DN_SOURCES}")
+        return
     if mode == "v4":
         if not train["degrade.enabled"] or train["degrade.mode"] != "learned": P.append("pipeline.mode v4 は degrade.enabled true かつ degrade.mode learned（k(z)・σ・h(z) を使う）")
-        if not train["pipeline.dn_weights"]: P.append("pipeline.mode v4 は pipeline.dn_weights（net_Dn.pth のパス）が必要（bash start1_v3.sh <machine> dn で作る）")
+        src = train["pipeline.dn_source"]
+        if src == "weights":
+            if not train["pipeline.dn_weights"]: P.append("pipeline.mode v4 + dn_source weights は pipeline.dn_weights（net_Dn.pth のパス）が必要（bash start1_v3.sh <machine> dn で作る）")
+            if train["pipeline.dn_dir"] != "": P.append('dn_source weights では pipeline.dn_dir は空文字 "" にする')
+        elif src == "precomputed":
+            if not train["pipeline.dn_dir"]: P.append("pipeline.mode v4 + dn_source precomputed は pipeline.dn_dir（dnfixed の出力）が必要（bash start1_v3.sh <machine> dnfixed で作る）")
+            if train["pipeline.dn_weights"] != "": P.append('dn_source precomputed では pipeline.dn_weights は空文字 "" にする（Dn は学習中に掛けない）')
         smin, smax = train["degrade.learned_sigma_min_hu"], train["degrade.learned_sigma_max_hu"]
         if smin < 0: P.append("degrade.learned_sigma_min_hu ≥ 0")
         if not smin < smax: P.append(f"degrade.learned_sigma_min_hu ({smin}) < degrade.learned_sigma_max_hu ({smax})")
         if train["val.target_fingerprint_sd_hu"] <= 0: P.append("v4 では val.target_fingerprint_sd_hu は正")
     else:
         if train["pipeline.dn_weights"] != "": P.append('pipeline.mode v3 では pipeline.dn_weights は空文字 "" にする（Dn を使わない）')
+        if train["pipeline.dn_dir"] != "": P.append('pipeline.mode v3 では pipeline.dn_dir は空文字 "" にする（Dn を使わない）')
+        if train["pipeline.dn_source"] != "weights": P.append('pipeline.mode v3 では pipeline.dn_source は weights（Dn を使わないので既定の綴りだけ許す）')
         if train["val.target_fingerprint_sd_hu"] < 0: P.append("val.target_fingerprint_sd_hu ≥ 0")
 
 
@@ -495,16 +526,28 @@ def check_infer_values(infer, machine):
 def check_denoise_values(dn, machine):
     P = []
     if not dn["data.input_dir"]: P.append("data.input_dir を指定")
+    method = dn["dn.method"]
+    if method not in DN_METHODS: P.append(f"dn.method は {DN_METHODS}")
     ps, s, d0 = dn["data.patch_size"], dn["n2n.cell_size"], dn["n2n.min_dist"]
     if s < 2 or s % 2: P.append("n2n.cell_size は 2 以上の偶数")
     if d0 < 1 or (s >= 2 and d0 >= s): P.append("n2n.min_dist は 1 ≤ d₀ < cell_size")
     if ps < 8: P.append("data.patch_size ≥ 8")
-    if s >= 2 and ps % s: P.append(f"data.patch_size ({ps}) は n2n.cell_size ({s}) の倍数（sub-sample で H/s × W/s にする）")
     if dn["model.n_levels"] < 1: P.append("model.n_levels ≥ 1")
     if dn["model.ch"] < 1: P.append("model.ch ≥ 1")
-    if s >= 2 and dn["model.n_levels"] >= 1:
-        sub, m = ps // s, 2 ** dn["model.n_levels"]
-        if sub % m: P.append(f"sub-sample 後の一辺 patch_size / cell_size = {sub} は 2^n_levels = {m} の倍数（U-Net の down / up）")
+    m = 2 ** dn["model.n_levels"]
+    if method == "n2n":  # sub-sample 後の一辺が U-Net の down / up に合うこと
+        if s >= 2 and ps % s: P.append(f"data.patch_size ({ps}) は n2n.cell_size ({s}) の倍数（sub-sample で H/s × W/s にする）")
+        if s >= 2 and dn["model.n_levels"] >= 1 and (ps // s) % m: P.append(f"sub-sample 後の一辺 patch_size / cell_size = {ps // s} は 2^n_levels = {m} の倍数（U-Net の down / up）")
+    r, st = dn["blindspot.radius"], dn["blindspot.stride"]
+    if not 1 <= r <= 10: P.append("blindspot.radius は 1〜10（対角の格子点の円盤から置換値を取らない条件 2.8·r + 2.8 > 3·r + 1 が r ≤ 10 で成り立つ）")
+    if st < 2 * r + 2: P.append(f"blindspot.stride ({st}) ≥ 2·radius + 2 = {2 * r + 2}（円盤が重ならない）")
+    if dn["blindspot.fill"] not in BLINDSPOT_FILLS: P.append(f"blindspot.fill は {BLINDSPOT_FILLS}")
+    if dn["blindspot.loss"] not in BLINDSPOT_LOSSES: P.append(f"blindspot.loss は {BLINDSPOT_LOSSES}")
+    if method == "blindspot":  # フル解像度で U-Net に通す
+        if ps % m: P.append(f"blindspot では data.patch_size ({ps}) は 2^n_levels = {m} の倍数（フル解像度で U-Net に通す）")
+        if ps < 2 * (2 * r + 1) + st: P.append(f"blindspot では data.patch_size ({ps}) ≥ 2·(2r+1) + stride = {2 * (2 * r + 1) + st}（環が画像内に収まる中心が 1 つは要る）")
+    if dn["bm3d.profile"] not in BM3D_PROFILES: P.append(f"bm3d.profile は {BM3D_PROFILES}")
+    if method == "bm3d" and not dn["bm3d.psd_path"]: P.append("dn.method bm3d では bm3d.psd_path（stats の noise_psd_<入力名>.npy）を指定（空文字は不可）")
     if dn["data.patches_per_slice"] < 1: P.append("data.patches_per_slice ≥ 1")
     bs = dn["optim.batch_size"]
     if bs < 1: P.append("optim.batch_size ≥ 1")
