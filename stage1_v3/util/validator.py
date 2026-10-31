@@ -5,7 +5,9 @@
     EID: val.n_eid_slices 枚。参照統計（中央値と四分位）は最初に 1 回計算。各 epoch で G に通し（P なし）、恒等残差 RMS(R(y)) を eval mode で測る
   指標（util/metrics.analyze_slice、R-S22 の 3 軸）: local_sd（ノイズ）, nps_f_av（NPS の形）, edge_grad_p99（鮮鋭度）, hu_p50, hu_p90（HU 水準）
   score = Σ_k |median_gen,k − median_eid,k| / IQR_eid,k  +  RMS(R(y))_eval / val.target_ry_rms_hu   （小さいほど良い。0 なら全指標が EID の中央値に一致し恒等残差 0）
-  TensorBoard: val/<k>_gen, val/<k>_eid（参照、定数）, val/<k>_dist（正規化距離）, val/ry_rms_HU, val/score, val/best_score
+  v4（pipeline.mode v4）: 生成は model.generate（Dn → G → k → ノイズ）の u。さらに指紋 SD = generate(eps_zero=True) の u の local_sd の中央値を測り、
+    score に fingerprint_sd / val.target_fingerprint_sd_hu を足す（決定 §3.3: ε = 0 で残るノイズ ≤ 6 HU）。v3 では計算しない
+  TensorBoard: val/<k>_gen, val/<k>_eid（参照、定数）, val/<k>_dist（正規化距離）, val/ry_rms_HU, val/fingerprint_sd_HU（v4）, val/score, val/best_score
   ディスク: <run>/val_log.txt（1 epoch 1 行）。auto_best なら score 最良で model.save(run_dir, "best") + best.txt
 """
 
@@ -36,6 +38,8 @@ class Validator:
         self.thr = float(train["degrade.body_threshold_hu"])
         self.offset = train["data.hu_offset"]
         self.target_ry = train["val.target_ry_rms_hu"]
+        self.v4 = train["pipeline.mode"] == "v4"
+        self.target_fp = train["val.target_fingerprint_sd_hu"]
         seed = train["data.patch_seed"] * 1_000_003 + 4242
         rng = random.Random(seed)
         self.pcd_paths = rng.sample(dataset.idx_a.all_paths, min(train["val.n_pcd_slices"], dataset.idx_a.n_slices))
@@ -64,10 +68,17 @@ class Validator:
         rng = np.random.default_rng(self.np_rng_seed + int(epoch))
         hu_min, hu_max = self.c["data.hu_min"], self.c["data.hu_max"]
         to_hu = lambda t: ((t.float().cpu().numpy()[0, 0] + 1.0) / 2.0 * (hu_max - hu_min) + hu_min)  # noqa: E731
-        rows = []
+        rows, fp_rows = [], []
         for p in self.pcd_paths:
             hu = _load_hu(p, self.offset)
             xn = torch.from_numpy(hu_to_norm(hu, hu_min, hu_max))[None, None]
+            if self.v4:
+                seed = int(rng.integers(0, 2**31))
+                gen = model.generate(xn, generator=torch.Generator(device=model.device).manual_seed(seed))
+                rows.append(analyze_slice(to_hu(gen["u"]), self.thr, rng))
+                fp = model.generate(xn, generator=torch.Generator(device=model.device).manual_seed(seed), eps_zero=True)
+                fp_rows.append(analyze_slice(to_hu(fp["u"]), self.thr, rng))
+                continue
             if model.learned_P:
                 un = model.degrade(xn, generator=torch.Generator(device=model.device).manual_seed(int(rng.integers(0, 2**31))))
             else:
@@ -85,6 +96,10 @@ class Validator:
             sq += float((r ** 2).mean()); n += 1
         ry = float(np.sqrt(sq / max(n, 1)))
         score = sum(dist.values()) + ry / self.target_ry
+        fp_sd = float("nan")
+        if self.v4:
+            fp_sd = summarize(fp_rows, "local_sd")["median"]
+            score += (fp_sd / self.target_fp) if np.isfinite(fp_sd) else float("nan")
         is_best = bool(np.isfinite(score) and score < self.best_score)
         if is_best:
             self.best_score, self.best_epoch = score, int(epoch)
@@ -93,9 +108,11 @@ class Validator:
             self.tb.add_scalar(f"val/{k}_eid", self.ref[k]["median"], total_iters)
             self.tb.add_scalar(f"val/{k}_dist", dist[k], total_iters)
         self.tb.add_scalar("val/ry_rms_HU", ry, total_iters)
+        if self.v4:
+            self.tb.add_scalar("val/fingerprint_sd_HU", fp_sd, total_iters)
         self.tb.add_scalar("val/score", score, total_iters)
         self.tb.add_scalar("val/best_score", self.best_score, total_iters)
-        line = (f"val epoch {int(epoch)} | score {score:.3f}{' *best*' if is_best else ''} | ry_rms {ry:.1f} HU | "
+        line = (f"val epoch {int(epoch)} | score {score:.3f}{' *best*' if is_best else ''} | ry_rms {ry:.1f} HU | " + (f"fingerprint_sd {fp_sd:.1f} HU | " if self.v4 else "")
                 + " ".join(f"{k} {gen[k]['median']:.2f} (eid {self.ref[k]['median']:.2f}, d {dist[k]:.2f})" for k in KEYS) + f" | {time.time() - t0:.1f}s")
         with open(self.run_dir / VAL_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
@@ -104,5 +121,6 @@ class Validator:
             model.save(self.run_dir, "best")
             with open(self.run_dir / BEST_NOTE, "w", encoding="utf-8") as f:
                 f.write(f"epoch: {int(epoch)}\nscore: {score:.4f}\nmarked_at: {time.strftime('%Y-%m-%dT%H:%M')}\nsource: auto (util/validator.py, R-S22 3 軸 + RMS(R(y)))\n"
-                        + "".join(f"{k}: gen {gen[k]['median']:.3f} eid {self.ref[k]['median']:.3f} dist {dist[k]:.3f}\n" for k in KEYS) + f"ry_rms_HU: {ry:.2f}\n")
+                        + "".join(f"{k}: gen {gen[k]['median']:.3f} eid {self.ref[k]['median']:.3f} dist {dist[k]:.3f}\n" for k in KEYS) + f"ry_rms_HU: {ry:.2f}\n"
+                        + (f"fingerprint_sd_HU: {fp_sd:.2f}\n" if self.v4 else ""))
         return score, is_best

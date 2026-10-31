@@ -12,6 +12,9 @@
      images/current, images/fixed   各行 [x | P(x) | ŷ = u + R(u) | R(u) | y | y + R(y) | R(y)]（128 patch）
      images/full/fixed, images/full/random   [EID代表 | EID-like | P(x) | PCD | R + ゲージ]。images/full/identity [y | G(y) | R(y)]。images/full/std 標準偏差画像
   ディスク   : <run>/output_images/epoch_NNN/ と preview_*/（util/run_paths.py）
+  v4（pipeline.mode v4）: patch グリッドは [x | Dn(x) | u | R(x_c) | y | y+R(y) | R(y)]。フルパネルは [x | Dn(x) | G(x_c) | u | R(x_c)]（train.py v4_full が model.generate で作る）。
+     images/full/eps0 = ε = 0 の u（指紋）。draws/* は std_out_body_HU（u の引き直し間 SD）、std_v_body_HU（ε = 0・z だけ引き直し）、std_eps_body_HU（u − v = ノイズだけ）。
+     v3 の std_ratio / corr_dR_du は v4 では出さない（R が ε を見ないので定義上 0 / 1）
 """
 
 import time
@@ -30,7 +33,7 @@ from util.residual_color import colorbar_rgb01, residual_rgb01, rgb_to_bgr
 from util.run_paths import LOSS_LOG_FILE, TB_DIR, epoch_images_dir, preview_dir
 
 LOSS_KEYS_BAR = ("D", "G_GAN", "G_fid", "G_id")
-DIAG_KEYS = ("R_u_rms_HU", "R_y_rms_HU", "R_ratio", "P_rms_HU", "d_in_HU", "lambda_id", "P_k_sigma_px", "P_noise_amp_HU", "D_sep", "D_acc")
+DIAG_KEYS = ("R_u_rms_HU", "R_y_rms_HU", "R_ratio", "P_rms_HU", "d_in_HU", "lambda_id", "P_k_sigma_px", "P_noise_amp_HU", "D_sep", "D_acc", "Dn_resid_rms_HU")
 GRID_PAD = 0.5
 STD_DISPLAY_MAX_HU = 100.0  # 標準偏差画像の表示レンジ（0 = 黒 … 100 HU = 白）
 to_u8 = lambda x01: (np.clip(x01, 0.0, 1.0) * 255.0).round().astype(np.uint8)  # noqa: E731
@@ -43,6 +46,10 @@ def full_labels(tag):
 
 def identity_labels(tag):
     return ["EID512  y", f"y + R(y)   {tag}", "R(y)   [HU]"]
+
+
+def full_labels_v4(tag):
+    return ["PCD512  x", "Dn(x)  x_c", f"G(x_c) = x_c + R(x_c)   {tag}", "EID-like512  u = G(x_c) * k(z) + noise", "R(x_c)   [HU]"]
 
 
 class TrainMonitor:
@@ -135,7 +142,8 @@ class TrainMonitor:
     def _grid(self, v, n):
         """各行 [x | u | ŷ | R(u) | y | y+R(y) | R(y)]。最下段に凡例。"""
         A, U, G, B, I = (self._to_hu(v[k][:n]) for k in ("A", "U", "fake_B", "B", "idt_B"))
-        Ru, Ry = G - U, I - B
+        Ru = v["R"][:n].detach().float().cpu() * (self.hu[2] - self.hu[1]) / 2.0 if "R" in v else G - U  # v4: R = g − x_c（正規化差分 → HU）
+        Ry = I - B
         m = A.shape[0]
         panels = torch.stack([p for i in range(m) for p in (self._lin(A[i]), self._lin(U[i]), self._lin(G[i]), self._col(Ru[i]), self._lin(B[i]), self._lin(I[i]), self._col(Ry[i]))])
         grid = make_grid(panels, nrow=7, padding=2, pad_value=GRID_PAD).permute(1, 2, 0).numpy()
@@ -146,6 +154,8 @@ class TrainMonitor:
         """固定 + ランダムの PCD512（x と P(x)）を G に通して保存。固定スライスでは n_draws の標準偏差画像、代表 EID では恒等経路も保存。"""
         if full is None or full["A"].shape[0] == 0:
             return
+        if model.v4:
+            return self._save_full_images_v4(model, full, epoch, total_iters)
         out_dir = epoch_images_dir(self.run_dir, epoch)
         out_dir.mkdir(parents=True, exist_ok=True)
         a, u = full["A"], full["U"]
@@ -227,6 +237,88 @@ class TrainMonitor:
             write_png(preview_dir(self.run_dir, f"fixed_{stem0}") / f"{ep}_std.png", rgb_png(std_img))
             msg = f" | draws {ud.shape[0]}: std_out {s_out:.1f} HU, std_u {s_u:.1f} HU, ratio {s_out / max(s_u, 1e-6):.2f}, corr(dR,du) {corr:+.2f}"
         self.write(f"saved full-size images ({len(full['paths'])} slices, {g.shape[-1]}) -> {out_dir} | R(y) full RMS {r_y_rms:.1f} HU{msg}")
+
+    # ------------------------------------------------------------------ v4 のフル画像（train.py v4_full が XC / G / U / U_eps0 / U_draws / V_draws を入れる）
+    def _save_full_images_v4(self, model, full, epoch, total_iters):
+        out_dir = epoch_images_dir(self.run_dir, epoch)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        a, xc, g, u = full["A"], full["XC"], full["G"], full["U"]
+        A, XC, G, U = self._to_hu(a), self._to_hu(xc), self._to_hu(g), self._to_hu(u)
+        R = G - XC
+        y = self.eid_ref["B"]
+        gy = model.predict(y).cpu()
+        Y, GY = self._to_hu(y)[0], self._to_hu(gy)[0]
+        RY = GY - Y
+        bits = to_u16 if self.c["log.preview_bits"] == 16 else to_u8
+        gray_png = lambda p3: bits(p3[0].numpy())  # noqa: E731
+        rgb_png = lambda hwc: rgb_to_bgr(bits(hwc))  # noqa: E731
+        hwc = lambda p3: p3.permute(1, 2, 0).numpy()  # noqa: E731
+        ep = out_dir.name
+        tbs = self.c["log.tb_full_size"]
+        E = self._lin(Y)
+
+        def tb_panel(tag, panel01):
+            small = cv2.resize(panel01, (int(round(panel01.shape[1] * tbs / A.shape[-1])), int(round(panel01.shape[0] * tbs / A.shape[-1]))), interpolation=cv2.INTER_AREA)
+            self.tb.add_image(f"images/full/{tag}", to_u8(small), total_iters, dataformats="HWC")
+
+        for i, (path, kind) in enumerate(zip(full["paths"], full["kinds"])):
+            stem = Path(path).stem
+            pcd16, xc16, g16, u16 = (denormalize(t[i, 0].numpy(), *self.hu) for t in (a, xc, g, u))
+            write_png(out_dir / f"{stem}_pcd.png", pcd16)
+            write_png(out_dir / f"{stem}_xc.png", xc16)
+            write_png(out_dir / f"{stem}_g.png", g16)
+            write_png(out_dir / f"{stem}_eidlike.png", u16)
+            write_png(out_dir / f"{stem}_R.png", residual_stored(xc16, g16))
+            cols = [hwc(self._lin(A[i])), hwc(self._lin(XC[i])), hwc(self._lin(G[i])), hwc(self._lin(U[i])), hwc(self._col(R[i]))]
+            panel01 = build_panel(cols, full_labels_v4(f"epoch {int(epoch)}"), self.c["log.diff_range_hu"])
+            tag = "fixed" if kind == "fixed" else ("random" if full["kinds"].count("random") == 1 else f"random{i}")
+            tb_panel(tag, panel01)
+            if kind == "fixed":
+                d = preview_dir(self.run_dir, f"fixed_{stem}")
+                if not (d / f"00_pcd_{stem}.png").is_file():
+                    write_png(d / f"00_pcd_{stem}.png", gray_png(self._lin(A[i])))
+                if not (d / f"01_eid_{self.eid_stem}.png").is_file():
+                    write_png(d / f"01_eid_{self.eid_stem}.png", gray_png(E))
+                write_png(d / f"{ep}_eidlike.png", gray_png(self._lin(U[i])))
+                write_png(d / f"{ep}_xc.png", gray_png(self._lin(XC[i])))
+                write_png(d / f"{ep}_R_color.png", rgb_png(hwc(self._col(R[i]))))
+                write_png(d / f"{ep}_panel.png", rgb_png(panel01))
+            else:
+                write_png(preview_dir(self.run_dir, "random") / f"{ep}_{stem}.png", rgb_png(panel01))
+
+        # 恒等経路（代表 EID。v3 と同じ）
+        eid16, gy16 = denormalize(y[0, 0].numpy(), *self.hu), denormalize(gy[0, 0].numpy(), *self.hu)
+        write_png(out_dir / f"{self.eid_stem}_idt.png", gy16)
+        write_png(out_dir / f"{self.eid_stem}_Ry.png", residual_stored(eid16, gy16))
+        panel_id = build_panel([hwc(E), hwc(self._lin(GY)), hwc(self._col(RY))], identity_labels(f"epoch {int(epoch)}"), self.c["log.diff_range_hu"])
+        tb_panel("identity", panel_id)
+        write_png(preview_dir(self.run_dir, f"identity_{self.eid_stem}") / f"{ep}_panel.png", rgb_png(panel_id))
+        r_y_rms = float(RY.pow(2).mean().sqrt())
+        self.tb.add_scalar("draws/R_y_full_rms_HU", r_y_rms, total_iters)
+
+        # 指紋（ε = 0）と n_draws の標準偏差画像（固定スライス）
+        stem0 = Path(full["paths"][0]).stem
+        U0 = self._to_hu(full["U_eps0"])[0]
+        write_png(out_dir / f"{stem0}_eps0.png", denormalize(full["U_eps0"][0, 0].numpy(), *self.hu))
+        eps0_img = hwc(self._lin(U0))
+        self.tb.add_image("images/full/eps0", to_u8(cv2.resize(eps0_img, (tbs, tbs), interpolation=cv2.INTER_AREA)), total_iters, dataformats="HWC")
+        write_png(preview_dir(self.run_dir, f"fixed_{stem0}") / f"{ep}_eps0.png", gray_png(self._lin(U0)))
+        msg = ""
+        if full.get("U_draws") is not None:
+            Ud, Vd = self._to_hu(full["U_draws"]), self._to_hu(full["V_draws"])
+            std_out, std_v, std_eps = Ud.std(dim=0), Vd.std(dim=0), (Ud - Vd).std(dim=0)
+            body = (A[0] > self.body_thr)
+            m = lambda t: float(t[body].mean()) if body.any() else float(t.mean())  # noqa: E731
+            s_out, s_v, s_eps = m(std_out), m(std_v), m(std_eps)
+            self.tb.add_scalar("draws/std_out_body_HU", s_out, total_iters)
+            self.tb.add_scalar("draws/std_v_body_HU", s_v, total_iters)
+            self.tb.add_scalar("draws/std_eps_body_HU", s_eps, total_iters)
+            write_png(out_dir / f"{stem0}_std.png", np.clip(np.round(std_out[0].numpy()), 0, 65535).astype(np.uint16))
+            std_img = hwc(self._std_gray(std_out))
+            self.tb.add_image("images/full/std", to_u8(cv2.resize(std_img, (tbs, tbs), interpolation=cv2.INTER_AREA)), total_iters, dataformats="HWC")
+            write_png(preview_dir(self.run_dir, f"fixed_{stem0}") / f"{ep}_std.png", rgb_png(std_img))
+            msg = f" | draws {Ud.shape[0]}: std_out {s_out:.1f} HU, std_v(eps=0) {s_v:.1f} HU, std_eps {s_eps:.1f} HU"
+        self.write(f"saved full-size images v4 ({len(full['paths'])} slices, {u.shape[-1]}) -> {out_dir} | R(y) full RMS {r_y_rms:.1f} HU{msg}")
 
     def close(self):
         self.tb.flush()

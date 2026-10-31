@@ -4,6 +4,7 @@
   2. 重みディレクトリ（--weight_dir）に net_G.pth があることを確認し、run の最新 launch から G の構成・P の範囲・HU 正規化を、dataset_info.yaml から学習画像サイズを取る。
      表示設定（log.display_hu_min/max・preview_bits・diff_range_hu）は**現在の configs/train.yaml**
   3. 出力 <repo>/output/stage1_v3/<run>_<重み>_<入力名>_<時刻>/ に infer.yaml を保存して inference_dir.py を exec
+  v4 の run は Dn の重みを 重みディレクトリ/net_Dn.pth → <run>/net_Dn.pth → launch の pipeline.dn_weights の順で探して渡す（apply_degrade のとき必須）
 """
 
 import argparse
@@ -17,12 +18,12 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import INFER, LEGACY_TRAIN_DEFAULTS, MACHINE, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate, validate_shared  # noqa: E402
-from util.run_paths import STAGE, DATASET_INFO_FILE, INFER_WEIGHT, LAUNCH_FILE, checkpoints_root, find_run_dir, infer_output_dir, latest_launch  # noqa: E402
+from util.run_paths import STAGE, DATASET_INFO_FILE, DN_WEIGHT, INFER_WEIGHT, LAUNCH_FILE, checkpoints_root, find_run_dir, infer_output_dir, latest_launch  # noqa: E402
 
 G_KEYS = {"network.netG": "--netG", "network.ngf": "--ngf", "network.norm": "--norm", "data.hu_offset": "--hu_offset", "data.hu_min": "--hu_min", "data.hu_max": "--hu_max"}
 P_KEYS = {"degrade.enabled": "--p_enabled", "degrade.mode": "--p_mode",
           "degrade.learned_z_dim": "--p_learned_z_dim", "degrade.learned_kernel_size": "--p_learned_kernel_size", "degrade.learned_noise_kernel_size": "--p_learned_noise_kernel_size",
-          "degrade.learned_amp_ch": "--p_learned_amp_ch", "degrade.learned_sigma_max_hu": "--p_learned_sigma_max_hu",
+          "degrade.learned_amp_ch": "--p_learned_amp_ch", "degrade.learned_sigma_max_hu": "--p_learned_sigma_max_hu", "degrade.learned_sigma_min_hu": "--p_learned_sigma_min_hu",
           "degrade.bilateral_sigma_color_hu_min": "--p_bil_color_min", "degrade.bilateral_sigma_color_hu_max": "--p_bil_color_max",
           "degrade.bilateral_sigma_space_px_min": "--p_bil_space_min", "degrade.bilateral_sigma_space_px_max": "--p_bil_space_max", "degrade.blur_sigma_px_min": "--p_blur_min", "degrade.blur_sigma_px_max": "--p_blur_max",
           "degrade.noise_sigma_hu_min": "--p_noise_min", "degrade.noise_sigma_hu_max": "--p_noise_max", "degrade.noise_corr_px_min": "--p_corr_min",
@@ -100,7 +101,15 @@ def main():
             raise ConfigError(f"degrade.mode learned の run ですが重みディレクトリに net_P.pth がありません: {weight_dir}")
         if infer["apply_degrade"] and not ltrain["degrade.enabled"]:
             raise ConfigError("apply_degrade: true ですが、この run は degrade.enabled: false で学習しています（P の範囲が無い）。--apply_degrade false にしてください")
-        g_argv = [x for k, flag in G_KEYS.items() for x in (flag, str(ltrain[k]))] + ["--input_size", str(hw[0])]
+        v4 = ltrain["pipeline.mode"] == "v4"
+        dn_weights = ""
+        if v4 and infer["apply_degrade"]:
+            cands = [weight_dir / DN_WEIGHT, run_dir / DN_WEIGHT, Path(ltrain["pipeline.dn_weights"])]
+            found = next((c for c in cands if c.is_file()), None)
+            if found is None:
+                raise ConfigError(f"pipeline.mode v4 の run ですが Dn の重み {DN_WEIGHT} が見つかりません（探した場所: {[str(c) for c in cands]}）")
+            dn_weights = str(found)
+        g_argv = [x for k, flag in G_KEYS.items() for x in (flag, str(ltrain[k]))] + ["--input_size", str(hw[0]), "--pipeline_mode", ltrain["pipeline.mode"], "--dn_weights", dn_weights]
         p_argv = [x for k, flag in P_KEYS.items() for x in (flag, str(ltrain[k]))]
         cur = validate("train", load_yaml(a.train), TRAIN)
         d_argv = [x for k, flag in DISPLAY_KEYS.items() for x in (flag, str(cur[k]))]
@@ -121,7 +130,8 @@ def main():
     with open(out_dir / "infer.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump({"stage": STAGE, "timestamp": now.isoformat(timespec="seconds"), "machine_name": a.machine, "device": device, "run_dir": str(run_dir),
                         "launch": str(launch_path), "weight_dir": str(weight_dir), "input_dir": str(input_dir), "infer": infer,
-                        "generator": {k: ltrain[k] for k in G_KEYS}, "degrade": {k: ltrain[k] for k in P_KEYS}, "image_hw": hw, "display": {k: cur[k] for k in DISPLAY_KEYS},
+                        "generator": {k: ltrain[k] for k in G_KEYS}, "degrade": {k: ltrain[k] for k in P_KEYS}, "pipeline_mode": ltrain["pipeline.mode"], "dn_weights": dn_weights,
+                        "image_hw": hw, "display": {k: cur[k] for k in DISPLAY_KEYS},
                         "overrides": list(overrides), "applied": applied, "argv": argv}, f, allow_unicode=True, sort_keys=False)
     print(f"[run_infer] {weight_dir} × {input_dir} → {out_dir}", flush=True)
     os.chdir(HERE)

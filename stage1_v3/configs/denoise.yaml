@@ -1,0 +1,52 @@
+# stage1_v3/configs/denoise.yaml — v4 の Dn（PCD512 の自己教師あり denoiser）の学習と合否判定。唯一の正は configs/schema.py の DENOISE（欠落・未知・型違いはエラー、既定値なし）。
+# 出典: Neighbor2Neighbor（Huang et al., CVPR 2021, arXiv 2101.02824）。CT 向けの変更はセル幅 s と 2 画素の最小距離 d₀ をノイズ相関長から決めることだけ
+# （docs/decisions/20261031_stage1-v3-noise-path-analysis.md §6）。d₀ は bash start1_v3.sh <machine> stats --dirs <PCD512> の noise_corr_d0 で確かめる（PCD の見込み 2〜3 → s = 4〜6）。
+# 起動: bash start1_v3.sh <machine> dn [--flag value]。合否: bash start1_v3.sh <machine> dncheck。両方まとめて v4 学習まで: bash start1_v3.sh <machine> v4
+# 書き方: 小数は必ず点を付ける。真偽値は true / false。
+
+data:
+  input_dir: /workspace/DataSet/PCD512_v2   # PCD512（実 EID には掛けない）
+  use_eval_only_cases: false                # 評価専用症例（configs/eval_only.yaml）は学習から除外
+  patch_size: 256                           # §6.2。cell_size で割った 64 が 2^n_levels = 8 の倍数
+  patches_per_slice: 8                      # 全 Stage 8
+  samples_per_epoch: 16000                  # batch 16 → 1000 step/epoch
+  hu_offset: 1400
+  hu_min: -1400
+  hu_max: 4096
+  patch_seed: 0
+
+n2n:
+  cell_size: 4          # s = 2·d₀（§6.1 の見込み d₀ ≈ 2）。stats の noise_corr_d0 で確かめて直す
+  min_dist: 2           # セル内の 2 画素の最小 Chebyshev 距離 d₀
+  gamma_max: 2.0        # 論文既定 γ = 2
+  gamma_ramp_epochs: 12 # 0 → 2 を最初の 1/4（50 epoch の 12）で
+
+model:
+  ch: 48                # 論文の U-Net 幅
+  n_levels: 3
+
+optim:
+  lr: 3.0e-4            # 論文
+  lr_half_epoch: 25     # この epoch から（含む）lr を 1/2
+  beta1: 0.9            # Adam 既定
+  beta2: 0.999
+  n_epochs: 50
+  batch_size: 16        # 論文
+  seed: 0
+  precision: bf16       # CUDA autocast。fp32 で従来どおり
+  compile: true         # CUDA で torch.compile(max-autotune)
+
+log:
+  print_freq: 50
+  save_epoch_freq: 5    # weights/epoch_NNN/（latest/ は毎 epoch）
+  n_preview: 4          # 固定スライス（preview と check/* の両方）
+  display_hu_min: -1400
+  display_hu_max: 3000
+  diff_range_hu: 100    # 残差 x − Dn(x) の色範囲（PCD のノイズ SD ≈ 93 HU）
+
+check:                  # §6.4 の合否（dncheck と epoch ごとの check/*）
+  n_slices: 64          # dncheck で測るスライス数
+  body_threshold_hu: -500
+  resid_sd_max_hu: 6.0        # 残留ノイズ: Dn(x) の一様 ROI 局所 SD ≤ 6 HU
+  edge_ratio_min: 0.8         # 縁の保持: edge_grad p90 / p95 / p99 が x の 0.8 倍以上
+  resid_edge_ratio_max: 3.0   # 残像: 残差の edge_grad p99 ≤ 残差 SD の 3 倍

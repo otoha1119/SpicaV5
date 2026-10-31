@@ -23,7 +23,7 @@
 - Stage 1 = PCD512 → EID-like512 の非ペア劣化生成（Park et al., IEEE Access 2019 の fidelity GAN を junyanz/pytorch-CycleGAN-and-pix2pix の vendoring `stage1/` 上に実装）。`mode.yaml` の `residual` / `task: degrade | sr` で切替、resume で変更不可
 - Stage 2 = EID-like1024 → PCD1024 の教師あり U-Net（ILUMENATE, Koons et al. 2025）。`stage2/`
 - Stage 3 = DDIM（`stage3/`、`start3.sh`）。ablation = `ablation/<名前>/`（SRCycleGAN、CycleGAN）
-- **Stage 1 v3（2026-10-30〜、ブランチ 011）** = 射影型劣化器（物理コア P + 学習残差 R + 実 EID 恒等項、`stage1_v3/`、`start1_v3.sh [マシン] [train|infer|ponly|stats|resume|best|tb]`）。設計 `docs/surveys/20261030_stage1-projection-identity.md`、要件 R-S21〜28。着手順は P 単独（`ponly` + `stats`）→ P + R
+- **Stage 1 v3（2026-10-30〜、ブランチ 011）** = 射影型劣化器（物理コア P + 学習残差 R + 実 EID 恒等項、`stage1_v3/`、`start1_v3.sh [マシン] [train|v4|dn|dncheck|infer|ponly|stats|resume|best|tb]`）。設計 `docs/surveys/20261030_stage1-projection-identity.md`、要件 R-S21〜28。着手順は P 単独（`ponly` + `stats`）→ P + R。**v4（2026-10-31〜、ブランチ 012、`pipeline.mode: v4`）** = x → 凍結 Dn（`dn` で Neighbor2Neighbor 事前学習、`dncheck` で合否）→ G → ⊛ k(z) → + ノイズ（σ ≥ σ_min）。設計 `docs/decisions/20261031_stage1-v3-noise-path-analysis.md` §3・§6。通しは `v4`
 - 評価は SENTINEL-CARE（`SpicaV3/docs/working/stage1_evaluation_metric_design.md`）とプラーク評価（`eval/`）。worst-slice をヘッドラインにする
 
 ## 設定と起動の原則

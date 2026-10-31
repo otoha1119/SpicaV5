@@ -3,6 +3,8 @@
   (a) ノイズ: 体内の「一様 ROI」（gradient energy が最小の 32×32 窓、各スライス上位 n_roi 個）の局所 SD [HU] と、その ROI の 1D radial NPS（HU²·px²）の形（f_peak, f_av [cycles/px]）
   (b) 鮮鋭度の代理: 体内の強いエッジ（|∇| 上位 1 %）での勾配の大きさ [HU/px]（線計測 eval/line_metrics.py の edge 10–90 % 幅の代わり。参考値）
   (c) HU: 体内（HU > body_threshold）の p50 / p90 / p99、空気（体外）の平均
+  (d) ノイズ自己相関: 一様 ROI の ρ(1..4)（軸 (d,0),(0,d) と対角 (d,d),(d,−d) の平均）、noise_rho_max_1..4（Chebyshev 殻全体の |ρ| 最大）、
+      noise_corr_d0（殻全体で |ρ| < 0.05 になる最小距離。v4 の Dn の n2n.min_dist / cell_size = 2·d₀ を決める。決定 §6.1）
 
   bash start1_v3.sh <machine> stats --dirs A,B,C [--max_slices 200] [--seed 0]
   出力: <repo>/output/stage1_v3/stats_<時刻>/stats.yaml（フォルダごとの中央値と四分位）と summary.txt（横並びの表）
@@ -65,7 +67,8 @@ def main():
     now = datetime.datetime.now(jst)
     out_dir = stats_output_dir(now, root=a.out_root)
     out_dir.mkdir(parents=True)
-    keys = ("local_sd", "nps_f_peak", "nps_f_av", "edge_grad_p90", "edge_grad_p95", "edge_grad_p99", "edge_grad_top1_mean", "hu_p50", "hu_p90", "hu_p99", "air_mean")
+    keys = ("local_sd", "nps_f_peak", "nps_f_av", "edge_grad_p90", "edge_grad_p95", "edge_grad_p99", "edge_grad_top1_mean", "hu_p50", "hu_p90", "hu_p99", "air_mean",
+            "noise_rho_1", "noise_rho_2", "noise_rho_3", "noise_rho_4", "noise_rho_max_1", "noise_rho_max_2", "noise_rho_max_3", "noise_rho_max_4", "noise_corr_d0")
     result = {"stage": STAGE, "timestamp": now.isoformat(timespec="seconds"), "body_threshold_hu": thr, "roi": ROI, "n_roi_per_slice": N_ROI, "dirs": {}}
     rng = np.random.default_rng(seed)
     for d in dirs:
@@ -79,7 +82,10 @@ def main():
             rows.append(analyze_slice(hu, thr, rng))
         valid = [r for r in rows if r is not None]
         nps_mean = np.mean([r["nps_radial"] for r in valid], axis=0).tolist() if valid else []
-        result["dirs"][str(d)] = {"n_slices": len(paths), "n_valid": len(valid), **{k: summarize(valid, k) for k in keys}, "nps_radial_mean": nps_mean}
+        rho_mean = np.nanmean([r["noise_rho"] for r in valid], axis=0).tolist() if valid else []
+        rho_max_mean = np.nanmean([r["noise_rho_max"] for r in valid], axis=0).tolist() if valid else []
+        result["dirs"][str(d)] = {"n_slices": len(paths), "n_valid": len(valid), **{k: summarize(valid, k) for k in keys}, "nps_radial_mean": nps_mean,
+                                  "noise_rho_mean": rho_mean, "noise_rho_max_mean": rho_max_mean, "n_corr_d0_within_8": int(sum(np.isfinite(r["noise_corr_d0"]) for r in valid))}
         print(f"[stats] {d}: {len(valid)}/{len(paths)} slices")
     with open(out_dir / "stats.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(result, f, allow_unicode=True, sort_keys=False)

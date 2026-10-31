@@ -4,7 +4,9 @@
   launch.yaml                 解決済み設定（train / machine / degrade の範囲）。resume 時は launch_resume_<日時秒>.yaml を追加
   dataset_info.yaml           PCD / EID の画像サイズ、症例・スライス数、sampling、P の設定
   loss_log.txt
-  latest/ best/               重みディレクトリ: net_G.pth（G = in + R、推論に使う）, net_D.pth, state.pth（optimizer ×2 / RNG / 進捗 / 実効設定）, net_P.pth（degrade.mode learned のときだけ。推論の P にも使う）
+  latest/ best/               重みディレクトリ: net_G.pth（G = in + R、推論に使う）, net_D.pth, state.pth（optimizer ×2 / RNG / 進捗 / 実効設定）, net_P.pth（degrade.mode learned のときだけ。推論の P にも使う）,
+                              net_Dn.pth（pipeline.mode v4 のときだけ。凍結 denoiser の複製。推論の Dn にも使う）
+  net_Dn.pth                  v4: pipeline.dn_weights の複製（run の自己完結用。resume / infer はこちらを優先）
   best.txt
   weights/epoch_NNN/          save_epoch_freq ごとの checkpoint
   output_images/epoch_NNN/<slice>_pcd.png, _u.png（P(x)）, _eidlike.png, _R.png, <fixed>_std.png（n_draws の標準偏差 [HU]）, <eid>_idt.png（G(y)）, _Ry.png
@@ -14,11 +16,18 @@
   tb/                         TensorBoard（stage1 と共通の tb_port）
   tensorboard.log
 
+v4 の Dn（bash start1_v3.sh <machine> dn、train_denoiser.py）は <repo>/stage1_v3/checkpoints/denoiser/<run>/:
+  launch.yaml, dataset_info.yaml, loss_log.txt, latest/net_Dn.pth（毎 epoch）, weights/epoch_NNN/net_Dn.pth（save_epoch_freq）, tb/, output_images/epoch_NNN/<slice>_panel.png（[x | Dn(x) | x − Dn(x)]）
+  <repo>/stage1_v3/checkpoints/denoiser/latest/  最新の dn run の net_Dn.pth と launch.yaml の複製（train.yaml の pipeline.dn_weights の既定の参照先。symlink ではなく複製 = Windows バインドマウント対策）
+dncheck（check_denoiser.py）の出力は <repo>/output/stage1_v3/dncheck_<時刻>/summary.yaml と <slice>_panel.png。
+
 推論の出力は <repo>/output/stage1_v3/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/。
     full/<case>/<slice>.png            出力（uint16、stored = HU + 1400）。apply_degrade なら draw 0 の P を通した出力
     full_u/                            P(x)（apply_degrade かつ save_residual）
     full_R/, full_R_color/             R = 出力 − G の入力（save_residual）
     full_std/                          n_draws 間の出力の標準偏差 [HU]（uint16。n_draws > 1）
+    full_eps0/                         v4: ε = 0 の u（指紋。infer.eps_zero）。full_xc/ = Dn(x)（v4 かつ save_residual。v3 の full_u/ に相当）
+    manifest.yaml                      重み（G / P / Dn）のパスと sha256
     full_panel/                        [出力 | P(x) | 入力 | R + ゲージ]（save_panel）
     R_colorbar_pm<range>HU.png, infer.yaml, draws_summary.yaml
 P 単独生成（bash start1_v3.sh <machine> ponly）は <repo>/output/stage1_v3/ponly_<入力名>_<実行時刻>/full/ と manifest.yaml。
@@ -38,8 +47,10 @@ DATASET_INFO_FILE = "dataset_info.yaml"
 LOSS_LOG_FILE = "loss_log.txt"
 TB_DIR = "tb"
 OUTPUT_IMAGES_DIR = "output_images"
-NET_NAMES = ("G", "D")                 # 常にある。degrade.mode learned の run はさらに "P"（学習型劣化 P_θ、net_P.pth）
-OPTIONAL_NET_NAMES = ("P",)
+NET_NAMES = ("G", "D")                 # 常にある。degrade.mode learned の run はさらに "P"（学習型劣化 P_θ、net_P.pth）、pipeline.mode v4 はさらに "Dn"（凍結 denoiser、net_Dn.pth）
+OPTIONAL_NET_NAMES = ("P", "Dn")
+DN_WEIGHT = "net_Dn.pth"
+DENOISER_DIR = "denoiser"
 CKPT_KINDS = tuple(f"net_{n}.pth" for n in NET_NAMES) + ("state.pth",)   # 必須
 OPTIONAL_CKPT_KINDS = tuple(f"net_{n}.pth" for n in OPTIONAL_NET_NAMES)
 INFER_WEIGHT = "net_G.pth"
@@ -133,3 +144,24 @@ def ponly_output_dir(input_dir, now, root=None):
 
 def stats_output_dir(now, root=None):
     return output_root(root) / f"stats_{now.strftime(INFER_STAMP_FORMAT)}"
+
+
+def dncheck_output_dir(now, root=None):
+    return output_root(root) / f"dncheck_{now.strftime(INFER_STAMP_FORMAT)}"
+
+
+# ---------------------------------------------------------------------------
+# v4 の Dn（train_denoiser.py）
+# ---------------------------------------------------------------------------
+def denoiser_root(machine):
+    """<checkpoints_root>/denoiser/"""
+    return checkpoints_root(machine) / DENOISER_DIR
+
+
+def denoiser_run_dir(machine, name):
+    return denoiser_root(machine) / name
+
+
+def denoiser_latest_dir(machine):
+    """最新の dn run の net_Dn.pth と launch.yaml の複製（train.yaml pipeline.dn_weights の既定の参照先）。"""
+    return denoiser_root(machine) / "latest"

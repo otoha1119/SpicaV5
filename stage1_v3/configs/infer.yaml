@@ -8,7 +8,8 @@ n_draws: 1              # >1 で full_std/（P の引き直し間の標準偏差
 max_slices: 0           # 0 で全スライス。動作確認は 4 など
 batch_slices: 1
 save_residual: false    # R = 出力 − P(x) と P の寄与 u − x
-save_panel: false       # [出力 | P(x) | 入力 | R + ゲージ]
+save_panel: false       # [出力 | P(x) | 入力 | R + ゲージ]（v4 は [u | Dn(x) | 入力 | R(x_c)]）
+eps_zero: true          # v4 の run: ε = 0 の u（指紋）を full_eps0/ にも書く。v3 の run では無視
 
 io:
   read_workers: 4

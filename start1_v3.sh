@@ -1,12 +1,15 @@
 #!/bin/bash
 # 射影型 Stage 1（P + R + 恒等項） のホスト側入口。
-#   bash start1_v3.sh [machine] [train|infer|ponly|stats|resume|best|tb|build|shell|down] [...]
+#   bash start1_v3.sh [machine] [train|v4|dn|dncheck|infer|ponly|stats|resume|best|tb|build|shell|down] [...]
 #   例: bash start1_v3.sh PC3                                   # 学習（P + R + 恒等項）
 #       bash start1_v3.sh PC3 resume 2026_1031_1200 latest
 #       bash start1_v3.sh PC3 infer --weight_dir /workspace/stage1_v3/checkpoints/<run>/best --input_dir /workspace/DataSet/PCD512_v2
 #       bash start1_v3.sh PC3 infer --weight_dir ... --input_dir /workspace/DataSet/EID_v5 --apply_degrade false   # 実 EID で恒等の確認
 #       bash start1_v3.sh PC3 ponly --input_dir /workspace/DataSet/PCD512_v2 --max_slices 50          # P 単独（学習なし）で EID-like を生成
-#       bash start1_v3.sh PC3 stats --dirs /workspace/DataSet/EID_v5,/workspace/DataSet/PCD512_v2      # R-S22 の計測
+#       bash start1_v3.sh PC3 stats --dirs /workspace/DataSet/EID_v5,/workspace/DataSet/PCD512_v2      # R-S22 の計測（noise_corr_d0 も）
+#       bash start1_v3.sh PC3 v4                                 # v4 の通し: dn → dncheck → 学習（--pipeline_mode v4）。--flag は学習にだけ渡す
+#       bash start1_v3.sh PC3 dn [--n_epochs 50]                 # Dn（PCD denoiser、configs/denoise.yaml）の学習だけ
+#       bash start1_v3.sh PC3 dncheck [--weights PATH]           # Dn の合否（決定 §6.4）。省略時は train.yaml の pipeline.dn_weights
 set -euo pipefail
 
 if [ -f /.dockerenv ]; then
@@ -24,7 +27,7 @@ BEST_EPOCH=""
 MACHINE_ARG=""
 
 usage() {
-  echo "usage: bash start1_v3.sh [machine] [train|infer|ponly|stats|tb|build|shell|down] [--flag value ...]"
+  echo "usage: bash start1_v3.sh [machine] [train|v4|dn|dncheck|infer|ponly|stats|tb|build|shell|down] [--flag value ...]"
   echo "       bash start1_v3.sh [machine] resume <run> [latest|best|epoch] [--flag value ...]"
   echo "       bash start1_v3.sh [machine] best <run> <epoch>"
 }
@@ -32,7 +35,7 @@ usage() {
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
-    train|infer|ponly|stats|tb|shell|down) ACTION="$1"; shift ;;
+    train|v4|dn|dncheck|infer|ponly|stats|tb|shell|down) ACTION="$1"; shift ;;
     build) ACTION="build"; BUILD="--build"; shift ;;
     resume)
       ACTION="train"; shift
@@ -136,6 +139,11 @@ case "$ACTION" in
   infer) exec_it spicav5 bash stage1_v3/infer.sh "$@" ;;
   ponly) exec_it spicav5 bash stage1_v3/ponly.sh "$@" ;;
   stats) exec_it spicav5 bash stage1_v3/stats.sh "$@" ;;
+  dn) exec_it spicav5 bash stage1_v3/denoise.sh "$@" ;;
+  dncheck) exec_it spicav5 bash stage1_v3/dncheck.sh "$@" ;;
+  v4)
+    tb_kill
+    exec_it -e SPICA_TB_PORT="$TB_PORT" spicav5 bash stage1_v3/pipeline_v4.sh "$@" ;;
   best) exec_it spicav5 python stage1_v3/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
   train)
     tb_kill

@@ -15,6 +15,11 @@ machines.yaml は Stage 共通ファイルなので、使う既存キーだけ�
   PCD 経路: u = P(x; σ, c, b)（学習なし。スライスごとに σ・c・b を範囲から抽選）、ŷ = u + R(u)。D は実 EID y と ŷ を見分ける
   EID 経路: y + R(y)。恒等項 L_id = ‖R(y)‖²（D には見せない）
   損失    : L_GAN + λ_fid ‖R(u)‖² + λ_id ‖R(y)‖²。R は決定的（乱数入力なし）。両経路は 1 バッチに連結して G を通す（BatchNorm のドメイン分割対策）
+【v4】（pipeline.mode: v4、docs/decisions/20261031_stage1-v3-noise-path-analysis.md §3・§6、2026-10-31）
+  PCD 経路: x → Dn（凍結 denoiser、configs/denoise.yaml で事前学習）→ x_c → G: x_c + R(x_c) → ⊛ k(z) → + σ(x_c) ⊙ (h(z) ⊛ ε)、σ ≥ σ_min → u。D は y と u
+  EID 経路: v3 と同じ（Dn も k もノイズも通さない）
+  損失    : L_GAN(u) + λ_fid ‖R(x_c)‖² + λ_id ‖R(y)‖² + λ_k ‖x_c ⊛ k − x_c‖² + λ_com COM²。ε に依存する項は L_GAN だけ（C2）
+  Dn の学習は DENOISE（configs/denoise.yaml、train_denoiser.py）。合否は check.*（check_denoiser.py、§6.4）
 """
 
 from collections import namedtuple
@@ -26,6 +31,9 @@ Key = namedtuple("Key", "type flag doc")
 # configs/train.yaml
 # ---------------------------------------------------------------------------
 TRAIN = {
+    # pipeline（v3 = 従来、v4 = Dn → G → k(z) → +ノイズ。docs/decisions/20261031_stage1-v3-noise-path-analysis.md §3）
+    "pipeline.mode":         Key(str,   "--pipeline_mode",   "v3（u = P_θ(x) → G、従来）| v4（x → Dn → G → ⊛ k(z) → + σ ⊙ (h ⊛ ε)。乱数ノイズを最後に足し、後ろに学習ネットを置かない）。重みの形と経路を決めるので resume で変えられない"),
+    "pipeline.dn_weights":   Key(str,   "--dn_weights",      "v4: 凍結 denoiser の重み net_Dn.pth（コンテナ内パス。bash start1_v3.sh <machine> dn の出力 checkpoints/denoiser/latest/net_Dn.pth）。v4 では存在必須。v3 では空文字 \"\" を書く（使わない）"),
     # optim（論文 Sec. III: lr 0.0002、batch 40、300 epoch。β・decay は未記載）
     "optim.lr_G":            Key(float, "--lr_G",            "G（残差 R）の学習率。論文 0.0002（G / D 共通）"),
     "optim.lr_D":            Key(float, "--lr_D",            "D の学習率。論文 0.0002"),
@@ -53,6 +61,7 @@ TRAIN = {
     "degrade.learned_noise_kernel_size": Key(int, "--learned_noise_kernel_size", "learned: ノイズ整形フィルタ h(z) の大きさ（奇数、px。NPS の形）"),
     "degrade.learned_amp_ch": Key(int,  "--learned_amp_ch",  "learned: 振幅ネット σ(x) のチャネル数"),
     "degrade.learned_sigma_max_hu": Key(float, "--learned_sigma_max_hu", "learned: ノイズ振幅 σ(x) の上限 [HU]（sigmoid × これ。実 EID の局所 SD 22 HU の数倍）"),
+    "degrade.learned_sigma_min_hu": Key(float, "--learned_sigma_min_hu", "v4 のみ: ノイズ振幅の下限 [HU]。σ(x) = σ_min + (σ_max − σ_min)·sigmoid(·)（C3: 乱数ノイズだけで実 EID の量に達していれば、決定的な残りノイズは量の超過として D が罰する）。実 EID の一様 ROI 局所 SD 中央値 22.7（EXP-20261030-01 の stats）。v3 では無視（σ = σ_max·sigmoid のまま）"),
     "degrade.bilateral_sigma_color_hu_min": Key(float, "--bil_color_min", "bilateral の sigma_color [HU] の下限（mode bilateral_blur のみ。PCD のノイズ SD ≈ 93 HU の 2〜3 倍が目安）"),
     "degrade.bilateral_sigma_color_hu_max": Key(float, "--bil_color_max", "同 上限"),
     "degrade.bilateral_sigma_space_px_min": Key(float, "--bil_space_min", "bilateral の sigma_space [px] の下限（mode bilateral_blur のみ）"),
@@ -106,6 +115,7 @@ TRAIN = {
     "val.n_eid_slices":      Key(int,   "--val_eid_slices",  "参照の固定 実 EID スライス数（中央値と四分位を 1 回計算。恒等残差の eval RMS にも使う）"),
     "val.auto_best":         Key(bool,  "--auto_best",       "true なら採点（score）が最良のとき best/ を自動更新（best.txt に score を記録）。手動の bash start1_v3.sh best は上書きできる"),
     "val.target_ry_rms_hu":  Key(float, "--target_ry_rms_hu", "恒等残差 RMS(R(y))（eval mode）の目標 [HU]。score の正規化に使う（EXP-20261030-01 の H1 は 20）"),
+    "val.target_fingerprint_sd_hu": Key(float, "--target_fingerprint_sd_hu", "v4 のみ: 指紋 SD（ε = 0 で生成した u の一様 ROI 局所 SD の中央値 [HU]）の目標。score に fingerprint_sd / これ を足す（§3.3: 実 EID の 1/4 = 6）。v3 では使わない（旧 run の移行値 0.0）"),
 }
 
 # ---------------------------------------------------------------------------
@@ -131,10 +141,55 @@ INFER = {
     "batch_slices":     Key(int,  "--batch_slices",  "同時に G に通す 512 スライス数"),
     "save_residual":    Key(bool, "--save_residual", "R = 出力 − 入力 と、P の寄与 u − x を保存"),
     "save_panel":       Key(bool, "--save_panel",    "[出力 | P(x) | 入力 | R] パネルを保存"),
+    "eps_zero":         Key(bool, "--eps_zero",      "v4 の run のみ: ε = 0（z は draw 0 と同じ）で生成した u を full_eps0/ にも書く（指紋 = 決定的に残るノイズ。§3.3）。apply_degrade=false や v3 の run では無視（恒等の確認 infer --apply_degrade false はこの値に関係なく通る）"),
     "io.read_workers":  Key(int,  "--read_workers",  "PNG の読み込みを先読みするスレッド数（0 = 直列）"),
     "io.write_workers": Key(int,  "--write_workers", "PNG の書き込みを非同期にするスレッド数（0 = 直列）"),
 }
 
+# ---------------------------------------------------------------------------
+# configs/denoise.yaml — v4 の Dn（PCD512 の自己教師あり denoiser、Neighbor2Neighbor 型）の学習・合否（train_denoiser.py / check_denoiser.py）
+#   出典: Huang et al., "Neighbor2Neighbor: Self-Supervised Denoising from Single Noisy Images," CVPR 2021（arXiv 2101.02824）。
+#   CT 向けの変更はセル幅 s と 2 画素の最小距離 d₀ をノイズ相関長（bash start1_v3.sh <machine> stats の noise_corr_d0）から決めることだけ（決定 §6.2）
+# ---------------------------------------------------------------------------
+DENOISE = {
+    "data.input_dir":        Key(str,   "--input_dir",       "PCD512 のフォルダ（コンテナ内パス。<case>/<slice>.png）。実 EID には掛けないので PCD だけ"),
+    "data.use_eval_only_cases": Key(bool, "--use_eval_only_cases", "false なら configs/eval_only.yaml の評価専用症例を学習から除外（train.yaml と同じ規則）"),
+    "data.patch_size":       Key(int,   "--patch_size",      "patch の一辺（§6.2 は 256）。cell_size で割り切れ、割った後が 2^n_levels の倍数であること"),
+    "data.patches_per_slice": Key(int,  "--patches_per_slice", "1 スライスから連続して切る patch 数（全 Stage 8）"),
+    "data.samples_per_epoch": Key(int,  "--samples_per_epoch", "1 epoch の patch 数（batch_size の倍数）"),
+    "data.hu_offset":        Key(int,   "--hu_offset",       "stored = HU + hu_offset（train.yaml と同じ 1400）"),
+    "data.hu_min":           Key(int,   "--hu_min",          "正規化窓の下限 HU（train.yaml と同じ。Dn は v4 の G と同じ正規化単位で動く）"),
+    "data.hu_max":           Key(int,   "--hu_max",          "正規化窓の上限 HU（train.yaml と同じ）"),
+    "data.patch_seed":       Key(int,   "--patch_seed",      "preview / check 用の固定スライス選択と sub-sample の乱数 seed"),
+    "n2n.cell_size":         Key(int,   "--cell_size",       "Neighbor2Neighbor のセル幅 s [px]（偶数）。s ≥ 2·d₀。PCD の見込み 4〜6（§6.1）"),
+    "n2n.min_dist":          Key(int,   "--min_dist",        "セル内で選ぶ 2 画素の最小 Chebyshev 距離 d₀ [px]（1 ≤ d₀ < s）。|ρ(d)| < 0.05 になる最小距離（stats の noise_corr_d0）"),
+    "n2n.gamma_max":         Key(float, "--gamma_max",       "正則化項の重み γ の最終値（論文既定 2）"),
+    "n2n.gamma_ramp_epochs": Key(int,   "--gamma_ramp_epochs", "γ を 0 から gamma_max へ線形に上げる epoch 数（§6.2: 全体の 1/4）。0 なら最初から gamma_max"),
+    "model.ch":              Key(int,   "--ch",              "U-Net の基本チャネル数（論文 48）"),
+    "model.n_levels":        Key(int,   "--n_levels",        "U-Net の down / up の段数（2 倍ずつ。論文は 3 段相当）"),
+    "optim.lr":              Key(float, "--lr",              "Adam の学習率（論文 3e-4）"),
+    "optim.lr_half_epoch":   Key(int,   "--lr_half_epoch",   "この epoch から（この epoch を含む）lr を 1/2 にする（§6.2: 半分で 1/2。epoch は 1 始まり）。0 で一定"),
+    "optim.beta1":           Key(float, "--beta1",           "Adam β1（論文は Adam 既定 0.9）"),
+    "optim.beta2":           Key(float, "--beta2",           "Adam β2（0.999）"),
+    "optim.n_epochs":        Key(int,   "--n_epochs",        "epoch 数（§6.2: 約 50）"),
+    "optim.batch_size":      Key(int,   "--batch_size",      "batch の patch 数（論文 16）"),
+    "optim.seed":            Key(int,   "--seed",            "python / numpy / torch の乱数 seed"),
+    "optim.precision":       Key(str,   "--precision",       "fp32 | bf16（CUDA autocast。ProjectionModel と同じ扱い）"),
+    "optim.compile":         Key(bool,  "--compile",         "CUDA で torch.compile(mode='max-autotune')（CPU では無効）"),
+    "log.print_freq":        Key(int,   "--print_freq",      "TensorBoard scalar と loss_log.txt の間隔（step）"),
+    "log.save_epoch_freq":   Key(int,   "--save_epoch_freq", "weights/epoch_NNN/net_Dn.pth を残す epoch 間隔（latest/ は毎 epoch）"),
+    "log.n_preview":         Key(int,   "--n_preview",       "epoch ごとの preview と check/* に使う固定スライス数（症例列挙から等間隔）"),
+    "log.display_hu_min":    Key(int,   "--display_hu_min",  "表示の線形範囲の下限 HU（−1400）"),
+    "log.display_hu_max":    Key(int,   "--display_hu_max",  "表示の線形範囲の上限 HU（3000）"),
+    "log.diff_range_hu":     Key(int,   "--diff_range_hu",   "残差 x − Dn(x) のカラー表示の ±範囲 HU（PCD のノイズ SD ≈ 93 HU）"),
+    "check.n_slices":        Key(int,   "--n_slices",        "check_denoiser.py（dncheck）で測るスライス数（症例列挙から等間隔）"),
+    "check.body_threshold_hu": Key(int, "--body_threshold_hu", "一様 ROI・エッジを測る体内判定の HU 閾値（train.yaml degrade.body_threshold_hu と同じ −500）"),
+    "check.resid_sd_max_hu": Key(float, "--resid_sd_max_hu", "合格: Dn(x) の一様 ROI 局所 SD の中央値 ≤ これ [HU]（§6.4: 実 EID 22.7 の 1/4 = 6）"),
+    "check.edge_ratio_min":  Key(float, "--edge_ratio_min",  "合格: Dn(x) の edge_grad p90 / p95 / p99 ÷ x の同値 の中央値 ≥ これ（§6.4: 0.8）"),
+    "check.resid_edge_ratio_max": Key(float, "--resid_edge_ratio_max", "合格: 残差 x − Dn(x) の体内 edge_grad p99 ÷ 残差の一様 ROI SD の中央値 ≤ これ（§6.4: 3。残差に構造の縁が見えない）"),
+}
+
+PIPELINE_MODES = ("v3", "v4")
 GAN_MODES = ("fgan_kl", "lsgan", "vanilla")
 DEGRADE_MODES = ("gaussian", "bilateral_blur", "learned")
 PRECISIONS = ("fp32", "bf16")
@@ -150,10 +205,11 @@ LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False,
                          "degrade.mode": "gaussian", "degrade.bilateral_sigma_color_hu_min": 0.0, "degrade.bilateral_sigma_color_hu_max": 0.0,
                          "degrade.bilateral_sigma_space_px_min": 0.0, "degrade.bilateral_sigma_space_px_max": 0.0,
                          "degrade.learned_z_dim": 16, "degrade.learned_kernel_size": 21, "degrade.learned_noise_kernel_size": 9, "degrade.learned_amp_ch": 16, "degrade.learned_sigma_max_hu": 100.0,
-                         "loss.lambda_k_fid": 0.0, "loss.lambda_k_com": 0.0}
+                         "loss.lambda_k_fid": 0.0, "loss.lambda_k_com": 0.0,
+                         "pipeline.mode": "v3", "pipeline.dn_weights": "", "degrade.learned_sigma_min_hu": 0.0, "val.target_fingerprint_sd_hu": 0.0}
 
 # 重みの形と P の有無を決めるキー。再開で変えられない
-SHAPE_KEYS = ("network.netG", "network.netD", "network.ngf", "network.ndf", "network.norm", "degrade.enabled", "degrade.mode",
+SHAPE_KEYS = ("pipeline.mode", "network.netG", "network.netD", "network.ngf", "network.ndf", "network.norm", "degrade.enabled", "degrade.mode",
               "degrade.learned_z_dim", "degrade.learned_kernel_size", "degrade.learned_noise_kernel_size", "degrade.learned_amp_ch")
 
 
@@ -354,8 +410,26 @@ def check_degrade_values(train, P):
         P.append("degrade.mode bilateral_blur では bilateral_sigma_color_hu_max / sigma_space_px_max を正に")
 
 
+def check_pipeline_values(train, P):
+    mode = train["pipeline.mode"]
+    if mode not in PIPELINE_MODES:
+        P.append(f"pipeline.mode は {PIPELINE_MODES}")
+        return
+    if mode == "v4":
+        if not train["degrade.enabled"] or train["degrade.mode"] != "learned": P.append("pipeline.mode v4 は degrade.enabled true かつ degrade.mode learned（k(z)・σ・h(z) を使う）")
+        if not train["pipeline.dn_weights"]: P.append("pipeline.mode v4 は pipeline.dn_weights（net_Dn.pth のパス）が必要（bash start1_v3.sh <machine> dn で作る）")
+        smin, smax = train["degrade.learned_sigma_min_hu"], train["degrade.learned_sigma_max_hu"]
+        if smin < 0: P.append("degrade.learned_sigma_min_hu ≥ 0")
+        if not smin < smax: P.append(f"degrade.learned_sigma_min_hu ({smin}) < degrade.learned_sigma_max_hu ({smax})")
+        if train["val.target_fingerprint_sd_hu"] <= 0: P.append("v4 では val.target_fingerprint_sd_hu は正")
+    else:
+        if train["pipeline.dn_weights"] != "": P.append('pipeline.mode v3 では pipeline.dn_weights は空文字 "" にする（Dn を使わない）')
+        if train["val.target_fingerprint_sd_hu"] < 0: P.append("val.target_fingerprint_sd_hu ≥ 0")
+
+
 def check_train_values(train, machine):
     P = []
+    check_pipeline_values(train, P)
     bs = train["optim.batch_size"]
     for k in ("lr_G", "lr_D"):
         if train[f"optim.{k}"] <= 0: P.append(f"optim.{k} は正")
@@ -416,3 +490,43 @@ def check_infer_values(infer, machine):
     if infer["io.read_workers"] < 0 or infer["io.write_workers"] < 0: P.append("io.read_workers / write_workers ≥ 0")
     _check_machine(machine, P)
     _problems_to_error("infer values", P)
+
+
+def check_denoise_values(dn, machine):
+    P = []
+    if not dn["data.input_dir"]: P.append("data.input_dir を指定")
+    ps, s, d0 = dn["data.patch_size"], dn["n2n.cell_size"], dn["n2n.min_dist"]
+    if s < 2 or s % 2: P.append("n2n.cell_size は 2 以上の偶数")
+    if d0 < 1 or (s >= 2 and d0 >= s): P.append("n2n.min_dist は 1 ≤ d₀ < cell_size")
+    if ps < 8: P.append("data.patch_size ≥ 8")
+    if s >= 2 and ps % s: P.append(f"data.patch_size ({ps}) は n2n.cell_size ({s}) の倍数（sub-sample で H/s × W/s にする）")
+    if dn["model.n_levels"] < 1: P.append("model.n_levels ≥ 1")
+    if dn["model.ch"] < 1: P.append("model.ch ≥ 1")
+    if s >= 2 and dn["model.n_levels"] >= 1:
+        sub, m = ps // s, 2 ** dn["model.n_levels"]
+        if sub % m: P.append(f"sub-sample 後の一辺 patch_size / cell_size = {sub} は 2^n_levels = {m} の倍数（U-Net の down / up）")
+    if dn["data.patches_per_slice"] < 1: P.append("data.patches_per_slice ≥ 1")
+    bs = dn["optim.batch_size"]
+    if bs < 1: P.append("optim.batch_size ≥ 1")
+    spe = dn["data.samples_per_epoch"]
+    if spe < bs or spe % bs: P.append(f"data.samples_per_epoch ({spe}) は optim.batch_size ({bs}) の倍数で batch_size 以上")
+    if dn["data.hu_min"] >= dn["data.hu_max"]: P.append("data.hu_min < data.hu_max")
+    if dn["n2n.gamma_max"] < 0: P.append("n2n.gamma_max ≥ 0")
+    if dn["n2n.gamma_ramp_epochs"] < 0: P.append("n2n.gamma_ramp_epochs ≥ 0")
+    if dn["optim.lr"] <= 0: P.append("optim.lr は正")
+    if dn["optim.lr_half_epoch"] < 0: P.append("optim.lr_half_epoch ≥ 0")
+    if not (0.0 <= dn["optim.beta1"] < 1.0 and 0.0 <= dn["optim.beta2"] < 1.0): P.append("optim.beta1 / beta2 は [0, 1)")
+    if dn["optim.n_epochs"] < 1: P.append("optim.n_epochs ≥ 1")
+    if dn["optim.seed"] < 0: P.append("optim.seed ≥ 0")
+    if dn["optim.precision"] not in PRECISIONS: P.append(f"optim.precision は {PRECISIONS}")
+    if dn["log.print_freq"] < 1: P.append("log.print_freq ≥ 1")
+    if dn["log.save_epoch_freq"] < 1: P.append("log.save_epoch_freq ≥ 1")
+    if dn["log.n_preview"] < 1: P.append("log.n_preview ≥ 1（check/* と preview に要る）")
+    if dn["log.display_hu_min"] >= dn["log.display_hu_max"]: P.append("log.display_hu_min < display_hu_max")
+    if dn["log.diff_range_hu"] <= 0: P.append("log.diff_range_hu は正")
+    if dn["check.n_slices"] < 1: P.append("check.n_slices ≥ 1")
+    if dn["check.resid_sd_max_hu"] <= 0: P.append("check.resid_sd_max_hu は正")
+    if not (0.0 < dn["check.edge_ratio_min"]): P.append("check.edge_ratio_min は正")
+    if dn["check.resid_edge_ratio_max"] <= 0: P.append("check.resid_edge_ratio_max は正")
+    _check_machine(machine, P)
+    _problems_to_error("denoise values", P)

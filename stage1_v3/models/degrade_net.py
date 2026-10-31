@@ -13,6 +13,10 @@
     ・量の校正は D 任せにせず、util/validator.py（R-S22 の指標）で実 EID と照合する
 
   診断値: k の 2 次モーメント（等価 σ [px]）、σ(x) の体内平均 [HU]、|u − x| の RMS [HU]
+
+【v4（pipeline.mode v4、2026-10-31）】 同じ部品を順序を変えて使う（models/projection_model.py）: v = G(x_c) ⊛ k(z)、u = v + σ(x_c) ⊙ (h(z) ⊛ ε)。
+  blur(x, z) と noise(x_ref, z, eps) に分けて呼ぶ。σ(x) = σ_min + (σ_max − σ_min)·sigmoid(·)（sigma_min_norm。v3 は 0 で従来どおり σ_max·sigmoid）。
+  forward（v3 の u = x ⊛ k + σ(x) ⊙ (h ⊛ ε)）は変えない
 """
 
 import torch
@@ -56,11 +60,11 @@ class KernelNet(nn.Module):
 
 
 class AmplitudeNet(nn.Module):
-    """x → σ(x) ∈ [0, sigma_max]（低周波限定のノイズ振幅マップ）。"""
+    """x → σ(x) ∈ [sigma_min, sigma_max]（低周波限定のノイズ振幅マップ）。sigma_min = 0（v3）なら従来の sigma_max·sigmoid と同じ値。"""
 
-    def __init__(self, ch, sigma_max, pool=8):
+    def __init__(self, ch, sigma_max, pool=8, sigma_min=0.0):
         super().__init__()
-        self.pool, self.sigma_max = pool, sigma_max
+        self.pool, self.sigma_max, self.sigma_min = pool, sigma_max, sigma_min
         self.net = nn.Sequential(
             nn.Conv2d(1, ch, 3, padding=1), nn.LeakyReLU(0.2, True),
             nn.Conv2d(ch, ch, 3, padding=1), nn.LeakyReLU(0.2, True),
@@ -72,7 +76,9 @@ class AmplitudeNet(nn.Module):
         a = self.net(x)
         a = F.avg_pool2d(a, self.pool)
         a = F.interpolate(a, size=x.shape[-2:], mode="bilinear", align_corners=False)
-        return torch.sigmoid(a) * self.sigma_max
+        if self.sigma_min == 0.0:  # v3: 従来の式のまま（bit 同一）
+            return torch.sigmoid(a) * self.sigma_max
+        return self.sigma_min + (self.sigma_max - self.sigma_min) * torch.sigmoid(a)
 
 
 def _conv_per_sample(x, k, ksize):
@@ -85,13 +91,15 @@ def _conv_per_sample(x, k, ksize):
 
 
 class LearnedDegrade(nn.Module):
-    def __init__(self, z_dim, ksize, hsize, amp_ch, sigma_max_norm):
+    def __init__(self, z_dim, ksize, hsize, amp_ch, sigma_max_norm, sigma_min_norm=0.0):
         super().__init__()
         if ksize % 2 == 0 or hsize % 2 == 0:
             raise ValueError("learned_kernel_size / learned_noise_kernel_size は奇数")
+        if not 0.0 <= sigma_min_norm < sigma_max_norm:
+            raise ValueError(f"0 ≤ sigma_min ({sigma_min_norm}) < sigma_max ({sigma_max_norm})")
         self.z_dim, self.ksize, self.hsize = z_dim, ksize, hsize
         self.kernel = KernelNet(z_dim, ksize, hsize)
-        self.amp = AmplitudeNet(amp_ch, sigma_max_norm)
+        self.amp = AmplitudeNet(amp_ch, sigma_max_norm, sigma_min=sigma_min_norm)
 
     def sample_z(self, n, device, generator=None):
         return torch.randn(n, self.z_dim, device=device, generator=generator)
@@ -110,3 +118,19 @@ class LearnedDegrade(nn.Module):
         u = blurred + sigma * shaped
         com2, k_sigma = self.kernel.kernel_stats(k)
         return u, {"blurred": blurred, "sigma": sigma, "com2": com2, "k_sigma_px": k_sigma, "z": z}
+
+    # ------------------------------------------------------------------ v4: 分離した呼び方（順序は呼び出し側）
+    def blur(self, x, z):
+        """x ⊛ k(z)。戻り値 (blurred, info)。info: k, h, com2, k_sigma_px, z（同じ z で noise を呼ぶ）。"""
+        k, h = self.kernel(z)
+        blurred = _conv_per_sample(x, k, self.ksize)
+        com2, k_sigma = self.kernel.kernel_stats(k)
+        return blurred, {"k": k, "h": h, "com2": com2, "k_sigma_px": k_sigma, "z": z}
+
+    def noise(self, x_ref, z, eps, h=None):
+        """σ(x_ref) ⊙ (h(z) ⊛ ε)。戻り値 (noise, sigma)。h を渡せば kernel(z) を再計算しない。"""
+        if h is None:
+            _, h = self.kernel(z)
+        shaped = _conv_per_sample(eps, h, self.hsize)
+        sigma = self.amp(x_ref)
+        return sigma * shaped, sigma

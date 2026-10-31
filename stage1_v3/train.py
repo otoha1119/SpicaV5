@@ -6,6 +6,7 @@
   4. epoch ループ: print_freq step ごとに scalar、image_freq step ごとに patch グリッド、save_latest_freq 枚ごとに latest/、
      epoch 末に lr 更新 → latest/ + weights/epoch_NNN/ + フル 512 画像（固定 PCD + ランダム PCD + 恒等経路 + n_draws 標準偏差）
      → 自動採点（util/validator.py、R-S22 の 3 軸 + 恒等残差）。score 最良なら best/ を更新
+  v4（pipeline.mode v4）: フル画像は v4_full が model.generate（Dn → G → k → ノイズ）で x_c / g / u / 指紋（ε = 0）/ 引き直しを作る（monitor の v4 パネル）
 """
 
 import argparse
@@ -38,6 +39,32 @@ def learned_full(model, full, train):
     if n_draws > 1:
         full["U_draws"] = torch.cat([model.degrade(full["A"][0:1]).cpu() for _ in range(n_draws)])
     return full
+
+
+def v4_full(model, full, train):
+    """v4: フル画像の XC / G / U（generate）、U_eps0（指紋）、U_draws（u の引き直し）と V_draws（同じ z で ε = 0）を作る。seed は patch_seed と epoch から。"""
+    if not model.v4 or full is None:
+        return full
+    base = train["data.patch_seed"] * 1_000_003 + 303 + int(full["epoch"])
+    gen = lambda i, seed, eps0=False: model.generate(full["A"][i : i + 1], generator=torch.Generator(device=model.device).manual_seed(seed), eps_zero=eps0)  # noqa: E731
+    outs = [gen(i, base + i) for i in range(full["A"].shape[0])]
+    for key, name in (("XC", "x_c"), ("G", "g"), ("U", "u")):
+        full[key] = torch.cat([o[name].cpu() for o in outs])
+    full["U_eps0"] = gen(0, base, True)["u"].cpu()
+    n_draws = train["log.n_draws"]
+    if n_draws > 1:
+        full["U_draws"] = torch.cat([gen(0, base + 1000 + d)["u"].cpu() for d in range(n_draws)])
+        full["V_draws"] = torch.cat([gen(0, base + 1000 + d, True)["u"].cpu() for d in range(n_draws)])  # 同じ seed → 同じ z、ε = 0
+    else:
+        full["U_draws"] = None
+    return full
+
+
+def full_for(model, dataset, epoch, train):
+    full = dataset.full_slices(epoch)
+    if full is not None:
+        full["epoch"] = epoch
+    return v4_full(model, full, train) if model.v4 else learned_full(model, full, train)
 
 
 def main():
@@ -78,7 +105,7 @@ def main():
 
     model = ProjectionModel(train, device, launch_config={"train": dict(train), "machine": dict(machine)})
     npar = model.n_params()
-    print(f"[train] projection G {train['network.netG']} D {train['network.netD']} gan {train['loss.gan_mode']} "
+    print(f"[train] pipeline {train['pipeline.mode']} | projection G {train['network.netG']} D {train['network.netD']} gan {train['loss.gan_mode']} "
           f"lambda_fid {train['loss.lambda_fid']} lambda_id {train['loss.lambda_id']}→{train['loss.lambda_id_final']} over {train['loss.lambda_id_decay_epochs']} ep | "
           f"P {'on' if train['degrade.enabled'] else 'off'} | " + " ".join(f"{k} {v / 1e6:.2f}M" for k, v in npar.items())
           + f" | lr_G {model.lr_G:.2e} lr_D {model.lr_D:.2e} | precision {model.precision} | compile {model.compile_enabled}"
@@ -88,6 +115,8 @@ def main():
         model.resume(a.resume_state, a.epoch_count)
     else:
         model.make_schedulers(a.epoch_count)
+    if model.v4:
+        print(f"[train] Dn (frozen, fp32): {model.dn_source}")  # 実際に読んだ重み（resume は run 内の複製）
     total_iters = model.total_iters
     fixed = dataset.fixed_batch(train["log.n_images"])
     monitor = TrainMonitor(run_dir, train, len(dataset), fixed, dataset.eid_reference(), train["degrade.body_threshold_hu"])
@@ -123,7 +152,7 @@ def main():
             monitor.write(f"saving the model at the end of epoch {epoch}, iters {total_iters}")
             model.save(run_dir, "latest")
             model.save(run_dir, epoch)
-            monitor.save_full_images(model, learned_full(model, dataset.full_slices(epoch), train), epoch, total_iters)
+            monitor.save_full_images(model, full_for(model, dataset, epoch, train), epoch, total_iters)
             validator.run(model, epoch, total_iters)
             last_saved_epoch = epoch
         last_epoch = epoch
@@ -133,7 +162,7 @@ def main():
         monitor.write(f"saving the final model (epoch {last_epoch}, iters {total_iters})")
         model.save(run_dir, "latest")
         model.save(run_dir, last_epoch)
-        monitor.save_full_images(model, learned_full(model, dataset.full_slices(last_epoch), train), last_epoch, total_iters)
+        monitor.save_full_images(model, full_for(model, dataset, last_epoch, train), last_epoch, total_iters)
         validator.run(model, last_epoch, total_iters)
     if validator.enabled and validator.best_epoch is not None:
         monitor.write(f"[val] best: epoch {validator.best_epoch} (score {validator.best_score:.3f}){' → best/' if train['val.auto_best'] else ''}")

@@ -2,6 +2,11 @@
 # 書き方: 小数は必ず点を付ける（2.0e-4, 10.0）。真偽値は true / false。
 # 数値の出典: 論文 = Park et al. 2019（G / D / lr / batch / epoch / λ_fid）。degrade.* と λ_id は本研究の設計値で、EXP の事前登録で確定する
 # （degrade.* の範囲は bash start1_v3.sh <machine> stats の実測を含むように決める。ここの値は実測前の仮置き）。
+# pipeline.mode v4（2026-10-31、docs/decisions/20261031_stage1-v3-noise-path-analysis.md）: x → Dn（凍結）→ G → ⊛ k(z) → + σ ⊙ (h ⊛ ε)。v3 に戻すときは --pipeline_mode v3 --dn_weights ""
+
+pipeline:
+  mode: v4              # v3 | v4。resume で変えられない
+  dn_weights: /workspace/stage1_v3/checkpoints/denoiser/latest/net_Dn.pth   # v4: bash start1_v3.sh <machine> dn の最新の重み（run 開始時に run 内へ net_Dn.pth として複製）。v3 では ""
 
 optim:
   lr_G: 2.0e-4          # 論文 0.0002
@@ -32,6 +37,7 @@ degrade:                # 物理コア P（学習なし、スライスごとに�
   learned_noise_kernel_size: 9  # ノイズ整形フィルタ h(z) [px]
   learned_amp_ch: 16            # 振幅ネット σ(x)
   learned_sigma_max_hu: 100.0   # σ(x) の上限 [HU]
+  learned_sigma_min_hu: 22.7    # v4 のみ: σ(x) の下限 [HU] = 実 EID の一様 ROI 局所 SD 中央値（EXP-20261030-01 の stats）。v3 は無視
   bilateral_sigma_color_hu_min: 150.0   # mode bilateral_blur のみ。PCD のノイズ SD 93 HU の 2〜3 倍（実測前の仮置き。ponly + stats で local_sd / nps / edge_grad p90・p95・p99 を揃えて決める）
   bilateral_sigma_color_hu_max: 250.0
   bilateral_sigma_space_px_min: 1.5
@@ -89,3 +95,4 @@ val:                    # epoch ごとの自動採点（util/validator.py）。s
   n_eid_slices: 128     # 固定 実 EID スライス（参照統計、恒等残差）
   auto_best: true       # score 最良で best/ を自動更新
   target_ry_rms_hu: 20.0
+  target_fingerprint_sd_hu: 6.0   # v4 のみ: 指紋 SD（ε = 0 の u の局所 SD）の目標 [HU]（§3.3: 実 EID 22.7 の 1/4）。v3 は使わない
