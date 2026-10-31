@@ -65,5 +65,8 @@ check:                  # §6.4 の合否（dncheck と epoch ごとの check/*�
   n_slices: 64          # dncheck で測るスライス数
   body_threshold_hu: -500
   resid_sd_max_hu: 6.0        # 残留ノイズ: Dn(x) の一様 ROI 局所 SD ≤ 6 HU
-  edge_ratio_min: 0.8         # 縁の保持: edge_grad p90 / p95 / p99 が x の 0.8 倍以上
-  resid_edge_ratio_max: 3.0   # 残像: 残差の edge_grad p99 ≤ 残差 SD の 3 倍
+  edge_ref_p90_hu: 47.0       # 縁の保持: Dn(x) の edge_grad p90 / p95 / p99 ≥ 実 EID の中央値（stats 2026-10-31、EID_v5 200 枚: 47 / 74 / 149 HU/px）
+  edge_ref_p95_hu: 74.0       #   旧基準「x の 0.8 倍」は x の値がノイズの勾配で膨らむため完璧な Dn でも不合格になる（PCD x の p90 ≈ 154 はほぼノイズ）
+  edge_ref_p99_hu: 149.0
+  resid_edge_energy_max: 1.2  # 残像: Dn(x) の縁（体内 |∇| 上位 5 %）での RMS(x − Dn(x)) ÷ 縁から離れた体内の RMS。ノイズだけ除けば 1、縁を鈍らせると > 1（合成: 縁の残像 8 HU → 1.07、27 HU → 1.55）
+                              #   旧基準「残差の edge_grad p99 ≤ 残差 SD × 3」は純ノイズ場でも ≈ 3.5 で不合格が確定していた。1.2 は暫定で、BM3D 対照の実測で見直す

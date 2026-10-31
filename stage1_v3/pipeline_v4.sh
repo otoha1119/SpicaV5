@@ -22,7 +22,7 @@ set -e
 DNCHECK_DIR="$(sed -n 's/^\[dncheck\] -> //p' "$TMP/dncheck.log" | tail -1)"
 if [ "$RC" -ne 0 ]; then
   case "$RC" in
-    1) echo "[v4] Dn が合否表を通りません（上の FAIL 行）。v4 の学習は始めません。denoise.yaml（cell_size / min_dist / epoch）を見直して dn を回し直すか、dncheck --weights で別の重みを選ぶ" >&2 ;;
+    1) echo "[v4] Dn が合否表を通りません（上の FAIL 行）。v4 の学習は始めません。denoise.yaml（dn.method、blindspot.radius / stride、epoch）を見直して dn を回し直すか、dncheck --method bm3d と比べるか、dncheck --weights で別の重みを選ぶ" >&2 ;;
     2) echo "[v4] dncheck の設定エラー（終了コード 2。上の [dncheck] 設定エラー 行）。denoise.yaml / machines.yaml を直す" >&2 ;;
     *) echo "[v4] dncheck が例外で止まりました（終了コード ${RC}。上の traceback）" >&2 ;;
   esac

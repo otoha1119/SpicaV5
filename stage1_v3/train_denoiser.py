@@ -39,7 +39,7 @@ from configs.schema import DENOISE, MACHINE, ConfigError, apply_overrides, check
 from data.dataset import write_png  # noqa: E402
 from data.denoise_dataset import DenoiseDataset  # noqa: E402
 from models.denoiser import DenoiserUNet, blindspot_loss, n2n_loss, receptive_field, save_denoiser  # noqa: E402
-from util.dn_check import SUMMARY_KEYS, evaluate_denoiser, make_denoise_fn  # noqa: E402
+from util.dn_check import LINE_KEYS, SUMMARY_KEYS, evaluate_denoiser, make_denoise_fn  # noqa: E402
 from util.panel import build_panel  # noqa: E402
 from util.residual_color import residual_rgb01, rgb_to_bgr  # noqa: E402
 from util.run_paths import DATASET_INFO_FILE, DN_WEIGHT, LAUNCH_FILE, LOSS_LOG_FILE, STAGE, TB_DIR, WEIGHTS_DIR, checkpoints_root, denoiser_latest_dir, denoiser_run_dir, epoch_dirname, epoch_images_dir, run_name  # noqa: E402
@@ -237,7 +237,7 @@ def main():
                 tb.add_image(f"images/preview_{i}", (np.clip(small, 0, 1) * 255.0).round().astype(np.uint8), total_steps, dataformats="HWC")
         means = {k: v / max(n_sum, 1) for k, v in sums.items()}
         line = (f"dn {method} epoch {epoch}/{n_epochs} | " + " ".join(f"{k} {v:.6f}" for k, v in means.items()) + (f" | gamma {gamma:.2f}" if method == "n2n" else "") + f" lr {lr:.1e} | "
-                + " ".join(f"{k} {summary[k]:.2f}" for k in ("resid_sd_HU", "edge_ratio_p90", "edge_ratio_p99", "resid_edge_ratio")) + f" ({summary['n_valid']}/{summary['n_slices']} slices) | {time.time() - t_epoch:.0f}s")
+                + " ".join(f"{k} {summary[k]:.2f}" for k in LINE_KEYS) + f" ({summary['n_valid']}/{summary['n_slices']} slices) | {time.time() - t_epoch:.0f}s")
         tqdm.write(line)
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")

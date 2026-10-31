@@ -11,6 +11,9 @@
     (c) 体内 HU の p50 / p90 / p99、体外の平均
   body_mask(hu, thr): 体内（浸食済み）の bool マスク
   residual_edge_ratio(resid, body, roi_yx): 残差 x − Dn(x) の「残像」指標（決定 §6.4）= 体内 edge_grad p99 ÷ 一様 ROI の SD。戻り値 (ratio, resid_sd, resid_edge_p99)
+    この比は純ノイズ場でも 0 にならず（Gaussian 場の |∇| p99 / SD はスペクトル形で決まり、PCD の相関ノイズで ≈ 3.5）、縁沿いの残像が体内の 1 % 未満なら p99 は動かない。参考値
+  residual_edge_energy_ratio(resid, xc, body, top, band): 残像の判定（決定 §6.4 改訂）= Dn(x) の縁（体内 |∇xc| 上位 top）での RMS(resid) ÷ 縁から band px 以上離れた体内の RMS(resid)。
+    Dn がノイズだけを除いていれば残差は縁と無関係で ≈ 1。Dn が縁を鈍らせる（細い血管を消す）と残差が縁に集中して > 1（合成で確認: 縁の残像 RMS 8 HU → 1.07、27 HU → 1.55）
   noise_psd(resid_rois, size): 一様 ROI のトレンド除去後ノイズ（analyze_slice の noise_rois、(n, ROI, ROI)）の平均ペリオドグラム → bm3d の規約の (size, size) PSD
     bm3d（PyPI、Mäkinen / Azzari / Foi）の sigma_psd は E|FFT2(noise)|²（fftshift なし、DC が [0,0]）。白色 σ なら一定 σ²·N·M（bm3d が float σ を内部で展開する値と同じ。
     実測で確認: float σ と σ²·N·M の PSD で出力が一致）。ROI の 32×32 ペリオドグラム P32 = mean|FFT2(roi)|² は同じ規約の 32×32 版なので、
@@ -86,6 +89,18 @@ def residual_edge_ratio(resid, body, roi_yx):
     sd = float(np.mean([resid[y : y + ROI, x : x + ROI].std() for y, x in roi_yx]))
     p99 = float(np.percentile(gradient_magnitude(np.ascontiguousarray(resid, dtype=np.float32))[body], 99))
     return p99 / max(sd, 1e-6), sd, p99
+
+
+def residual_edge_energy_ratio(resid, xc, body, top=0.05, band=2):
+    """残差の縁への集中度。xc = Dn(x)（HU）の体内 |∇| 上位 top（割合）を縁とし、RMS(resid | 縁) ÷ RMS(resid | 縁から band px 以上離れた体内)。戻り値 (ratio, rms_edge, rms_far)。"""
+    gm = gradient_magnitude(np.ascontiguousarray(xc, dtype=np.float32))
+    thr = np.percentile(gm[body], 100.0 * (1.0 - top))
+    edge = (gm >= thr) & body
+    far = body & ~cv2.dilate(edge.astype(np.uint8), np.ones((2 * band + 1, 2 * band + 1), np.uint8)).astype(bool)
+    if edge.sum() < 16 or far.sum() < 16:
+        return float("nan"), float("nan"), float("nan")
+    rms_edge, rms_far = float(np.sqrt((resid[edge] ** 2).mean())), float(np.sqrt((resid[far] ** 2).mean()))
+    return rms_edge / max(rms_far, 1e-6), rms_edge, rms_far
 
 
 def noise_psd(resid_rois, size):
