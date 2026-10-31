@@ -139,7 +139,9 @@ case "$ACTION" in
   infer) exec_it spicav5 bash stage1_v3/infer.sh "$@" ;;
   ponly) exec_it spicav5 bash stage1_v3/ponly.sh "$@" ;;
   stats) exec_it spicav5 bash stage1_v3/stats.sh "$@" ;;
-  dn) exec_it spicav5 bash stage1_v3/denoise.sh "$@" ;;
+  dn)
+    tb_kill
+    exec_it -e SPICA_TB_PORT="$TB_PORT" spicav5 bash stage1_v3/denoise.sh "$@" ;;
   dncheck) exec_it spicav5 bash stage1_v3/dncheck.sh "$@" ;;
   v4)
     tb_kill

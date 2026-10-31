@@ -137,6 +137,13 @@ def main():
 
     fixed = dataset.fixed_slices(dn["log.n_preview"])
     tb = SummaryWriter(log_dir=str(run_dir / TB_DIR))
+    if os.environ.get("SPICA_TB_PORT"):  # bash start1_v3.sh <machine> dn / v4 から起動したとき: この run の tb を同じポートで配信（v4 通しでは後段の run_train が同じポートで自分の run に切り替える。全 run は bash start1_v3.sh <machine> tb）
+        from run_train import start_tensorboard
+        try:
+            start_tensorboard(run_dir, int(os.environ["SPICA_TB_PORT"]))
+        except ConfigError as e:
+            print(f"[dn] 設定エラー: {e}", file=sys.stderr)
+            sys.exit(2)
     log_path = run_dir / LOSS_LOG_FILE
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"================ Denoiser Training ({time.strftime('%Y-%m-%d %H:%M:%S')}) ================\n")
