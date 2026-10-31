@@ -9,7 +9,7 @@
 # 書き方: 小数は必ず点を付ける。真偽値は true / false。
 
 dn:
-  method: blindspot     # n2n | blindspot | bm3d。n2n.* / blindspot.* / bm3d.* は該当方式だけが使う（キーは全部要る）
+  method: bm3d          # n2n | blindspot | bm3d。2026-10-31 に bm3d を採用（blind-spot r=3 は縁を削る: 残像 2.44。bm3d 1.0 倍は残像 0.90）。n2n.* / blindspot.* / bm3d.* は該当方式だけが使う（キーは全部要る）
 
 data:
   input_dir: /workspace/DataSet/PCD512_v2   # PCD512（実 EID には掛けない）
@@ -35,7 +35,7 @@ blindspot:              # method blindspot のみ（フル解像度。1 patch �
   loss: l2              # 中心画素だけの L2
 
 bm3d:                   # method bm3d のみ（dnfixed / dncheck --method bm3d。dn では使えない）
-  psd_path: ""          # stats の noise_psd_<入力名>.npy（dnfixed のとき必須）
+  psd_path: /workspace/output/stage1_v3/stats_2026_1031_184701/noise_psd_PCD512_v2.npy   # stats の noise_psd_<入力名>.npy（PC1、200 枚、白色換算 σ 95.1 HU）。別マシンでは stats を取り直して --psd_path
   profile: np           # np | refilter
   sigma_scale: 1.0      # 実測 PSD の振幅倍率。64 枚（2026-10-31）: 1.0 = 残留 SD 16.2 HU・残像 0.90・縁 62/112/365、1.5 = 9.9・1.15・42/97/344、2.0 = 9.2・1.35・35/90/322（縁を削る）。refilter は np と同じ。1.0 を採用
 
