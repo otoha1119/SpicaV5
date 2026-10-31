@@ -124,10 +124,10 @@ def main():
     offset = dn["data.hu_offset"]
     hu_norm = (offset, dn["data.hu_min"], dn["data.hu_max"])
     if method == "bm3d":
-        fixed = BM3DDenoiser(dn["bm3d.psd_path"], dn["bm3d.profile"], dn["data.hu_min"], dn["data.hu_max"])
-        denoise, label = fixed, f"bm3d {dn['bm3d.profile']}"
+        fixed = BM3DDenoiser(dn["bm3d.psd_path"], dn["bm3d.profile"], dn["data.hu_min"], dn["data.hu_max"], dn["bm3d.sigma_scale"])
+        denoise, label = fixed, f"bm3d {dn['bm3d.profile']} x{dn['bm3d.sigma_scale']:g}"
         dn_desc = {"method": "bm3d", **fixed.info()}
-        dn_text = f"bm3d profile {dn['bm3d.profile']} psd {fixed.psd_path}（白色換算 σ {fixed.sigma_white_hu:.1f} HU）"
+        dn_text = f"bm3d profile {dn['bm3d.profile']} sigma_scale {dn['bm3d.sigma_scale']:g} psd {fixed.psd_path}（白色換算 σ {fixed.sigma_white_hu:.1f} HU）"
     else:
         net = load_denoiser(weights, device)
         denoise, label = make_denoise_fn(net, device, hu_norm), weights.parent.name

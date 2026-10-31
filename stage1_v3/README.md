@@ -57,7 +57,7 @@ bash start1_v3.sh <machine> dn [--n_epochs 50 --method blindspot --bs_radius 3 -
 bash start1_v3.sh <machine> dncheck [--weights PATH] [--method bm3d --psd_path P] [--input_dir DIR] [--n_slices N]   # Dn の合否。--weights 省略時は train.yaml の pipeline.dn_weights。--method bm3d は固定 denoiser を同じ表に掛ける
 # precomputed 経路（BM3D 対照）: stats（PSD）→ dnfixed → dncheck --method bm3d → train --dn_source precomputed
 bash start1_v3.sh <machine> dnfixed --input_dir /workspace/DataSet/PCD512_v2 --psd_path /workspace/output/stage1_v3/stats_<時刻>/noise_psd_PCD512_v2.npy [--max_slices 0 --workers 8]
-bash start1_v3.sh <machine> dncheck --method bm3d --psd_path /workspace/output/stage1_v3/stats_<時刻>/noise_psd_PCD512_v2.npy
+bash start1_v3.sh <machine> dncheck --method bm3d --psd_path /workspace/output/stage1_v3/stats_<時刻>/noise_psd_PCD512_v2.npy [--sigma_scale 1.5] [--bm3d_profile refilter]   # sigma_scale = 実測 PSD の振幅倍率（1.0 で残留 SD 16 HU、残像 0.90）
 bash start1_v3.sh <machine> --pipeline_mode v4 --dn_source precomputed --dn_dir /workspace/output/stage1_v3/dnfixed_PCD512_v2_<時刻> --dn_weights ""
 bash start1_v3.sh <machine> --dn_weights /workspace/stage1_v3/checkpoints/denoiser/<run>/latest/net_Dn.pth   # 学習だけ（train.yaml が v4 なので dn_weights を選ぶ）
 bash start1_v3.sh <machine> --pipeline_mode v3 --dn_weights ""              # 従来の v3

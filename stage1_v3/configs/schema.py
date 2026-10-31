@@ -179,6 +179,7 @@ DENOISE = {
     "blindspot.loss":        Key(str,   "--bs_loss",         "blindspot のみ: 中心画素だけで取る損失 l2 | l1（N2V は L2）"),
     "bm3d.psd_path":         Key(str,   "--psd_path",        "bm3d のみ: stats が書くノイズ PSD の .npy（output/stage1_v3/stats_<時刻>/noise_psd_<入力名>.npy。画像と同じ H×W、bm3d の規約 = E|FFT2(noise)|²、DC が [0,0]）。空文字は不可（dnfixed / dncheck --method bm3d で存在必須）"),
     "bm3d.profile":          Key(str,   "--bm3d_profile",    "bm3d のみ: bm3d.bm3d(z, sigma_psd, profile) にそのまま渡す np | refilter"),
+    "bm3d.sigma_scale":      Key(float, "--sigma_scale",     "bm3d のみ: 実測 PSD を sigma_scale² 倍して渡す（ノイズ振幅を sigma_scale 倍と見なす）。1.0 = 実測どおり。> 1 で強めに除去（残留 SD ↓、細い構造を削るおそれ → dncheck の resid_edge_energy で見る）"),
     "model.ch":              Key(int,   "--ch",              "U-Net の基本チャネル数（論文 48）"),
     "model.n_levels":        Key(int,   "--n_levels",        "U-Net の down / up の段数（2 倍ずつ。論文は 3 段相当）"),
     "optim.lr":              Key(float, "--lr",              "Adam の学習率（論文 3e-4）"),
@@ -549,6 +550,7 @@ def check_denoise_values(dn, machine):
         if ps % m: P.append(f"blindspot では data.patch_size ({ps}) は 2^n_levels = {m} の倍数（フル解像度で U-Net に通す）")
         if ps < 2 * (2 * r + 1) + st: P.append(f"blindspot では data.patch_size ({ps}) ≥ 2·(2r+1) + stride = {2 * (2 * r + 1) + st}（環が画像内に収まる中心が 1 つは要る）")
     if dn["bm3d.profile"] not in BM3D_PROFILES: P.append(f"bm3d.profile は {BM3D_PROFILES}")
+    if not (dn["bm3d.sigma_scale"] > 0): P.append("bm3d.sigma_scale は正（1.0 = 実測 PSD どおり）")
     if method == "bm3d" and not dn["bm3d.psd_path"]: P.append("dn.method bm3d では bm3d.psd_path（stats の noise_psd_<入力名>.npy）を指定（空文字は不可）")
     if dn["data.patches_per_slice"] < 1: P.append("data.patches_per_slice ≥ 1")
     bs = dn["optim.batch_size"]

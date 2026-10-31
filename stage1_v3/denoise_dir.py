@@ -46,9 +46,9 @@ def split_local(tokens):
     return local, rest
 
 
-def _init(psd_path, profile, hu_min, hu_max):
+def _init(psd_path, profile, hu_min, hu_max, sigma_scale):
     global _FIXED
-    _FIXED = BM3DDenoiser(psd_path, profile, hu_min, hu_max)
+    _FIXED = BM3DDenoiser(psd_path, profile, hu_min, hu_max, sigma_scale)
 
 
 def _work(args):
@@ -104,14 +104,14 @@ def main():
         print(f"[dnfixed] 設定エラー: 出力先が既に存在します: {out_dir}", file=sys.stderr)
         sys.exit(2)
     offset, hu_min, hu_max = dn["data.hu_offset"], dn["data.hu_min"], dn["data.hu_max"]
-    fixed = BM3DDenoiser(dn["bm3d.psd_path"], dn["bm3d.profile"], hu_min, hu_max)  # 設定の検査（PSD の形）はここで 1 回
+    fixed = BM3DDenoiser(dn["bm3d.psd_path"], dn["bm3d.profile"], hu_min, hu_max, dn["bm3d.sigma_scale"])  # 設定の検査（PSD の形）はここで 1 回
     idx = CaseIndex(input_dir, checkpoints_root(machine) / ".case_index")
     paths = idx.all_paths if max_slices == 0 else idx.all_paths[:max_slices]
     out_dir.mkdir(parents=True)
-    print(f"[dnfixed] bm3d profile {dn['bm3d.profile']} | PSD {fixed.psd_path} {fixed.psd.shape}（白色換算 σ {fixed.sigma_white_hu:.1f} HU, sha256 {fixed.psd_sha256[:12]}…）"
+    print(f"[dnfixed] bm3d profile {dn['bm3d.profile']} sigma_scale {dn['bm3d.sigma_scale']} | PSD {fixed.psd_path} {fixed.psd.shape}（白色換算 σ {fixed.sigma_white_hu:.1f} HU, sha256 {fixed.psd_sha256[:12]}…）"
           f" | {input_dir} ({idx.n_cases} cases, {len(paths)}/{idx.n_slices} slices) → {out_dir} | workers {workers}", flush=True)
     jobs = [(pth, out_dir / "full" / Path(pth).relative_to(input_dir), str(Path(pth).relative_to(input_dir)), offset) for pth in paths]
-    init_args = (dn["bm3d.psd_path"], dn["bm3d.profile"], hu_min, hu_max)
+    init_args = (dn["bm3d.psd_path"], dn["bm3d.profile"], hu_min, hu_max, dn["bm3d.sigma_scale"])
     results, t0 = [], time.time()
     bar = tqdm(total=len(jobs), unit="slice", dynamic_ncols=True)
     try:

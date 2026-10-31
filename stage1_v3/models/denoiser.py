@@ -32,7 +32,7 @@
       L_rec = ‖f(g1(y)) − g2(y)‖²、Δ = g1(f(y)) − g2(f(y))（勾配停止、フル解像度で denoise してから sub-sample）、L_reg = ‖f(g1(y)) − g2(y) − Δ‖²
       compile 対策（9bd30de と同じ CUDA Graph の出力上書き）: 勾配側の forward の出力は直後に diff = f(g1(y)) − g2(y) と L_rec に消費してから、
       勾配なしのフル解像度 forward は compile していない net_full（同じ重み）で行う。compile した module を 1 step に 2 回呼ばない
-  BM3DDenoiser(psd_path, profile, hu_min, hu_max): HU の 2 次元配列 → bm3d.bm3d(hu, psd, profile) → [hu_min, hu_max] に clip。PSD は画像と同じ H×W
+  BM3DDenoiser(psd_path, profile, hu_min, hu_max, sigma_scale): HU の 2 次元配列 → bm3d.bm3d(hu, psd, profile) → [hu_min, hu_max] に clip。PSD は画像と同じ H×W
       （bm3d の規約: sigma_psd[f] = E|FFT2(noise)|²。白色 σ なら一定値 σ²·H·W = bm3d が float σ を内部で展開する値と同じ。DC が [0,0]、fftshift しない）
   net_Dn.pth の形式: {"model": {"ch", "n_levels"}, "state_dict"}（save_denoiser / load_denoiser。読む側が denoise.yaml を持たなくても組める）
 """
@@ -282,9 +282,10 @@ def sha256_of(path):
 
 class BM3DDenoiser:
     """bm3d.bm3d(hu, psd, profile) を HU のまま掛ける（BM3D の閾値は sqrt(PSD) に比例するので単位はほぼ無関係。合成データで HU のまま と /1000 に縮めて掛けた結果の差は最大 3 HU、残差 RMS 54 HU）。出力は [hu_min, hu_max] に clip。
-    psd: util/metrics.noise_psd が書いた (H, W) の .npy（bm3d の規約 = E|FFT2(noise)|²、DC が [0,0]）。画像サイズと一致しなければエラー。"""
+    psd: util/metrics.noise_psd が書いた (H, W) の .npy（bm3d の規約 = E|FFT2(noise)|²、DC が [0,0]）。画像サイズと一致しなければエラー。
+    sigma_scale: PSD を sigma_scale² 倍して渡す（= ノイズ振幅を sigma_scale 倍と見なす）。1.0 で実測どおり、> 1 で強めに除去（残留 SD を下げる代わりに細い構造を削るおそれ。dncheck の残像で見る）。"""
 
-    def __init__(self, psd_path, profile, hu_min, hu_max):
+    def __init__(self, psd_path, profile, hu_min, hu_max, sigma_scale):
         try:
             import bm3d  # noqa: F401
         except ImportError as e:
@@ -295,7 +296,10 @@ class BM3DDenoiser:
         psd = np.load(self.psd_path)
         if psd.ndim != 2 or psd.shape[0] != psd.shape[1] or not np.isfinite(psd).all() or (psd < 0).any():
             raise ValueError(f"PSD は有限・非負の正方 2 次元配列: {self.psd_path} {psd.shape}")
-        self.psd = psd.astype(np.float64)
+        if not (sigma_scale > 0):
+            raise ValueError(f"bm3d.sigma_scale は正: {sigma_scale}")
+        self.sigma_scale = float(sigma_scale)
+        self.psd = psd.astype(np.float64) * self.sigma_scale ** 2  # 振幅を sigma_scale 倍と見なす（> 1 で強めに除去。BM3D の閾値は sqrt(PSD) に比例）
         self.psd_sha256 = sha256_of(self.psd_path)
         self.profile = profile
         self.hu_min, self.hu_max = float(hu_min), float(hu_max)
@@ -303,7 +307,7 @@ class BM3DDenoiser:
 
     def info(self):
         return {"method": "bm3d", "psd_path": str(self.psd_path), "psd_sha256": self.psd_sha256, "psd_shape": list(self.psd.shape), "profile": self.profile,
-                "sigma_white_equiv_hu": self.sigma_white_hu, "hu_min": self.hu_min, "hu_max": self.hu_max}
+                "sigma_scale": self.sigma_scale, "sigma_white_equiv_hu": self.sigma_white_hu, "hu_min": self.hu_min, "hu_max": self.hu_max}
 
     def __call__(self, hu):
         import bm3d

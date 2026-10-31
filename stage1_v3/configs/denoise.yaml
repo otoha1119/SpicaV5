@@ -37,6 +37,7 @@ blindspot:              # method blindspot のみ（フル解像度。1 patch �
 bm3d:                   # method bm3d のみ（dnfixed / dncheck --method bm3d。dn では使えない）
   psd_path: ""          # stats の noise_psd_<入力名>.npy（dnfixed のとき必須）
   profile: np           # np | refilter
+  sigma_scale: 1.0      # 実測 PSD の振幅倍率。1.0 で 64 枚: 残留 SD 16.2 HU、残像 0.90、縁 62 / 112 / 365（2026-10-31）。> 1 で強めに除去
 
 model:
   ch: 48                # 論文の U-Net 幅
