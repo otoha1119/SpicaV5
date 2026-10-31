@@ -3,7 +3,10 @@ check_denoiser.py（dncheck）と train_denoiser.py（epoch ごとの check/*）
 
   evaluate_denoiser(denoise, hus, hu_norm, thr) → rows（スライスごと）と summary（中央値）。denoise は HU (H,W) → HU の callable
     （学習型は make_denoise_fn(net, device, hu_norm) = denoise_slice、固定は models/denoiser.BM3DDenoiser）
-    (a) 残留ノイズ  resid_sd_HU        = Dn(x) の一様 ROI 局所 SD（util/metrics.analyze_slice と同じ ROI の取り方）
+    (a) 残留ノイズ  resid_sd_blur_HU   = Dn(x) に Gaussian σ = check.blur_sigma_px を掛けてから測った一様 ROI 局所 SD（util/metrics.analyze_slice と同じ ROI の取り方）。
+                    合格は ≤ check.resid_sd_max_hu。v4 の判定「指紋 SD（ε = 0 の u の一様 ROI 局所 SD ≤ 6 HU）」の先読み: u = Dn(x) ⊛ k(z) なので、校正済みのぼかし
+                    （固定 P の Gaussian σ ≈ 1.9 px）を掛けた後の残留が指紋になる。Dn(x) そのものの 6 HU は BM3D でも縁を削らずには届かない（2026-10-31: 1.0 倍 16 HU、2.0 倍 9 HU で縁が落ちる）
+                    resid_sd_HU        = Dn(x) そのものの一様 ROI 局所 SD（参考）
     (b) 縁の保持    dn_edge_grad_p90/95/99 = Dn(x) の edge_grad pXX [HU/px]。合格は実 EID の中央値（check.edge_ref_pXX_hu、stats の EID の値）以上
                     edge_ratio_p90/95/99 = Dn(x) ÷ x の同値（参考。x の pXX はノイズの勾配で膨らむので、完璧な Dn でも 1 にならない。判定には使わない）
     (c) 残像        resid_edge_energy  = Dn(x) の縁（体内 |∇Dn(x)| 上位 5 %）での RMS(x − Dn(x)) ÷ 縁から 2 px 以上離れた体内の RMS（util/metrics.residual_edge_energy_ratio）。
@@ -15,6 +18,7 @@ check_denoiser.py（dncheck）と train_denoiser.py（epoch ごとの check/*）
   計測はすべて FP32（autocast なし）。正規化単位 1 = 2748 HU なので bf16 の量子化段差は軟部組織で 5〜11 HU になり、6 HU の閾値に対して無視できない
 """
 
+import cv2
 import numpy as np
 import torch
 
@@ -22,9 +26,9 @@ from data.dataset import hu_to_norm
 from util.metrics import analyze_slice, body_mask, residual_edge_energy_ratio, residual_edge_ratio
 
 EDGE_KEYS = ("edge_grad_p90", "edge_grad_p95", "edge_grad_p99")
-SUMMARY_KEYS = ("resid_sd_HU", "dn_edge_grad_p90", "dn_edge_grad_p95", "dn_edge_grad_p99", "resid_edge_energy", "resid_edge_ratio",
+SUMMARY_KEYS = ("resid_sd_blur_HU", "resid_sd_HU", "dn_edge_grad_p90", "dn_edge_grad_p95", "dn_edge_grad_p99", "resid_edge_energy", "resid_edge_ratio",
                 "edge_ratio_p90", "edge_ratio_p95", "edge_ratio_p99", "dn_resid_rms_HU", "x_local_sd_HU")
-LINE_KEYS = ("resid_sd_HU", "dn_edge_grad_p90", "dn_edge_grad_p99", "resid_edge_energy")  # 学習ログの 1 行に出す分
+LINE_KEYS = ("resid_sd_blur_HU", "resid_sd_HU", "dn_edge_grad_p90", "dn_edge_grad_p99", "resid_edge_energy")  # 学習ログの 1 行に出す分
 EDGE_TOP, EDGE_BAND = 0.05, 2
 
 
@@ -44,8 +48,9 @@ def make_denoise_fn(net, device, hu_norm):
     return lambda hu: denoise_slice(net, hu, device, hu_norm)
 
 
-def evaluate_denoiser(denoise, hus, hu_norm, thr, seed=0, return_images=False):
-    """denoise: HU (H,W) float32 → HU。hus: HU の ndarray のリスト。戻り値 (rows, summary[, images])。rows は None（体内が足りない）を含みうる。"""
+def evaluate_denoiser(denoise, hus, hu_norm, thr, blur_sigma_px, seed=0, return_images=False):
+    """denoise: HU (H,W) float32 → HU。hus: HU の ndarray のリスト。blur_sigma_px: 残留ノイズを測る前に Dn(x) に掛ける Gaussian σ [px]。
+    戻り値 (rows, summary[, images])。rows は None（体内が足りない）を含みうる。"""
     rng = np.random.default_rng(seed)
     rows, images = [], []
     hu_min, hu_max = hu_norm[1], hu_norm[2]
@@ -54,13 +59,14 @@ def evaluate_denoiser(denoise, hus, hu_norm, thr, seed=0, return_images=False):
         x = np.clip(hu, hu_min, hu_max).astype(np.float32)
         resid = x - xc
         ax, ac = analyze_slice(x, thr, rng), analyze_slice(xc, thr, rng)
-        if ax is None or ac is None:
+        ab = analyze_slice(cv2.GaussianBlur(xc, (0, 0), blur_sigma_px), thr, rng)
+        if ax is None or ac is None or ab is None:
             rows.append(None)
         else:
             body = body_mask(x, thr)
             ratio, sd, p99 = residual_edge_ratio(resid, body, ax["roi_yx"])
             er, rms_edge, rms_far = residual_edge_energy_ratio(resid, xc, body, EDGE_TOP, EDGE_BAND)
-            row = {"resid_sd_HU": ac["local_sd"], "x_local_sd_HU": ax["local_sd"], "resid_edge_energy": er, "resid_rms_edge_HU": rms_edge, "resid_rms_far_HU": rms_far,
+            row = {"resid_sd_blur_HU": ab["local_sd"], "resid_sd_HU": ac["local_sd"], "x_local_sd_HU": ax["local_sd"], "resid_edge_energy": er, "resid_rms_edge_HU": rms_edge, "resid_rms_far_HU": rms_far,
                    "resid_edge_ratio": ratio, "resid_roi_sd_HU": sd, "resid_edge_p99": p99,
                    "dn_resid_rms_HU": float(np.sqrt((resid[body] ** 2).mean()))}
             for k in EDGE_KEYS:
@@ -80,8 +86,8 @@ def evaluate_denoiser(denoise, hus, hu_norm, thr, seed=0, return_images=False):
 def judge(summary, dn):
     """§6.4 の表（2026-10-31 改訂）。{名前: (値, 閾値の説明, PASS)}。"""
     res = {}
-    v = summary["resid_sd_HU"]
-    res["resid_sd_HU"] = (v, f"<= {dn['check.resid_sd_max_hu']}", bool(np.isfinite(v) and v <= dn["check.resid_sd_max_hu"]))
+    v = summary["resid_sd_blur_HU"]
+    res["resid_sd_blur_HU"] = (v, f"<= {dn['check.resid_sd_max_hu']}", bool(np.isfinite(v) and v <= dn["check.resid_sd_max_hu"]))
     for q in ("p90", "p95", "p99"):
         v, ref = summary["dn_edge_grad_" + q], dn[f"check.edge_ref_{q}_hu"]
         res["dn_edge_grad_" + q] = (v, f">= {ref}", bool(np.isfinite(v) and v >= ref))

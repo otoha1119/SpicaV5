@@ -137,7 +137,7 @@ def main():
     paths = evenly_spaced(idx.all_paths, dn["check.n_slices"])
     print(f"[dncheck] method {method} | {dn_text} | {input_dir}: {idx.n_cases} cases, {len(paths)}/{idx.n_slices} slices | device {device}")
     hus = [stored_to_hu(read_stored(p), offset) for p in paths]
-    rows, summary, images = evaluate_denoiser(denoise, hus, hu_norm, float(dn["check.body_threshold_hu"]), seed=dn["data.patch_seed"], return_images=True)
+    rows, summary, images = evaluate_denoiser(denoise, hus, hu_norm, float(dn["check.body_threshold_hu"]), dn["check.blur_sigma_px"], seed=dn["data.patch_seed"], return_images=True)
     res = judge(summary, dn)
     table = format_table(res)
     for i, (pth, (x, xc, resid)) in enumerate(zip(paths, images)):

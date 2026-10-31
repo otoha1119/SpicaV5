@@ -225,7 +225,7 @@ def main():
             ep_dir.mkdir(parents=True, exist_ok=True)
             save_denoiser(net, ep_dir / DN_WEIGHT)
         # ---- preview と check/*
-        rows, summary, images = evaluate_denoiser(make_denoise_fn(net, device, hu_norm), fixed["hu"], hu_norm, thr, seed=dn["data.patch_seed"], return_images=True)
+        rows, summary, images = evaluate_denoiser(make_denoise_fn(net, device, hu_norm), fixed["hu"], hu_norm, thr, dn["check.blur_sigma_px"], seed=dn["data.patch_seed"], return_images=True)
         for k in SUMMARY_KEYS:
             tb.add_scalar(f"check/{k}", summary[k], total_steps)
         out_dir = epoch_images_dir(run_dir, epoch)

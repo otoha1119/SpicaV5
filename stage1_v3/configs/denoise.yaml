@@ -37,7 +37,7 @@ blindspot:              # method blindspot のみ（フル解像度。1 patch �
 bm3d:                   # method bm3d のみ（dnfixed / dncheck --method bm3d。dn では使えない）
   psd_path: ""          # stats の noise_psd_<入力名>.npy（dnfixed のとき必須）
   profile: np           # np | refilter
-  sigma_scale: 1.0      # 実測 PSD の振幅倍率。1.0 で 64 枚: 残留 SD 16.2 HU、残像 0.90、縁 62 / 112 / 365（2026-10-31）。> 1 で強めに除去
+  sigma_scale: 1.0      # 実測 PSD の振幅倍率。64 枚（2026-10-31）: 1.0 = 残留 SD 16.2 HU・残像 0.90・縁 62/112/365、1.5 = 9.9・1.15・42/97/344、2.0 = 9.2・1.35・35/90/322（縁を削る）。refilter は np と同じ。1.0 を採用
 
 model:
   ch: 48                # 論文の U-Net 幅
@@ -65,7 +65,8 @@ log:
 check:                  # §6.4 の合否（dncheck と epoch ごとの check/*）
   n_slices: 64          # dncheck で測るスライス数
   body_threshold_hu: -500
-  resid_sd_max_hu: 6.0        # 残留ノイズ: Dn(x) の一様 ROI 局所 SD ≤ 6 HU
+  blur_sigma_px: 1.9          # 残留ノイズは Dn(x) に Gaussian σ 1.9 px（固定 P の校正 1.4〜2.4 の中央）を掛けてから測る = v4 の指紋 SD（ε = 0 の u）の先読み
+  resid_sd_max_hu: 6.0        # 残留ノイズ: Dn(x) ⊛ Gaussian の一様 ROI 局所 SD ≤ 6 HU。Dn(x) そのもので 6 は BM3D でも縁を削らずには届かない（1.0 倍 16 HU、2.0 倍 9 HU で p90 の縁 35 < 47）
   edge_ref_p90_hu: 47.0       # 縁の保持: Dn(x) の edge_grad p90 / p95 / p99 ≥ 実 EID の中央値（stats 2026-10-31、EID_v5 200 枚: 47 / 74 / 149 HU/px）
   edge_ref_p95_hu: 74.0       #   旧基準「x の 0.8 倍」は x の値がノイズの勾配で膨らむため完璧な Dn でも不合格になる（PCD x の p90 ≈ 154 はほぼノイズ）
   edge_ref_p99_hu: 149.0

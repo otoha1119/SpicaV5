@@ -199,7 +199,8 @@ DENOISE = {
     "log.diff_range_hu":     Key(int,   "--diff_range_hu",   "残差 x − Dn(x) のカラー表示の ±範囲 HU（PCD のノイズ SD ≈ 93 HU）"),
     "check.n_slices":        Key(int,   "--n_slices",        "check_denoiser.py（dncheck）で測るスライス数（症例列挙から等間隔）"),
     "check.body_threshold_hu": Key(int, "--body_threshold_hu", "一様 ROI・エッジを測る体内判定の HU 閾値（train.yaml degrade.body_threshold_hu と同じ −500）"),
-    "check.resid_sd_max_hu": Key(float, "--resid_sd_max_hu", "合格: Dn(x) の一様 ROI 局所 SD の中央値 ≤ これ [HU]（§6.4: 実 EID 22.7 の 1/4 = 6）"),
+    "check.blur_sigma_px":   Key(float, "--blur_sigma_px",   "残留ノイズを測る前に Dn(x) に掛ける Gaussian σ [px]（§6.4 改訂: v4 の u = Dn(x) ⊛ k(z) の指紋 SD を先読みする。固定 P の校正値 1.4〜2.4 の中央 1.9）"),
+    "check.resid_sd_max_hu": Key(float, "--resid_sd_max_hu", "合格: Dn(x) ⊛ Gaussian(blur_sigma_px) の一様 ROI 局所 SD の中央値 ≤ これ [HU]（§6.4: 指紋 SD と同じ 6 = 実 EID 22.7 の 1/4。Dn(x) そのものの値は参考 resid_sd_HU）"),
     "check.edge_ref_p90_hu": Key(float, "--edge_ref_p90_hu", "合格: Dn(x) の体内 edge_grad p90 の中央値 ≥ これ [HU/px]（§6.4 改訂: 実 EID の中央値。stats の EID_v5 の edge_grad_p90。x との比は x がノイズ勾配で膨らむので使わない）"),
     "check.edge_ref_p95_hu": Key(float, "--edge_ref_p95_hu", "合格: Dn(x) の体内 edge_grad p95 の中央値 ≥ これ [HU/px]（実 EID の中央値）"),
     "check.edge_ref_p99_hu": Key(float, "--edge_ref_p99_hu", "合格: Dn(x) の体内 edge_grad p99 の中央値 ≥ これ [HU/px]（実 EID の中央値）"),
@@ -573,6 +574,7 @@ def check_denoise_values(dn, machine):
     if dn["log.diff_range_hu"] <= 0: P.append("log.diff_range_hu は正")
     if dn["check.n_slices"] < 1: P.append("check.n_slices ≥ 1")
     if dn["check.resid_sd_max_hu"] <= 0: P.append("check.resid_sd_max_hu は正")
+    if dn["check.blur_sigma_px"] <= 0: P.append("check.blur_sigma_px は正（指紋 SD の先読み。固定 P の校正 1.9）")
     for q in ("p90", "p95", "p99"):
         if dn[f"check.edge_ref_{q}_hu"] <= 0: P.append(f"check.edge_ref_{q}_hu は正")
     if not (dn["check.edge_ref_p90_hu"] <= dn["check.edge_ref_p95_hu"] <= dn["check.edge_ref_p99_hu"]): P.append("check.edge_ref_p90_hu ≤ p95 ≤ p99")
