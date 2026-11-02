@@ -11,6 +11,7 @@
 import os
 import random
 import shutil
+import time
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,37 @@ from models.unet import build_net
 from util.run_paths import ckpt_dir, write_best_note
 
 BETTER = {"rmse": lambda new, old: new < old, "ssim": lambda new, old: new > old, "psnr": lambda new, old: new > old}  # log.best_metric ごとの「更新」の向き
+
+
+def _swap_dirs(tmp, final, old, retries=10, wait=3.0):
+    """tmp を final に差し替える（Stage 1 と同じ。Windows バインドマウントで os.replace が PermissionError になる対策、2026-11-03）。
+    再試行 → ファイル単位の置き換え → それでも駄目なら警告して学習を続ける（次回の保存で再試行）。"""
+    err = None
+    for _ in range(retries):
+        try:
+            if final.exists() and old.exists():
+                shutil.rmtree(old)
+            if final.exists():
+                os.replace(final, old)
+            os.replace(tmp, final)
+            if old.exists():
+                shutil.rmtree(old, ignore_errors=True)
+            return True
+        except PermissionError as e:
+            err = e
+            time.sleep(wait)
+    try:
+        final.mkdir(parents=True, exist_ok=True)
+        for f in sorted(tmp.iterdir()):
+            os.replace(f, final / f.name)
+        shutil.rmtree(tmp, ignore_errors=True)
+        if old.exists():
+            shutil.rmtree(old, ignore_errors=True)
+        print(f"[save] 注意: {final} のフォルダ改名が拒否されたのでファイル単位で置き換えた（{err}）", flush=True)
+        return True
+    except (PermissionError, FileNotFoundError) as e2:
+        print(f"[save] 警告: checkpoint {final} を保存できなかった（{e2}）。学習は続け、次回の保存で再試行する", flush=True)
+        return False
 
 
 def _to_tuple(x):
@@ -37,6 +69,13 @@ class RegressionModel:
         self.config = {"train": dict(train), "mode": dict(mode), "machine": dict(machine)}  # この重みに対応する実効設定（state.pth に入れる。再開の基準）
         self.residual = mode["residual"]
         self.net = build_net(mode).to(device)
+        # 高速化（Stage 1 と同じ、2026-11-03）: 学習の forward だけ bf16 autocast + torch.compile。val・監視・推論は compile しない FP32 の self.net（同じ重み）。
+        # compile は torch.compile で別の呼び出し口を作る（state_dict のキーは self.net のまま）。CUDA Graph の出力 buffer 再利用に備えて学習の出力は clone する
+        self.use_bf16 = train["optim.precision"] == "bf16" and device.type == "cuda"
+        self.compile_enabled = bool(train["optim.compile"]) and device.type == "cuda"
+        if self.compile_enabled and not (shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc")):
+            raise RuntimeError("torch.compile に必要な C コンパイラがありません。Docker image を再ビルドしてください（down → build）")
+        self.net_train = torch.compile(self.net, mode="max-autotune") if self.compile_enabled else self.net
         if mode["loss"] == "mse":
             self.criterion = nn.MSELoss()
         elif mode["loss"] == "l1":
@@ -57,11 +96,17 @@ class RegressionModel:
         return x + y if self.residual else y
 
     def optimize(self, batch):
-        """1 step。戻り値は表示用の dict: loss（正規化空間の損失）、mse（出力 vs 教師。monitor が √ を取って train/rmse に。0 へ）、ssim（1 へ）。"""
+        """1 step。戻り値は表示用の dict: loss（正規化空間の損失）、mse（出力 vs 教師。monitor が √ を取って train/rmse に。0 へ）、ssim（1 へ）。
+        forward は bf16 autocast（optim.precision）+ compile（optim.compile）。出力は FP32 に戻してから損失を計算する。"""
         x = batch["input"].to(self.device, non_blocking=True)
         t = batch["target"].to(self.device, non_blocking=True)
         self.net.train()
-        pred = self.forward(x)
+        with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16):
+            y = self.net_train(x)
+        y = y.float()
+        if self.compile_enabled:
+            y = y.clone()
+        pred = x + y if self.residual else y
         loss = self.criterion(pred, t)
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -131,13 +176,7 @@ class RegressionModel:
         tmp.mkdir(parents=True)
         torch.save(self.net.state_dict(), tmp / "net_G.pth")
         torch.save(self._state(), tmp / "state.pth")
-        if old.exists():
-            shutil.rmtree(old)
-        if final.exists():
-            os.replace(final, old)
-        os.replace(tmp, final)
-        if old.exists():
-            shutil.rmtree(old)
+        _swap_dirs(tmp, final, old)  # Windows バインドマウントの PermissionError 対策
 
     def load_weights(self, weight_dir):
         self.net.load_state_dict(torch.load(Path(weight_dir) / "net_G.pth", map_location=self.device, weights_only=True))
