@@ -159,7 +159,9 @@ class FidelityGANModel(BaseModel):
         #   D_fake : E[D(G(z))] (診断値)
         #   G_GAN  : E[log(1 − D(G(z)))]
         #   G_fid  : E[‖G(z) − z‖²] (λ を掛ける前)
-        self.loss_names = ["D", "D_real", "D_fake", "G_GAN", "G_fid"]
+        #   D_sep  : mean(v_fake) − mean(v_real)（D の分離の診断。0 = 見分けていない、正 = D 優勢）
+        #   D_acc  : patch 単位で v_fake > v_real の割合（0.5 = 当てずっぽう、1 = 完全に分離）
+        self.loss_names = ["D", "D_real", "D_fake", "G_GAN", "G_fid", "D_sep", "D_acc"]
         # 表示・保存する画像名
         self.visual_names = ["real_A", "fake_B", "real_B"]
         # 保存・読込するネットワーク名。テスト時は G のみ
@@ -224,12 +226,22 @@ class FidelityGANModel(BaseModel):
         """fake_B = G(real_A)。論文 Fig. 3 の generator G の順伝播。--residual のときは G = z + F(z)（networks.ResidualGenerator）なので fake_B − real_A が F の生出力 R。"""
         self.fake_B = self._run_net(self.netG, self.real_A)
 
+    def _D_real_fake(self, fake):
+        """本物 x と偽物を 1 バッチに連結して D に通す（stage1_v3 の 2026-10-30 の修正を移植、2026-11-02）。
+        別 forward だと D の BN が本物バッチ・偽物バッチをそれぞれの統計で正規化し、偽物群に共通する差（高周波エネルギーの大小、HU の水準）が消えて D が見られない。
+        連結すれば統計は本物 + 偽物で取られ、群の差が正規化後も残る。損失の式・batch・非ペアの性質は変えない。"""
+        n = self.real_B.shape[0]
+        v = self._run_net(self.netD, torch.cat([self.real_B, fake], dim=0))
+        return v[:n], v[n:]
+
     def backward_D(self):
         """D の損失と勾配。論文 Eq.(12) の D:  max_D  E_x[D(x)] + E_z[log(1 − D(G(z)))]
         → 最小化するのは  loss_D = −( E_x[D(x)] + E_z[log(1 − D(G(z)))] )。係数 0.5 は付けない (Eq.(12) に無い)。
         """
-        v_real = self._run_net(self.netD, self.real_B)
-        v_fake = self._run_net(self.netD, self.fake_B.detach())
+        v_real, v_fake = self._D_real_fake(self.fake_B.detach())
+        with torch.no_grad():  # D の分離の診断（損失だけでは「均衡」と「D の盲目」を区別できない）
+            self.loss_D_sep = float(v_fake.mean() - v_real.mean())
+            self.loss_D_acc = float((v_fake.flatten() > v_real.flatten()).float().mean())
         if self.gan_mode == "fgan_kl":
             D_real = self._D_from_v(v_real)              # D(x) = 1 − exp(v)
             log1mD_fake = self._log1mD_from_v(v_fake)    # log(1 − D(G(z))) = v
@@ -245,7 +257,7 @@ class FidelityGANModel(BaseModel):
 
     def backward_G(self):
         """G の損失と勾配。論文 Eq.(12) の G:  min_G  E_z[log(1 − D(G(z)))] + λ E_z[‖G(z) − z‖²]"""
-        v_fake = self._run_net(self.netD, self.fake_B)
+        _, v_fake = self._D_real_fake(self.fake_B)  # G の更新でも本物と連結（偽物だけだと BN が群の差を消し、G に「粒を減らせ」「水準を戻せ」の勾配が届かない）
         if self.gan_mode == "fgan_kl":
             self.loss_G_GAN = self._log1mD_from_v(v_fake).mean()   # E[log(1 − D(G(z)))] = E[v]
         else:  # ablation: 本家 GANLoss
