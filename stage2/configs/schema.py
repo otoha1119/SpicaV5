@@ -43,6 +43,8 @@ TRAIN = {
     "optim.beta2":        Key(float, "--beta2",        "Adam β2。Keras 既定 0.999"),
     "optim.batch_size":   Key(int,   "--batch_size",   "論文未記載。ユーザー決定 2026-09-08: まず 16、様子を見て変える"),
     "optim.n_epochs":     Key(int,   "--n_epochs",     '論文 "Training consisted of 100 epochs"。lr は一定（減衰の記載なし）'),
+    "optim.precision":    Key(str,   "--precision",    "演算精度 fp32 | bf16。bf16 は CUDA の autocast を学習の forward だけに掛ける（重み・optimizer・損失・val・推論は FP32）。Stage 1 と同じ（2026-11-03）"),
+    "optim.compile":      Key(bool,  "--compile",      "CUDA で学習の forward を torch.compile(mode='max-autotune')（CPU では無効）。val・監視・推論は compile しない FP32 の同じ重みで通す。初回 step はコンパイルで遅い"),
     "optim.seed":         Key(int,   "--seed",         "python / numpy / torch の乱数 seed（再現条件）。cudnn.benchmark は Stage 1 と同じく有効なので完全決定ではない"),
     # data
     "data.patch_size":        Key(int,  "--patch_size",        '論文 "Patches of size 128 × 128 pixels"（1024 グリッド上）。ユーザー決定 128。4 の倍数（pool 2 回）'),
@@ -333,6 +335,11 @@ def check_infer_values(infer, machine):
     _problems_to_error("infer values", P)
 
 
+PRECISIONS = ("fp32", "bf16")
+# 導入前の run を resume するときだけ使う移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値（2026-11-03）
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False}
+
+
 def check_train_values(train, mode, machine):
     """train / mode / machine の実効値の値域と相互条件（学習）。症例リストの重複・ディスクとの照合は data/pair_dataset.py が行う。"""
     P = []
@@ -342,6 +349,7 @@ def check_train_values(train, mode, machine):
     if bs < 1: P.append("optim.batch_size ≥ 1")
     if train["optim.n_epochs"] < 1: P.append("optim.n_epochs ≥ 1")
     if train["optim.seed"] < 0: P.append("optim.seed ≥ 0")
+    if train["optim.precision"] not in PRECISIONS: P.append(f"optim.precision は {PRECISIONS}")
     ps, m = train["data.patch_size"], 2 ** mode["n_pool"]
     if ps < m or ps % m: P.append(f"data.patch_size は {m}（= 2^n_pool）の倍数")
     spe = train["data.samples_per_epoch"]

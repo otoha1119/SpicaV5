@@ -10,6 +10,8 @@ optim:
   batch_size: 16        # 論文未記載。ユーザー決定 2026-09-08: まず 16、様子を見て変える
   n_epochs: 100         # 論文 "Training consisted of 100 epochs"
   seed: 0               # python / numpy / torch の乱数 seed（再現条件）
+  precision: bf16       # 学習の forward だけ CUDA autocast（Stage 1 と同じ高速化、2026-11-03）。損失・val・推論は FP32。fp32 で従来どおり
+  compile: true         # 学習の forward を torch.compile(max-autotune)。初回だけコンパイルで遅い。val・推論は compile しない
 
 data:
   patch_size: 128       # 論文 "Patches of size 128 × 128 pixels"（1024 グリッド上）。ユーザー決定 128

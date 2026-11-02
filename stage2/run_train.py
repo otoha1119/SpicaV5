@@ -26,7 +26,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import MACHINE, MODE, TRAIN, ConfigError, apply_overrides, check_train_values, validate, validate_shared  # noqa: E402
+from configs.schema import LEGACY_TRAIN_DEFAULTS, MACHINE, MODE, TRAIN, ConfigError, apply_overrides, check_train_values, validate, validate_shared  # noqa: E402
 from data.pair_dataset import check_split_on_disk  # noqa: E402
 from util.run_paths import LAUNCH_FILE, ckpt_path, latest_launch, run_name, saved_tags  # noqa: E402
 
@@ -132,6 +132,12 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
     try:
         for section, cur, schema in (("train", train_yaml, TRAIN), ("mode", mode_yaml, MODE), ("machine", machine_yaml, MACHINE)):
             missing = [k for k in schema if k not in saved[section]]
+            legacy = [k for k in missing if section == "train" and k in LEGACY_TRAIN_DEFAULTS]  # 導入前の run は従来動作（FP32、compile なし）で続ける。変えるなら --flag で明示
+            if legacy:
+                print(f"[run_train] 互換移行: 旧 run に無い train のキーは従来動作とする（変えるなら --flag で明示）: " + ", ".join(f"{k}={LEGACY_TRAIN_DEFAULTS[k]!r}" for k in legacy))
+                for k in legacy:
+                    saved[section][k] = LEGACY_TRAIN_DEFAULTS[k]
+                missing = [k for k in missing if k not in legacy]
             if missing:
                 print(f"[run_train] 注意: run の {section} に無いキー（run 作成後に追加）は今の yaml の値を使う: " + ", ".join(f"{k}={cur[k]!r}" for k in missing))
                 for k in missing:
