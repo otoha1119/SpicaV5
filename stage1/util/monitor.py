@@ -143,7 +143,7 @@ class TrainMonitor:
             with torch.no_grad():
                 a = self.fixed["A"].to(model.device)
                 b = self.fixed["B"].to(model.device)
-                g = net(a)
+                g = net(a).clone()  # compile 時の CUDA Graph 出力 buffer は次の呼び出しで上書きされるので clone（2026-11-02）
             net.train(was_training)
             sets.append(("fixed", a, g, b))
         for tag, a, g, b in sets:
@@ -188,7 +188,7 @@ class TrainMonitor:
         net.eval()
         with torch.no_grad():
             a = full["A"].to(model.device)
-            g = torch.cat([net(a[i : i + 1]) for i in range(a.shape[0])])  # 1 枚ずつ（512 なのでメモリを抑える）
+            g = torch.cat([net(a[i : i + 1]).clone() for i in range(a.shape[0])])  # 1 枚ずつ（512 なのでメモリを抑える）。clone は compile 時の CUDA Graph 出力の上書き対策（PC1 2026-11-02 で epoch 末に落ちた）
         net.train(was_training)
         to_hu = lambda t: (t.detach().float().cpu() + 1.0) / 2.0 * (o.hu_max - o.hu_min) + o.hu_min
         A, G = to_hu(a), to_hu(g)
