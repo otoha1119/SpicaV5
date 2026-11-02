@@ -40,6 +40,8 @@
 #   bash start.sh PC2 build                  # マシン指定でビルドだけ（本番機で最初にやる）
 #   bash start.sh resume 2026_0905_1234      # その run の latest から学習を再開（同じディレクトリに続きを保存）
 #   bash start.sh resume 2026_0905_1234 30 --n_epochs 400   # epoch 30 の checkpoint（weights/30_*）から、epoch 数を延ばして再開
+#   bash start.sh PC4 chain                  # 学習 → best で推論（full）→ Stage 2 のデータ作成 → Stage 2 の学習を 1 本で（chain_stage1to2.sh。重み・データの置き場はその冒頭の変数）
+#   bash start.sh PC4 chain resume 2026_1102_2347 latest   # 既存 run の続きから同じ流れ（学習済みなら推論から）
 #   bash start.sh best 2026_0905_1234 30     # epoch 30 を best にする（weights/epoch_030/ → best_e030/、best.txt に記録。通常は util/validator.py が採点で自動更新するので手動上書き用）
 #   bash start.sh infer                      # 推論。infer_stage1.sh の WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR、stage1/configs/infer.yaml の方式
 #   bash start.sh infer --mode full --max_slices 4                        # 方式を上書きして推論
@@ -171,6 +173,7 @@ while [ $# -gt 0 ]; do
       RESUME="$1"; shift
       if [ $# -gt 0 ] && [[ "$1" =~ ^([0-9]+|latest|best)$ ]]; then RESUME_TAG="$1"; shift; fi ;;
     infer) ACTION=infer; shift ;;
+    chain) ACTION=chain; shift ;;   # 学習 → 推論 → Stage 2 のデータ作成 → Stage 2 の学習（chain_stage1to2.sh。resume と併用可）
     crop)  ACTION=crop; shift ;;
     split) ACTION=split; shift ;;
     best)
@@ -337,12 +340,13 @@ case "$ACTION" in
   crop)  exec_it spicav5 bash crop_stage1.sh "$@" ;;
   split) exec_it spicav5 bash split_stage1.sh "$@" ;;
   best)  exec_it spicav5 python stage1/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
-  train)
+  train|chain)
     tb_kill
     if command -v curl >/dev/null 2>&1; then open_when_ready & fi
+    SCRIPT=train_stage1.sh; [ "$ACTION" = chain ] && SCRIPT=chain_stage1to2.sh
     if [ -n "$RESUME" ]; then
-      exec_it -e SPICA_TB_PORT="$TB_PORT" -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash train_stage1.sh "$@"
+      exec_it -e SPICA_TB_PORT="$TB_PORT" -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash "$SCRIPT" "$@"
     else
-      exec_it -e SPICA_TB_PORT="$TB_PORT" spicav5 bash train_stage1.sh "$@"
+      exec_it -e SPICA_TB_PORT="$TB_PORT" spicav5 bash "$SCRIPT" "$@"
     fi ;;
 esac

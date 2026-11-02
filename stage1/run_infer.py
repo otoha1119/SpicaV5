@@ -196,6 +196,8 @@ def main():
 
     cmd = [sys.executable, str(HERE / "inference_dir.py")] + argv
     print(f"[run_infer] {weight_dir} × {input_dir} → {out_dir}（全引数は infer.yaml の argv）", flush=True)
+    if os.environ.get("SPICA_INFER_RECORD"):  # chain_stage1to2.sh 用: 出力先を書き残す（2026-11-03）
+        Path(os.environ["SPICA_INFER_RECORD"]).write_text(str(out_dir), encoding="utf-8")
     os.chdir(HERE)
     os.execv(sys.executable, cmd)
 

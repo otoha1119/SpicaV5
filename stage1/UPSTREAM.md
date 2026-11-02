@@ -333,3 +333,11 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 ### 恒等パネル（代表 EID を G に通した G(EID) と G(EID) − EID）を epoch 末に保存（2026-11-03、ユーザー指示。ブランチ 015-f_014-stage1_wavelet_D）
 
 - `util/monitor.save_full_images`: 代表 EID（`log.eid_slice`）を G に通し（eval、clone）、パネル [EID (input) | G(EID) epoch N | G(EID) − EID + ゲージ] を作る。TB `images/full/eid_identity`、表示用 `output_images/preview_identity_<eid>/epoch_NNN_{G_eid,R_eid_color,panel}.png`、生 16bit `output_images/epoch_NNN/<eid>_{eid,G_eid,R_eid}.png`（R は 0 HU = 32768）。identity のオン・オフに関係なく毎回出す（オフの run との比較用）。task: sr では名前が pcd になる
+
+### 学習 → 推論 → Stage 2 のデータ作成 → Stage 2 の学習を 1 本で `bash start.sh <マシン> chain`（2026-11-03、ユーザー指示）
+
+- `chain_stage1to2.sh`（リポジトリ直下、コンテナ内）: 1. `train_stage1.sh "$@"`（`resume` 併用可。n_epochs まで学習済みなら即終わる）→ 2. `stage1/run_infer.py`（重み = `<run>/$CHAIN_WEIGHT`、既定 best = best_eNNN、入力 = その run の最新 launch の `machine.pcd_dir`（`--dir_A` の上書きを反映）、`--mode full`、png）→ 3. `stage2/make_dataset.py`（入力 = 推論の `full/`、出力 = `$CHAIN_DATA_ROOT/EIDlike1024_<run>_<重みディレクトリ名>`。既にあれば止まる）→ 4. `train_stage2.sh --eidlike1024_dir <3 の出力> $CHAIN_STAGE2_ARGS`（Stage 1 の SPICA_RESUME は外す。TensorBoard は machines.yaml の stage2_tb_port）。どこかで失敗したらそこで止まり、手前の成果物は残る。task: sr の run は対象外
+- 実験ごとに変えるもの（重み・データの置き場・Stage 2 への上書き）は sh 冒頭の変数（infer_stage1.sh と同じ流儀）
+- `run_train.py` は環境変数 `SPICA_RUN_RECORD` があれば run ディレクトリを、`run_infer.py` は `SPICA_INFER_RECORD` があれば出力先を書き残す（chain がつなぐため。通常の起動では何もしない）
+- `start.sh`: `chain` サブコマンド（`train` と同じ TB・exec。`resume <run> [tag]` と併用可）
+- 検証（scratch にリポジトリを複製、合成データ 20 症例 × 2 枚、CPU）: 新規 run → chain resume で 4 段すべて完走（推論 40 枚 → EIDlike1024 → Stage 2 1 epoch、best 自動）。macOS の bash 3.2 で見つかった不具合（全角文字直後の変数展開、空配列）を修正。コンテナ内は bash 5
