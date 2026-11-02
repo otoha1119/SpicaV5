@@ -286,3 +286,8 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 自動更新: `val.auto_best: true` で score 最良のとき `model.save_networks("best_eNNN")`（原子的）→ `retire_other_bests` → best.txt（epoch / dir / score / source: auto / 6 指標）。resume 時は best.txt の score を引き継ぐ（無いと再開直後の epoch が必ず best になる）。手動 `bash start.sh best <run> <epoch>`（`mark_best.py`）も best_eNNN/ を作り best.txt に source: manual。手動 best は score を持たないので、学習中に打つと次の採点で上書きされ得る（学習後に打つ想定）
 - 設定: `train.yaml val:`（n_pcd_slices 32 / n_eid_slices 128 / auto_best true / body_threshold_hu −500）、schema TRAIN に 4 キー + 検査。`fidelity_gan_model` に `--val_pcd_slices --val_eid_slices --auto_best --body_threshold_hu`。導入前の run の resume は今の yaml の値で補う（採点が有効になる）
 - 検証（scratch venv、CPU、合成データ 16 枚 × 2 群）: 学習 2 epoch で best_e002/ と best.txt、`--resume_tag best` で再開、`--weight_dir <run>/best` の推論（出力名に best_e003）、`mark_best.py --epoch 1` で best_e001/ に置き換わり他が消える
+
+### checkpoint 保存の PermissionError 対策 `_swap_dirs`（2026-11-02、PC1 run 2026_1102_2025 epoch 54 で発生）
+
+- Windows バインドマウント上で `os.replace(latest.tmp → latest)` が PermissionError になり学習が落ちた（ablation で 10-27 に PC3 で出たものと同じ）。`fidelity_gan_model._swap_dirs`（stage1_v3 / ablation と同じ）を移植: 3 秒間隔で 10 回再試行 → ファイル単位の置き換え → それでも駄目なら警告して学習を続け次回の保存で再試行。失敗しても重みディレクトリに新旧が混ざらない
+- 落ちた run は `latest` が無く `latest.old`（直前の epoch 末）と `latest.tmp` が残る。`weights/epoch_NNN/` は無事なので `bash start.sh PC1 resume <run> <epoch>` で再開する。次の保存で .old / .tmp は片付く

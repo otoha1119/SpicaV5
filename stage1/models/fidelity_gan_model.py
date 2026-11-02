@@ -37,6 +37,7 @@
 import os
 import random
 import shutil
+import time
 
 import numpy as np
 import yaml
@@ -45,6 +46,37 @@ import torch.distributed as dist
 from .base_model import BaseModel
 from . import networks
 from configs.schema import check_opt
+
+
+def _swap_dirs(tmp, final, old, retries=10, wait=3.0):
+    """tmp を final に差し替える（stage1_v3 / ablation と同じ。Windows バインドマウントで os.replace が PermissionError になる対策、2026-11-02 PC1 run 2026_1102_2025 epoch 54）。
+    再試行 → ファイル単位の置き換え → それでも駄目なら警告して学習を続ける（次回の保存で再試行）。失敗しても final に新旧が混ざらない。"""
+    err = None
+    for _ in range(retries):
+        try:
+            if final.exists() and old.exists():
+                shutil.rmtree(old)
+            if final.exists():
+                os.replace(final, old)
+            os.replace(tmp, final)
+            if old.exists():
+                shutil.rmtree(old, ignore_errors=True)
+            return True
+        except PermissionError as e:
+            err = e
+            time.sleep(wait)
+    try:
+        final.mkdir(parents=True, exist_ok=True)
+        for f in sorted(tmp.iterdir()):
+            os.replace(f, final / f.name)
+        shutil.rmtree(tmp, ignore_errors=True)
+        if old.exists():
+            shutil.rmtree(old, ignore_errors=True)
+        print(f"[save] 注意: {final} のフォルダ改名が拒否されたのでファイル単位で置き換えた（{err}）", flush=True)
+        return True
+    except (PermissionError, FileNotFoundError) as e2:
+        print(f"[save] 警告: checkpoint {final} を保存できなかった（{e2}）。学習は続け、次回の保存で再試行する", flush=True)
+        return False
 
 
 def _quiet_inductor_autotune_success_logs():
@@ -227,7 +259,7 @@ class FidelityGANModel(BaseModel):
     # ------------------------------------------------------------------
     def save_networks(self, epoch):
         """重み（net_G / net_D）と state.pth を**同じ重みディレクトリに原子的に**保存する（F-14）。tag は 'latest' / 数値 / 'iter_N'。置き場所は util/run_paths.py の規則。
-        手順: <dir>.tmp/ に 3 ファイルを書く → 既存 <dir> を <dir>.old に rename → .tmp を <dir> に rename → .old を消す。
+        手順: <dir>.tmp/ に 3 ファイルを書く → 既存 <dir> を <dir>.old に rename → .tmp を <dir> に rename → .old を消す（_swap_dirs。rename が拒否されたらファイル単位、それも駄目なら警告して続行）。
         途中で止まっても <dir> に新旧の混在は起きない（.tmp / .old が残るだけ。resume は 3 ファイル揃った <dir> だけを見る）。本家の save_networks は使わない。"""
         if dist.is_initialized() and dist.get_rank() != 0:
             return
@@ -243,13 +275,7 @@ class FidelityGANModel(BaseModel):
             torch.save(net.state_dict(), tmp / f"net_{name}.pth")
         if self.isTrain:
             torch.save(self._resume_state(), tmp / "state.pth")
-        if old.exists():
-            shutil.rmtree(old)
-        if final.exists():
-            os.replace(final, old)
-        os.replace(tmp, final)
-        if old.exists():
-            shutil.rmtree(old)
+        _swap_dirs(tmp, final, old)  # Windows バインドマウントの PermissionError 対策（再試行 → ファイル単位 → 警告して続行）
 
     def _launch_config(self):
         """--launch_path（run_train.py が書いた実効設定）の train / mode / machine を返す。無ければ None（手動起動・scratch）。"""
