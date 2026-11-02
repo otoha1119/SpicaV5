@@ -29,6 +29,7 @@ from options.train_options import TrainOptions
 from data import create_dataset
 from models import create_model
 from util.monitor import TrainMonitor  # [SpicaV5] 進捗バー + TensorBoard + loss_log.txt（本家 util/visualizer.py は使わない）
+from util.validator import Validator  # [SpicaV5] epoch ごとの採点（R-S22 の物理量）と best_eNNN/ の自動更新（2026-11-02）
 from util.util import init_ddp, cleanup_ddp
 
 # [SpicaV5] 本家 train.py からの変更点（docs/plans/20260907_training-monitor-plan.md, stage1/UPSTREAM.md）
@@ -58,6 +59,7 @@ if __name__ == "__main__":
     full_slices = dataset.dataset.full_slices if hasattr(dataset.dataset, "full_slices") else (lambda epoch: None)  # [SpicaV5] checkpoint 時に書き出すフル 512（固定 1 + epoch ごとのランダム）
     eid_ref = dataset.dataset.eid_reference() if hasattr(dataset.dataset, "eid_reference") else None  # [SpicaV5] パネルの右端に並べる EID の代表（固定）
     monitor = TrainMonitor(opt, dataset_size, fixed, eid_ref)  # [SpicaV5]
+    validator = Validator(dataset.dataset.idx_a, dataset.dataset.idx_b, opt, model.save_dir, monitor.tb)  # [SpicaV5] 固定集合と参照統計はここで 1 回
     total_iters = getattr(model, "resume_total_iters", 0)  # [SpicaV5] 再開時は保存された画像枚数から続ける
     total_epochs = opt.n_epochs + opt.n_epochs_decay
     last_epoch, last_saved_epoch = None, None  # [SpicaV5] F-06: ループ終了時に最終 epoch が未保存なら保存する
@@ -102,6 +104,7 @@ if __name__ == "__main__":
             model.save_networks("latest")
             model.save_networks(epoch)
             monitor.save_full_images(model, full_slices(epoch), epoch, total_iters)  # [SpicaV5] PCD / EID-like / R をフル 512 で保存
+            validator.run(model, epoch, total_iters)  # [SpicaV5] 採点 → score 最良なら best_eNNN/
             last_saved_epoch = epoch
         last_epoch = epoch
 
@@ -112,6 +115,9 @@ if __name__ == "__main__":
         model.save_networks("latest")
         model.save_networks(last_epoch)
         monitor.save_full_images(model, full_slices(last_epoch), last_epoch, total_iters)
+        validator.run(model, last_epoch, total_iters)
+    if validator.enabled and validator.best_epoch is not None:
+        monitor.write(f"[val] best: epoch {validator.best_epoch} (score {validator.best_score:.3f}){' → ' + os.path.basename(str(model.save_dir)) + '/best_e%03d/' % validator.best_epoch if opt.auto_best else ''}")
 
     monitor.close()
     cleanup_ddp()

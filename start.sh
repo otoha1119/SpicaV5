@@ -40,7 +40,7 @@
 #   bash start.sh PC2 build                  # マシン指定でビルドだけ（本番機で最初にやる）
 #   bash start.sh resume 2026_0905_1234      # その run の latest から学習を再開（同じディレクトリに続きを保存）
 #   bash start.sh resume 2026_0905_1234 30 --n_epochs 400   # epoch 30 の checkpoint（weights/30_*）から、epoch 数を延ばして再開
-#   bash start.sh best 2026_0905_1234 30     # epoch 30 を best にする（weights/epoch_030/ → best/、best.txt に記録。目視で選ぶ）
+#   bash start.sh best 2026_0905_1234 30     # epoch 30 を best にする（weights/epoch_030/ → best_e030/、best.txt に記録。通常は util/validator.py が採点で自動更新するので手動上書き用）
 #   bash start.sh infer                      # 推論。infer_stage1.sh の WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR、stage1/configs/infer.yaml の方式
 #   bash start.sh infer --mode full --max_slices 4                        # 方式を上書きして推論
 #   bash start.sh infer --output_format both --dicom_dir /workspace/DataSet/PhotonCT512_original   # PNG と DICOM の両方を書く
@@ -64,8 +64,8 @@
 #   ・pcd_dir / eid_dir / checkpoints_dir はコンテナ内から見えるパスで書く。
 #   ・実験の保存先は checkpoints_dir/<run>（run = 起動時刻 yyyy_mmdd_HHMM、JST）。レイアウト（正は stage1/util/run_paths.py）:
 #       launch.yaml / train_opt.txt / loss_log.txt
-#       latest/net_G.pth, net_D.pth, state.pth        直下の重みディレクトリは latest と best だけ
-#       best/net_G.pth,   net_D.pth, state.pth        bash start.sh best <run> <epoch> で作る（best.txt に epoch を記録）
+#       latest/net_G.pth, net_D.pth, state.pth        直下の重みディレクトリは latest と best_eNNN だけ
+#       best_eNNN/net_G.pth, net_D.pth, state.pth     採点（val/score）最良の epoch を自動保存（フォルダ名に epoch。best.txt に記録）。bash start.sh best <run> <epoch> で手動上書き。tag "best" と <run>/best はこれに解決
 #       weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq（既定 1 = 毎 epoch）ごと（+ 学習終了時の最終 epoch。保存は .tmp → rename で原子的）
 #       output_images/epoch_NNN/ checkpoint（毎 epoch）ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit、入力と同じ規約）
 #       output_images/preview_fixed_<slice>/epoch_NNN.png   固定スライス（train.yaml log.full_slice）の表示用パネル [PCD | EID-like | R]（epoch 順に見比べる）
@@ -105,7 +105,7 @@
 # ■ 再開（resume）の仕組み
 #   ・学習中は重み（net_G.pth / net_D.pth）に加えて state.pth（optimizer / RNG / epoch / iteration 数）を同じ重みディレクトリに保存する。
 #     保存タイミングは本家と同じ（save_latest_freq 枚ごとに latest/、save_epoch_freq epoch ごとに weights/epoch_NNN/）。
-#   ・tag は latest | best | <epoch>。best は bash start.sh best <run> <epoch> で手動指定（判定指標は未実装）。
+#   ・tag は latest | best | <epoch>。best = <run>/best_eNNN/（採点で自動更新。bash start.sh best <run> <epoch> で手動上書き）。
 #   ・resume は**選んだ checkpoint の state.pth に入っている実効設定**（その重みを作った設定）を使う（今の yaml は無視。差があれば表示。2026-09-09 変更:
 #     失敗した起動の launch_resume_*.yaml を次の基準にしない。state.pth に設定が無い古い run だけ最新の launch を使う）。
 #     sh の --flag 上書きだけは末尾に付くので、n_epochs を延ばすなどに使える。

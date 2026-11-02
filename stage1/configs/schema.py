@@ -51,6 +51,11 @@ TRAIN = {
     "data.patches_per_slice": Key(int, "--patches_per_slice", "sampling=random で 1 回読んだスライス（A / B それぞれ）から連続して切る patch 数。1 = patch ごとに別スライス（2026-10-12 以前）。大きいほど読み出し・デコードが 1/k（既定 8。PC1 の sr で大幅高速化、degrade も同じ。2026-10-12）。位置は patch ごとに独立"),
     "data.use_eval_only_cases": Key(bool, "--use_eval_only_cases", "true で configs/eval_only.yaml の評価専用症例も学習に使う（通常 false = 除外）。評価専用症例そのものを学習データにした実験（DataSet_new、2026-10-28）だけ true。--use_eval_only_cases で上書き"),
     "data.hu_offset":       Key(int,   "--hu_offset",      "stored = HU + hu_offset（1400）"),
+    # val（epoch ごとの自動採点と best_eNNN/ の自動更新。util/validator.py、2026-11-02）
+    "val.n_pcd_slices":     Key(int,   "--val_pcd_slices", "採点用の固定 PCD スライス数（学習症例から乱択、G に通して EID-like にする）。0 で採点しない（task: sr では 0 にする）"),
+    "val.n_eid_slices":     Key(int,   "--val_eid_slices", "参照の固定 実 EID スライス数（中央値と四分位を 1 回計算。≥ 8）"),
+    "val.auto_best":        Key(bool,  "--auto_best",      "true なら score（6 指標の正規化距離の和）が最良のとき <run>/best_eNNN/ を自動更新（best.txt に記録）。bash start.sh best で手動上書きできる"),
+    "val.body_threshold_hu": Key(int,  "--body_threshold_hu", "一様 ROI・縁を測る体内判定の HU 閾値（stage1_v3 と同じ −500）"),
     "data.hu_min":          Key(int,   "--hu_min",         "正規化窓の下限 HU（−1400）"),
     "data.hu_max":          Key(int,   "--hu_max",         "正規化窓の上限 HU（4096）"),
     # log（util/monitor.py）。単位に注意: *_freq のうち print_freq / image_freq は **step（iteration）**、save_latest_freq は junyanz 由来で **画像枚数**
@@ -397,6 +402,9 @@ def check_values(train, mode, machine):
     if train["data.patches_per_slice"] < 1: P.append("data.patches_per_slice ≥ 1")
     if mode["sampling"] == "paper" and train["data.patches_per_slice"] != 1: P.append("sampling=paper のときは data.patches_per_slice を 1 にする（paper は固定集合を index で走査するので適用しない）")
     if train["data.hu_min"] >= train["data.hu_max"]: P.append("data.hu_min < data.hu_max")
+    if train["val.n_pcd_slices"] < 0 or train["val.n_eid_slices"] < 0: P.append("val.n_pcd_slices / n_eid_slices ≥ 0")
+    if train["val.n_pcd_slices"] > 0 and train["val.n_eid_slices"] < 8: P.append("採点するなら val.n_eid_slices ≥ 8（四分位を取るため）")
+    if mode["task"] == "sr" and train["val.n_pcd_slices"] > 0: P.append("task: sr では採点しない（val.n_pcd_slices を 0 にする。sr.yaml の train: で差し替え可）")
     if train["log.print_freq"] < 1 or train["log.image_freq"] < 1: P.append("log.print_freq / image_freq ≥ 1（step）")
     if train["log.n_images"] < 1: P.append("log.n_images ≥ 1")
     if train["log.n_full_random"] < 0: P.append("log.n_full_random ≥ 0")

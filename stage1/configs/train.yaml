@@ -40,6 +40,12 @@ data:
   hu_min: -1400         # 正規化窓 [−1400, 4096] → [−1, 1]
   hu_max: 4096
 
+val:                    # epoch ごとの自動採点（util/validator.py、2026-11-02）。score = Σ_k |median_gen,k − median_eid,k| / IQR_eid,k（k = local_sd, nps_f_av, edge_grad_p90, edge_grad_p99, hu_p50, hu_p90。小さいほど良い）
+  n_pcd_slices: 32      # 固定 PCD スライス（学習症例から乱択、seed = data.patch_seed）。0 で採点しない
+  n_eid_slices: 128     # 固定 実 EID スライス（参照統計）
+  auto_best: true       # score 最良で <run>/best_eNNN/ を自動更新（best.txt に記録。bash start.sh best <run> <epoch> で手動上書き可）
+  body_threshold_hu: -500   # 体内判定の HU 閾値（stage1_v3 と同じ）
+
 log:
   # 単位: print_freq / image_freq は step（iteration。batch_size 枚で 1 step）、save_latest_freq は画像枚数（junyanz 由来）
   print_freq: 100         # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step）

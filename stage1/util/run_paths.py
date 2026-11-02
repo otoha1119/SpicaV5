@@ -6,9 +6,11 @@ checkpoint は「重みディレクトリ」単位で扱う（G と D と optimi
 <checkpoints_dir>/<run>/
   launch.yaml                 解決済み設定（実効値 = yaml + sh の上書き）。resume 時は launch_resume_<日時秒>.yaml が追加され、最新のものが次の再開・推論の基準
   train_opt.txt, loss_log.txt
-  latest/net_G.pth, net_D.pth, state.pth        直下に置く重みディレクトリは latest と best だけ
-  best/net_G.pth,   net_D.pth, state.pth        bash start.sh best <run> <epoch> で weights/epoch_NNN/ をコピー
-  best.txt                    best がどの epoch か（判定基準がまだ無いので当面は目視で手動指定）
+  latest/net_G.pth, net_D.pth, state.pth        直下に置く重みディレクトリは latest と best_eNNN だけ
+  best_eNNN/net_G.pth, net_D.pth, state.pth     best（2026-11-02 からフォルダ名に epoch を入れる。中のファイル名は不変）。util/validator.py が epoch ごとの採点（R-S22 の物理量）で自動更新、
+                              bash start.sh best <run> <epoch> で手動上書き。常に 1 つだけ（更新時に古い best_e* は消す）。tag "best" と --weight_dir <run>/best は best_e* に解決する（2026-11-02 以前の run の best/ もそのまま読める）
+  best.txt                    best がどの epoch か・score・自動 / 手動
+  val_log.txt                 epoch ごとの採点（util/validator.py）
   weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq ごとの checkpoint（保存は <dir>.tmp → rename で原子的。.tmp / .old が残っていたら中断の痕跡）
   output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png        checkpoint（毎 epoch）ごとのフル 512（uint16、入力と同じ規約 = HU が読める）
   （task: sr（mode.yaml、2026-10-12）では名前が入れ替わる: <slice>_{eid,pcdlike,R}.png、00_eid_ / 01_pcd_ / epoch_NNN_pcdlike。util/task_names.py）
@@ -35,6 +37,7 @@ from pathlib import Path
 RUN_NAME_FORMAT = "%Y_%m%d_%H%M"                 # datetime.strftime 用
 RUN_NAME_RE = re.compile(r"^\d{4}_\d{4}_\d{4}$")  # 2026_0907_1742
 TOP_TAGS = ("latest", "best")                    # run 直下に置く重みディレクトリ。それ以外（epoch 番号、iter_N）は weights/
+BEST_PREFIX = "best_e"                           # best の実フォルダ名 = best_eNNN（2026-11-02）
 WEIGHTS_DIR = "weights"
 OUTPUT_IMAGES_DIR = "output_images"
 OUTPUT_DIRNAME = "output"  # 推論・crop の出力の根（<repo>/output/。.gitignore 済み）
@@ -52,11 +55,51 @@ def epoch_dirname(epoch):
     return f"epoch_{int(epoch):03d}"
 
 
+def best_dirname(epoch):
+    return f"{BEST_PREFIX}{int(epoch):03d}"
+
+
+def best_epoch_of(path):
+    """best_eNNN → NNN（int）。それ以外は None。"""
+    m = re.fullmatch(rf"{BEST_PREFIX}(\d+)", Path(path).name)
+    return int(m.group(1)) if m else None
+
+
+def find_best_dir(run_dir):
+    """run にある best_eNNN/（.tmp / .old を除く）。無ければ None、2 つ以上あればエラー（常に 1 つの約束）。"""
+    cands = sorted(d for d in Path(run_dir).glob(f"{BEST_PREFIX}*") if d.is_dir() and best_epoch_of(d) is not None)
+    if len(cands) > 1:
+        raise RuntimeError(f"best_e* が複数あります（1 つだけの約束）: {[d.name for d in cands]}")
+    return cands[0] if cands else None
+
+
+def resolve_weight_dir(weight_dir):
+    """--weight_dir に <run>/best と書かれたとき（実体は best_eNNN）に解決する。それ以外はそのまま。"""
+    p = Path(weight_dir)
+    if p.name == "best" and not (p / "net_G.pth").is_file():
+        d = find_best_dir(p.parent)
+        if d is not None:
+            return d
+    return p
+
+
+def retire_other_bests(run_dir, keep):
+    """keep 以外の best_e*（と 2026-11-02 以前の best/）を消す。best は常に 1 つ。"""
+    import shutil
+    run_dir, keep = Path(run_dir), Path(keep)
+    for d in list(run_dir.glob(f"{BEST_PREFIX}*")) + [run_dir / "best"]:
+        if d.is_dir() and d.resolve() != keep.resolve():
+            shutil.rmtree(d)
+
+
 def ckpt_dir(run_dir, tag):
-    """tag（'latest' | 'best' | epoch 番号 | 'iter_N'）→ 重みディレクトリ。
-    latest / best は <run>/<tag>/、epoch 番号は <run>/weights/epoch_NNN/、それ以外の文字列は <run>/weights/<tag>/。"""
+    """tag（'latest' | 'best' | 'best_eNNN' | epoch 番号 | 'iter_N'）→ 重みディレクトリ。
+    latest は <run>/latest/、best は <run>/best_eNNN/（無ければ旧 run の <run>/best/）、epoch 番号は <run>/weights/epoch_NNN/、それ以外の文字列は <run>/weights/<tag>/。"""
     tag = str(tag)
-    if tag in TOP_TAGS:
+    if tag == "best":
+        d = find_best_dir(run_dir)
+        return d if d is not None else Path(run_dir) / "best"
+    if tag == "latest" or best_epoch_of(tag) is not None:
         return Path(run_dir) / tag
     if tag.isdigit():
         return Path(run_dir) / WEIGHTS_DIR / epoch_dirname(tag)
@@ -71,7 +114,7 @@ def ckpt_path(run_dir, tag, kind):
 def saved_tags(run_dir):
     """その run にある checkpoint の tag 一覧（net_G.pth がある重みディレクトリから）。"""
     run_dir = Path(run_dir)
-    tags = [t for t in TOP_TAGS if (run_dir / t / "net_G.pth").is_file()]
+    tags = [t for t in TOP_TAGS if (ckpt_dir(run_dir, t) / "net_G.pth").is_file()]
     epochs = []
     for d in (run_dir / WEIGHTS_DIR).glob("*"):
         if d.name.endswith((".tmp", ".old")):  # 原子的保存の作業ディレクトリ（F-14）は checkpoint ではない
@@ -90,7 +133,7 @@ def latest_launch(run_dir):
 
 
 def find_run_dir(weight_dir):
-    """重みディレクトリから run ディレクトリ（launch.yaml がある所）を探す。<run>/best → 1 つ上、<run>/weights/epoch_NNN → 2 つ上。
+    """重みディレクトリから run ディレクトリ（launch.yaml がある所）を探す。<run>/best_eNNN → 1 つ上、<run>/weights/epoch_NNN → 2 つ上。
     見つからなければ None。"""
     p = Path(weight_dir).resolve()
     for _ in range(3):

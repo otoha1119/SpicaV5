@@ -28,7 +28,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import INFER, LEGACY_MODE_DEFAULTS, MACHINE, SR_UPSAMPLE_KEYS, TRAIN, ConfigError, apply_overrides, check_infer_values, to_argv, validate  # noqa: E402
-from util.run_paths import LAUNCH_FILE, find_run_dir, infer_output_dir, latest_launch  # noqa: E402
+from util.run_paths import LAUNCH_FILE, find_run_dir, infer_output_dir, latest_launch, resolve_weight_dir  # noqa: E402
 
 # launch.yaml の train / mode セクション（平坦キー）→ inference_dir.py のフラグ
 G_TRAIN_KEYS = {"network.ngf": "--ngf", "network.input_nc": "--input_nc", "network.output_nc": "--output_nc", "network.norm": "--norm",
@@ -138,7 +138,7 @@ def main():
         path_over, overrides = split_overrides(overrides)
         applied = apply_overrides(overrides, {"infer": (infer, INFER)})  # 上書きを実効値に反映（F-02 と同じ方式）
         check_infer_values(infer)  # F-07: stride ≤ size など
-        weight_dir = Path(path_over.get("--weight_dir", a.weight_dir))
+        weight_dir = resolve_weight_dir(path_over.get("--weight_dir", a.weight_dir))  # <run>/best は best_eNNN に解決（2026-11-02）
         input_dir = Path(path_over.get("--input_dir", a.input_dir))
         output_format = path_over.get("--output_format", a.output_format)
         dicom_dir = path_over.get("--dicom_dir", a.dicom_dir)

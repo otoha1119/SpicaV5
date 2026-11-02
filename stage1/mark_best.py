@@ -1,4 +1,4 @@
-"""mark_best.py — weights/epoch_NNN/{net_G,net_D,state}.pth を run 直下の best/ にコピーし、best.txt に記録する。[SpicaV5 新規]
+"""mark_best.py — weights/epoch_NNN/{net_G,net_D,state}.pth を run 直下の best_eNNN/ にコピーし、best.txt に記録する（手動の best。自動は util/validator.py）。[SpicaV5 新規]
 
 ホストからは  bash start.sh best <run> <epoch>  。
 「最も良かった epoch」を自動で決める定量指標がまだ無いので、当面は目視で選んだ epoch を手で指定する（指標ができたら自動化）。
@@ -20,7 +20,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import MACHINE, ConfigError, validate  # noqa: E402
-from util.run_paths import BEST_NOTE, CKPT_KINDS, LAUNCH_FILE, ckpt_dir, ckpt_path, saved_tags  # noqa: E402
+from util.run_paths import BEST_NOTE, CKPT_KINDS, LAUNCH_FILE, best_dirname, ckpt_path, retire_other_bests, saved_tags  # noqa: E402
 
 KINDS = CKPT_KINDS
 
@@ -50,15 +50,15 @@ def main():
         print(f"[best] 設定エラー: {e}", file=sys.stderr)
         sys.exit(2)
 
-    # 原子的に差し替える（F-14）: best.tmp/ に 3 ファイルを揃えてから rename。途中で止まっても best/ に新旧が混ざらない
-    final = ckpt_dir(run_dir, "best")
-    tmp, old = final.with_name("best.tmp"), final.with_name("best.old")
+    # 原子的に差し替える（F-14）: best_eNNN.tmp/ に 3 ファイルを揃えてから rename。途中で止まっても新旧が混ざらない。他の best_e*（と旧 best/）は消す（best は常に 1 つ）
+    final = run_dir / best_dirname(a.epoch)
+    tmp, old = final.with_name(final.name + ".tmp"), final.with_name(final.name + ".old")
     if tmp.exists():
         shutil.rmtree(tmp)
     tmp.mkdir(parents=True)
     for kind, src in zip(KINDS, srcs):
         shutil.copy2(src, tmp / kind)
-        print(f"[best] {src.relative_to(run_dir)} -> best/{kind}")
+        print(f"[best] {src.relative_to(run_dir)} -> {final.name}/{kind}")
     if old.exists():
         shutil.rmtree(old)
     if final.exists():
@@ -66,13 +66,13 @@ def main():
     os.replace(tmp, final)
     if old.exists():
         shutil.rmtree(old)
+    retire_other_bests(run_dir, final)
     jst = datetime.timezone(datetime.timedelta(hours=9), name="JST")
     note = run_dir / BEST_NOTE
     with open(note, "w", encoding="utf-8") as f:
-        f.write(f"epoch: {a.epoch}\nmarked_at: {datetime.datetime.now(jst).isoformat(timespec='minutes')}\n"
-                f"source: {', '.join(str(s.relative_to(run_dir)) for s in srcs)}\n"
-                "note: 判定基準（定量指標）が未実装のため目視で手動指定\n")
-    print(f"[best] run {run_dir.name}: best = epoch {a.epoch} ({note})")
+        f.write(f"epoch: {a.epoch}\ndir: {final.name}\nmarked_at: {datetime.datetime.now(jst).isoformat(timespec='minutes')}\n"
+                f"source: manual ({', '.join(str(s.relative_to(run_dir)) for s in srcs)})\n")
+    print(f"[best] run {run_dir.name}: best = epoch {a.epoch} → {final.name}/ ({note})")
 
 
 if __name__ == "__main__":
