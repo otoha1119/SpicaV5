@@ -42,6 +42,9 @@ TRAIN = {
     "network.init_gain":    Key(float, "--init_gain",      '初期化の標準偏差。論文 "standard deviation of 0.01"'),
     "network.input_nc":     Key(int,   "--input_nc",       "入力チャネル数。grayscale = 1"),
     "network.output_nc":    Key(int,   "--output_nc",      "出力チャネル数。grayscale = 1"),
+    "network.packet_ch":    Key(int,   "--packet_ch",      "netG=wavelet_packet: 各ノードの内部チャネル数（図: 64）。他の netG では読まない"),
+    "network.packet_depth": Key(int,   "--packet_depth",   "netG=wavelet_packet: 分解の段数（葉は 2**depth 個。図: 3 → 8 帯域、64²）。patch_size は 2**depth の倍数"),
+    "network.packet_n_conv": Key(int,  "--packet_n_conv",  "netG=wavelet_packet: 各ノードの encoder / decoder の ConvBlock 数（図: 2）"),
     # data
     "data.patch_size":      Key(int,   "--patch_size",     '論文 "patches of size 128 × 128"。0 でフル画像（推論用）'),
     "data.patch_stride":    Key(int,   "--patch_stride",   "patch 左上座標の刻み。random は 1（任意位置）。sampling=paper のときは論文の 8 を明示する（暗黙置換はしない。F-19）"),
@@ -76,7 +79,7 @@ TRAIN = {
 MODE = {
     "sampling":       Key(str,  "--sampling",       "random（ケース 1 完全ランダム）| paper（論文の固定 40 patch/画像）| aligned（ケース 2、未実装）"),
     "gan_mode":       Key(str,  "--gan_mode",       "fgan_kl（論文 Eq.6）| lsgan | vanilla（ablation、論文の式ではない）"),
-    "netG":           Key(str,  "--netG",           "wavelet（論文 Fig.3）| unet_128 | unet_256 | resnet_6blocks | resnet_9blocks（ablation）"),
+    "netG":           Key(str,  "--netG",           "wavelet（論文 Fig.3）| wavelet_packet（HF skip なし、L も H も再分解。network.packet_*。2026-11-02）| unet_128 | unet_256 | resnet_6blocks | resnet_9blocks（ablation）"),
     "netD":           Key(str,  "--netD",           "paper（論文 Fig.3、受容野 22）| basic（70×70 PatchGAN）| n_layers | pixel"),
     "final_norm_act": Key(bool, "--final_norm_act", "G 最終 conv に bnorm+LReLU を付ける（確定: false。ablation 用）"),
     "residual":       Key(bool, "--residual",       "true で G を residual 化: G(z) = z + F(z)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変。false = 論文どおり G(z) を直接出力（段階 5-1、2026-09-11）"),
@@ -352,7 +355,7 @@ def apply_overrides(tokens, sections):
 LR_POLICIES = ("linear",)  # 再開（scheduler の作り直し）が linear 前提。他方式は scheduler 状態の保存・復元を実装するまで受け付けない（F-12）
 SAMPLINGS = ("random", "paper", "aligned")
 GAN_MODES = ("fgan_kl", "lsgan", "vanilla")
-NETGS = ("wavelet", "unet_128", "unet_256", "resnet_6blocks", "resnet_9blocks")
+NETGS = ("wavelet", "wavelet_packet", "unet_128", "unet_256", "resnet_6blocks", "resnet_9blocks")
 NETDS = ("paper", "basic", "n_layers", "pixel")
 PRECISIONS = ("fp32", "bf16")
 TASKS = ("degrade", "sr")
@@ -390,6 +393,10 @@ def check_values(train, mode, machine):
     ps = train["data.patch_size"]
     m = 2**HAAR_LEVELS
     if ps < m or ps % m: P.append(f"data.patch_size は {m} の倍数（学習は patch 必須）")
+    if train["network.packet_ch"] < 1 or train["network.packet_depth"] < 1 or train["network.packet_n_conv"] < 1: P.append("network.packet_ch / packet_depth / packet_n_conv ≥ 1")
+    if mode["netG"] == "wavelet_packet":
+        mp = 2**train["network.packet_depth"]
+        if ps < mp or ps % mp: P.append(f"netG=wavelet_packet のとき data.patch_size は 2**packet_depth = {mp} の倍数")
     if train["data.patch_stride"] < 1: P.append("data.patch_stride ≥ 1")
     if train["data.patches_per_image"] < 1: P.append("data.patches_per_image ≥ 1")
     spe = train["data.samples_per_epoch"]

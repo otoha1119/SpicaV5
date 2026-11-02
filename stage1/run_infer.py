@@ -33,6 +33,7 @@ from util.run_paths import LAUNCH_FILE, find_run_dir, infer_output_dir, latest_l
 # launch.yaml の train / mode セクション（平坦キー）→ inference_dir.py のフラグ
 G_TRAIN_KEYS = {"network.ngf": "--ngf", "network.input_nc": "--input_nc", "network.output_nc": "--output_nc", "network.norm": "--norm",
                 "data.hu_offset": "--hu_offset", "data.hu_min": "--hu_min", "data.hu_max": "--hu_max"}
+G_PACKET_KEYS = {"network.packet_ch": "--packet_ch", "network.packet_depth": "--packet_depth", "network.packet_n_conv": "--packet_n_conv"}  # netG=wavelet_packet の構造。導入前の run の launch には無い（他の netG では G に効かないので現在の train.yaml で補う）
 G_MODE_KEYS = {"netG": "--netG", "task": "--task"}  # task（degrade | sr）は G の構造ではないが、表示名と 512 入力の補間（sr）を決めるので launch から取る（導入前の run は degrade）
 # 表示の設定は「現在の configs/train.yaml の log」から取る（run の launch.yaml ではない）。表示は重みに紐づく値ではないので、古い run でも今の見た目にする（2026-09-08）。
 # display_hu_min/max・preview_bits は --save_panel のパネル生成にだけ使う（run_crop.py と同じキー）
@@ -67,8 +68,9 @@ def split_overrides(tokens):
     return paths, rest
 
 
-def generator_argv(launch):
-    """run の launch.yaml から G の構成を取り出してフラグ列にする。無いキーはエラー（古い run）。"""
+def generator_argv(launch, current_train=None):
+    """run の launch.yaml から G の構成を取り出してフラグ列にする。無いキーはエラー（古い run）。
+    network.packet_* だけは導入前（2026-11-02 より前）の run の launch に無い。netG が wavelet_packet でなければ G に効かないので current_train（現在の train.yaml）の値で補う。"""
     train, mode = launch.get("train"), launch.get("mode")
     if not isinstance(train, dict) or not isinstance(mode, dict):
         raise ConfigError("launch.yaml に train / mode セクションがありません")
@@ -76,6 +78,14 @@ def generator_argv(launch):
     for k, flag in G_TRAIN_KEYS.items():
         if k not in train:
             raise ConfigError(f"launch.yaml の train に {k} がありません（古い run?）")
+        argv += [flag, str(train[k])]
+        cfg[k] = train[k]
+    for k, flag in G_PACKET_KEYS.items():
+        if k not in train:
+            if mode.get("netG") == "wavelet_packet" or current_train is None or k not in current_train:
+                raise ConfigError(f"launch.yaml の train に {k} がありません（netG=wavelet_packet の run には必須）")
+            print(f"注意: run の launch の train に {k} が無い（導入前の run。netG={mode.get('netG')!r} では G に効かない）。現在の train.yaml の {current_train[k]!r} を渡す")
+            train[k] = current_train[k]
         argv += [flag, str(train[k])]
         cfg[k] = train[k]
     for k, flag in G_MODE_KEYS.items():
@@ -157,8 +167,9 @@ def main():
             raise ConfigError(f"入力フォルダがありません: {input_dir}")
         device = "cpu" if machine["gpu_gen"] == 0 else "cuda"
         launch_path = latest_launch(run_dir)  # 最新の実効設定（F-10）
-        g_argv, g_cfg = generator_argv(load_yaml(launch_path))
-        d_argv, d_cfg = display_argv(validate("train", load_yaml(a.train), TRAIN), DISPLAY_TRAIN_KEYS)
+        current_train = validate("train", load_yaml(a.train), TRAIN)
+        g_argv, g_cfg = generator_argv(load_yaml(launch_path), current_train)
+        d_argv, d_cfg = display_argv(current_train, DISPLAY_TRAIN_KEYS)
     except ConfigError as e:
         print(f"[run_infer] 設定エラー: {e}", file=sys.stderr)
         sys.exit(2)

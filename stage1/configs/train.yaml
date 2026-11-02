@@ -26,6 +26,9 @@ network:
   init_gain: 0.01       # 論文 "standard deviation of 0.01"
   input_nc: 1           # grayscale
   output_nc: 1
+  packet_ch: 64         # netG=wavelet_packet のときだけ使う: 各ノードの内部チャネル数（docs/figures/20261102_stage1_generator_wavelet_packet_u.html）
+  packet_depth: 3       # 同上: 分解の段数（葉 2**3 = 8 帯域、64²）。patch_size は 2**depth の倍数
+  packet_n_conv: 2      # 同上: 各ノードの encoder / decoder の ConvBlock 数
 
 data:
   patch_size: 128       # 論文 "patches of size 128 × 128"

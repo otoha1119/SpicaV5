@@ -4,6 +4,7 @@ from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
 from .wavelet_generator import WaveletGenerator  # [SpicaV5] Park et al. 2019 Fig. 3 の generator
+from .wavelet_packet_generator import WaveletPacketGenerator  # [SpicaV5] wavelet packet 型（HF skip なし、L も H も再分解。2026-11-02）
 from .paper_discriminator import PaperDiscriminator  # [SpicaV5] Park et al. 2019 Fig. 3 の discriminator
 
 
@@ -146,7 +147,8 @@ def init_net(net, init_type="normal", init_gain=0.02):
     return net
 
 
-def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, init_type="normal", init_gain=0.02, final_norm_act=False, residual=False):
+def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, init_type="normal", init_gain=0.02, final_norm_act=False, residual=False,
+             packet_ch=None, packet_depth=None, packet_n_conv=None):
     """Create a generator
 
     Parameters:
@@ -174,6 +176,10 @@ def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, in
         net = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
     elif netG == "wavelet":  # [SpicaV5] Park et al. 2019 (deep convolutional framelet)。論文どおり BatchNorm 固定のため norm_layer / use_dropout は使わない
         net = WaveletGenerator(input_nc, output_nc, ngf=ngf, final_norm_act=final_norm_act)
+    elif netG == "wavelet_packet":  # [SpicaV5] wavelet packet 型（2026-11-02）。幅・段数・conv 数は train.yaml network.packet_*（ngf は使わない）
+        if packet_ch is None or packet_depth is None or packet_n_conv is None:
+            raise ValueError("netG=wavelet_packet には packet_ch / packet_depth / packet_n_conv が必要です")
+        net = WaveletPacketGenerator(input_nc, output_nc, ch=packet_ch, depth=packet_depth, n_conv=packet_n_conv, final_norm_act=final_norm_act)
     else:
         raise NotImplementedError("Generator model name [%s] is not recognized" % netG)
     if residual:  # [SpicaV5] 段階 5-1: G(z) = z + F(z)（mode.yaml residual）

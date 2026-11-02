@@ -81,6 +81,9 @@ def parse_args():
     req("--input_nc", type=int)
     req("--output_nc", type=int)
     req("--norm")
+    req("--packet_ch", type=int)
+    req("--packet_depth", type=int)
+    req("--packet_n_conv", type=int)
     p.add_argument("--final_norm_act", action="store_true")
     p.add_argument("--residual", action="store_true")
     req("--hu_offset", type=int)
@@ -119,7 +122,8 @@ def parse_args():
 # ---------------------------------------------------------------------------
 def build_generator(a, device):
     """networks.define_G で学習時と同じ G を組み、<weight_dir>/net_G.pth を strict に読む。"""
-    net = networks.define_G(a.input_nc, a.output_nc, a.ngf, a.netG, a.norm, False, "normal", 0.02, final_norm_act=a.final_norm_act, residual=a.residual)
+    net = networks.define_G(a.input_nc, a.output_nc, a.ngf, a.netG, a.norm, False, "normal", 0.02, final_norm_act=a.final_norm_act, residual=a.residual,
+                            packet_ch=a.packet_ch, packet_depth=a.packet_depth, packet_n_conv=a.packet_n_conv)
     path = Path(a.weight_dir) / "net_G.pth"
     if not path.is_file():
         raise FileNotFoundError(f"G の重みがありません: {path}")

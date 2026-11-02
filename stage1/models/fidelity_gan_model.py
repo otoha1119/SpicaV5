@@ -88,6 +88,10 @@ class FidelityGANModel(BaseModel):
         parser.add_argument("--residual", action="store_true", help="G を residual 化: fake_B = real_A + F(real_A)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変（段階 5-1、2026-09-11）")
         parser.add_argument("--precision", type=str, default=None, help="fp32 | bf16（CUDA autocast。G / D の forward だけ。損失は FP32。stage1_v3 から移植、2026-11-02）")
         parser.add_argument("--compile", action="store_true", help="CUDA で G / D を torch.compile(mode='max-autotune')（CPU では無効）")
+        # netG=wavelet_packet の構造（train.yaml network.packet_*）。他の netG では読まないが、既定値は無いので run_train.py が常に渡す
+        parser.add_argument("--packet_ch", type=int, default=None, help="wavelet_packet: 各ノードの内部チャネル数")
+        parser.add_argument("--packet_depth", type=int, default=None, help="wavelet_packet: 分解の段数（葉は 2**depth 個、入力は 2**depth の倍数）")
+        parser.add_argument("--packet_n_conv", type=int, default=None, help="wavelet_packet: 各ノードの encoder / decoder の ConvBlock 数")
         if is_train:
             parser.set_defaults(
                 lr=None, beta1=None, n_epochs=None, n_epochs_decay=None, lr_policy=None,
@@ -129,7 +133,8 @@ class FidelityGANModel(BaseModel):
         self.model_names = ["G", "D"] if self.isTrain else ["G"]
 
         # G: A→B (論文 G: z → G(z))
-        self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain, final_norm_act=opt.final_norm_act, residual=opt.residual)
+        self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain, final_norm_act=opt.final_norm_act, residual=opt.residual,
+                                      packet_ch=opt.packet_ch, packet_depth=opt.packet_depth, packet_n_conv=opt.packet_n_conv)
         # 高速化（stage1_v3 / 008 と同じ、2026-11-02 移植）: bf16 autocast は G / D の forward だけ（損失・重み・optimizer は FP32、fgan_kl の exp も FP32）。
         # compile は nn.Module.compile（state_dict のキーを保つ）。compiled module の CUDA Graph は出力 buffer を再利用するので、保持する出力は _run_net で clone する
         self.use_bf16 = opt.precision == "bf16" and self.device.type == "cuda"

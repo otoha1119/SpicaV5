@@ -3,7 +3,7 @@
 
 sampling: random        # random（ケース 1 完全ランダム）| paper（論文の固定 40 patch/画像）| aligned（ケース 2、未実装）
 gan_mode: fgan_kl       # fgan_kl（論文 Eq.6）| lsgan | vanilla（ablation）
-netG: wavelet           # wavelet（論文 Fig.3）| unet_128 | resnet_9blocks ...（ablation）
+netG: wavelet_packet    # wavelet（論文 Fig.3）| wavelet_packet（HF skip なし、L も H も再分解。幅・段数は train.yaml network.packet_*。2026-11-02）| unet_128 | resnet_9blocks ...（ablation）
 netD: paper             # paper（論文 Fig.3、受容野 22）| basic（70×70 PatchGAN）
 final_norm_act: false   # G 最終 conv に bnorm+LReLU（確定: false。ablation 用）
 residual: true          # true: G(z) = z + F(z)（F の生出力が R。段階 5-1、2026-09-11）| false: 論文どおり G(z) を直接出力（旧方式は bash start.sh --residual false）

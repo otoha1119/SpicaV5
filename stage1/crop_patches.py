@@ -43,6 +43,7 @@ def parse_args():
     req("--device", choices=DEVICES)
     # G の構成（run の launch.yaml から）
     req("--netG"); req("--ngf", type=int); req("--input_nc", type=int); req("--output_nc", type=int); req("--norm")
+    req("--packet_ch", type=int); req("--packet_depth", type=int); req("--packet_n_conv", type=int)
     p.add_argument("--final_norm_act", action="store_true")
     p.add_argument("--residual", action="store_true")
     req("--hu_offset", type=int); req("--hu_min", type=int); req("--hu_max", type=int)
