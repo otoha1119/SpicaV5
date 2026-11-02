@@ -119,6 +119,7 @@ class FidelityGANModel(BaseModel):
         parser.add_argument("--final_norm_act", action="store_true", help="G 最終 conv に bnorm+LReLU を付ける（確定: 付けない。ablation 用）")
         parser.add_argument("--residual", action="store_true", help="G を residual 化: fake_B = real_A + F(real_A)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変（段階 5-1、2026-09-11）")
         parser.add_argument("--precision", type=str, default=None, help="fp32 | bf16（CUDA autocast。G / D の forward だけ。損失は FP32。stage1_v3 から移植、2026-11-02）")
+        parser.add_argument("--identity", action="store_true", help="恒等項: 実 EID y も G に通し λ_id · mean((G(y) − y)²) を G の損失に足す（2026-11-02）")
         parser.add_argument("--compile", action="store_true", help="CUDA で G / D を torch.compile(mode='max-autotune')（CPU では無効）")
         # netG=wavelet_packet の構造（train.yaml network.packet_*）。他の netG では読まないが、既定値は無いので run_train.py が常に渡す
         parser.add_argument("--packet_ch", type=int, default=None, help="wavelet_packet: 各ノードの内部チャネル数")
@@ -141,6 +142,9 @@ class FidelityGANModel(BaseModel):
             parser.add_argument("--display_hu_max", type=int, default=None, help="表示用の線形範囲の上限 HU")
             parser.add_argument("--diff_range_hu", type=int, default=None, help="差分パネル（R）のカラー表示の ±範囲 HU（白 = 0、純青 = −、純赤 = +）")
             parser.add_argument("--preview_bits", type=int, default=None, help="output_images/preview_<slice>/ のビット深度（8 | 16）")
+            parser.add_argument("--lambda_id", type=float, default=None, help="恒等項の重み λ_id（--identity のときだけ効く）")
+            parser.add_argument("--lambda_id_final", type=float, default=None, help="減衰後の λ_id")
+            parser.add_argument("--lambda_id_decay_epochs", type=int, default=None, help="λ_id を線形に変える epoch 数（0 = 一定）")
             parser.add_argument("--lambda_fid", type=float, default=None, help="weight λ of the fidelity term ‖G(z) − z‖² (paper: λ = 10)")
             parser.add_argument("--seed", type=int, default=None, help="乱数 seed（F-15。train.py が起動直後に python / numpy / torch に適用）")
             # 採点（util/validator.py）。値は configs/train.yaml の val: から
@@ -165,7 +169,11 @@ class FidelityGANModel(BaseModel):
         #   G_fid  : E[‖G(z) − z‖²] (λ を掛ける前)
         #   D_sep  : mean(v_fake) − mean(v_real)（D の分離の診断。0 = 見分けていない、正 = D 優勢）
         #   D_acc  : patch 単位で v_fake > v_real の割合（0.5 = 当てずっぽう、1 = 完全に分離）
-        self.loss_names = ["D", "D_real", "D_fake", "G_GAN", "G_fid", "D_sep", "D_acc"]
+        #   G_id     : mean((G(y) − y)²)（恒等項、λ を掛ける前。identity: false なら 0）
+        #   lambda_id: その step の λ_id（スケジュール後。identity: false なら 0）
+        self.loss_names = ["D", "D_real", "D_fake", "G_GAN", "G_fid", "G_id", "lambda_id", "D_sep", "D_acc"]
+        self.identity = bool(getattr(opt, "identity", False))
+        self.loss_G_id, self.loss_lambda_id = 0.0, 0.0
         # 表示・保存する画像名
         self.visual_names = ["real_A", "fake_B", "real_B"]
         # 保存・読込するネットワーク名。テスト時は G のみ
@@ -228,8 +236,23 @@ class FidelityGANModel(BaseModel):
         self.image_paths = input["A_paths" if AtoB else "B_paths"]
 
     def forward(self):
-        """fake_B = G(real_A)。論文 Fig. 3 の generator G の順伝播。--residual のときは G = z + F(z)（networks.ResidualGenerator）なので fake_B − real_A が F の生出力 R。"""
-        self.fake_B = self._run_net(self.netG, self.real_A)
+        """fake_B = G(real_A)。論文 Fig. 3 の generator G の順伝播。--residual のときは G = z + F(z)（networks.ResidualGenerator）なので fake_B − real_A が F の生出力 R。
+        identity のときは実 EID real_B も同じ forward で G に通す（連結して 1 回。BN の統計を PCD と EID で分けない。stage1_v3 と同じ）→ idt_B = G(real_B)。"""
+        if self.identity and self.isTrain:
+            n = self.real_A.shape[0]
+            out = self._run_net(self.netG, torch.cat([self.real_A, self.real_B], dim=0))
+            self.fake_B, self.idt_B = out[:n], out[n:]
+        else:
+            self.fake_B = self._run_net(self.netG, self.real_A)
+
+    def lambda_id_now(self):
+        """λ_id のスケジュール: epoch 1 で lambda_id、lambda_id_decay_epochs 経過で lambda_id_final、以後一定（0 なら一定）。stage1_v3 と同じ。"""
+        o = self.opt
+        lam0, lam1, n = o.lambda_id, o.lambda_id_final, o.lambda_id_decay_epochs
+        if n <= 0:
+            return lam0
+        t = min(max((int(getattr(self, "cur_epoch", o.epoch_count)) - 1) / float(n), 0.0), 1.0)
+        return lam0 + (lam1 - lam0) * t
 
     def _D_real_fake(self, fake):
         """本物 x と偽物を 1 バッチに連結して D に通す（stage1_v3 の 2026-10-30 の修正を移植、2026-11-02）。
@@ -269,6 +292,11 @@ class FidelityGANModel(BaseModel):
             self.loss_G_GAN = self.criterionGAN(v_fake, True)
         self.loss_G_fid = torch.mean((self.fake_B - self.real_A) ** 2)  # ‖G(z) − z‖² の画素平均
         self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid
+        if self.identity:  # 恒等項: 実 EID は G を通しても実 EID のまま（2026-11-02、mode.yaml identity）
+            lam = self.lambda_id_now()
+            g_id = torch.mean((self.idt_B - self.real_B) ** 2)
+            self.loss_G = self.loss_G + lam * g_id
+            self.loss_G_id, self.loss_lambda_id = float(g_id.detach()), float(lam)
         self.loss_G.backward()
 
     # ------------------------------------------------------------------

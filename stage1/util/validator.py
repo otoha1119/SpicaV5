@@ -20,7 +20,7 @@ import numpy as np
 import torch
 
 from data.ct_dataset import normalize, read_stored
-from util.metrics import analyze_slice, summarize
+from util.metrics import analyze_slice, body_mask, summarize
 from util.run_paths import BEST_NOTE, best_dirname, retire_other_bests
 
 KEYS = ("local_sd", "nps_f_av", "edge_grad_p90", "edge_grad_p99", "hu_p50", "hu_p90")
@@ -82,6 +82,17 @@ class Validator:
             y = net(x).clone().float().cpu().numpy()[0, 0]  # clone: compile 時の CUDA Graph 出力の上書き対策
             hu = (y + 1.0) / 2.0 * (o.hu_max - o.hu_min) + o.hu_min
             rows.append(analyze_slice(hu, self.thr, rng))
+        # EID 側: 実 EID を G に通したときの体内の差 RMS(G(y) − y)（恒等項の効き。identity のオン・オフどちらでも測る。score には入れない = オン・オフで比較できる）
+        sq = []
+        for p in self.eid_paths[:32]:
+            hu_y = self._hu(p)
+            yn = torch.from_numpy(normalize(read_stored(p), o.hu_offset, o.hu_min, o.hu_max))[None, None].to(model.device)
+            gy = net(yn).clone().float().cpu().numpy()[0, 0]
+            gy_hu = (gy + 1.0) / 2.0 * (o.hu_max - o.hu_min) + o.hu_min
+            m = body_mask(hu_y, self.thr)
+            d = (gy_hu - np.clip(hu_y, o.hu_min, o.hu_max))[m]
+            sq.append(float((d ** 2).mean()) if d.size else float("nan"))
+        ry = float(np.sqrt(np.nanmean(sq))) if sq else float("nan")
         net.train(was_training)
         gen = {k: summarize(rows, k) for k in KEYS}
         dist = {k: abs(gen[k]["median"] - self.ref[k]["median"]) / self.ref[k]["iqr"] if np.isfinite(gen[k]["median"]) else float("nan") for k in KEYS}
@@ -93,9 +104,10 @@ class Validator:
             self.tb.add_scalar(f"val/{k}_gen", gen[k]["median"], total_iters)
             self.tb.add_scalar(f"val/{k}_eid", self.ref[k]["median"], total_iters)
             self.tb.add_scalar(f"val/{k}_dist", dist[k], total_iters)
+        self.tb.add_scalar("val/ry_rms_HU", ry, total_iters)  # 実 EID の体内 RMS(G(y) − y)
         self.tb.add_scalar("val/score", score, total_iters)
         self.tb.add_scalar("val/best_score", self.best_score, total_iters)
-        line = (f"val epoch {int(epoch)} | score {score:.3f}{' *best*' if is_best else ''} | "
+        line = (f"val epoch {int(epoch)} | score {score:.3f}{' *best*' if is_best else ''} | ry_rms {ry:.1f} HU | "
                 + " ".join(f"{k} {gen[k]['median']:.2f} (eid {self.ref[k]['median']:.2f}, d {dist[k]:.2f})" for k in KEYS) + f" | {time.time() - t0:.1f}s")
         with open(self.run_dir / VAL_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
@@ -106,5 +118,5 @@ class Validator:
             retire_other_bests(self.run_dir, self.run_dir / tag)
             with open(self.run_dir / BEST_NOTE, "w", encoding="utf-8") as f:
                 f.write(f"epoch: {int(epoch)}\ndir: {tag}\nscore: {score:.4f}\nmarked_at: {time.strftime('%Y-%m-%dT%H:%M')}\nsource: auto (util/validator.py, R-S22 の 6 指標)\n"
-                        + "".join(f"{k}: gen {gen[k]['median']:.3f} eid {self.ref[k]['median']:.3f} dist {dist[k]:.3f}\n" for k in KEYS))
+                        + "".join(f"{k}: gen {gen[k]['median']:.3f} eid {self.ref[k]['median']:.3f} dist {dist[k]:.3f}\n" for k in KEYS) + f"ry_rms_HU: {ry:.2f}\n")
         return score, is_best

@@ -16,6 +16,9 @@ optim:
   compile: true         # CUDA で torch.compile(max-autotune)。初回だけコンパイルで遅い。build-essential 入りの image が要る（down → build）
 
 loss:
+  lambda_id: 1000.0          # 恒等項（mode.yaml identity: true のときだけ）。stage1_v3 と同じ。RMS 50 HU で mean² ≈ 3.3e-4 → ×1000 ≈ 0.33（GAN 項と同程度）
+  lambda_id_final: 1000.0    # 減衰後の値（lambda_id_decay_epochs > 0 のときだけ）
+  lambda_id_decay_epochs: 0  # 0 = 一定。序盤だけ強くするなら epoch 数と lambda_id_final を指定
   lambda_fid:  100.0      # 論文 "We empirically choose λ = 10"。範囲 [−1,1] では再整対象
 
 network:

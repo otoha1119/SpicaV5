@@ -321,3 +321,11 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 
 - Windows バインドマウント上で `os.replace(latest.tmp → latest)` が PermissionError になり学習が落ちた（ablation で 10-27 に PC3 で出たものと同じ）。`fidelity_gan_model._swap_dirs`（stage1_v3 / ablation と同じ）を移植: 3 秒間隔で 10 回再試行 → ファイル単位の置き換え → それでも駄目なら警告して学習を続け次回の保存で再試行。失敗しても重みディレクトリに新旧が混ざらない
 - 落ちた run は `latest` が無く `latest.old`（直前の epoch 末）と `latest.tmp` が残る。`weights/epoch_NNN/` は無事なので `bash start.sh PC1 resume <run> <epoch>` で再開する。次の保存で .old / .tmp は片付く
+
+### 恒等項のオン・オフ `mode.yaml identity`、`train.yaml loss.lambda_id*`（2026-11-02、ユーザー決定。ブランチ 015-f_014-stage1_wavelet_D）
+
+- 動機: best_e197（C の run、packet G + wavelet_paper D + 直接出力）に実 EID を通すと、G は実 EID のノイズも 24 → 9 HU に削り縁も鈍らせた（決まった「ノイズ除去 + ぼかし」のフィルタ）。EID-like のノイズ 23.6 HU は PCD の 93 HU を削り残したもので、PCD 由来の指紋が Stage 2 の漏れの候補（`docs/figures/20261102_stage1_e197_real_eid/`）。乱数ノイズ案はユーザーが却下。G に「EID は変えない」を課して入力のノイズ量に応じた処理を学ばせる
+- 実装（stage1_v3 の L_id の移植）: `identity: true` で実 EID real_B も PCD と連結して 1 回の forward で G に通し（BN の統計を分けない）、`λ_id · mean((G(y) − y)²)` を G の損失に足す。λ_id は `lambda_id` → `lambda_id_final` を `lambda_id_decay_epochs` で線形に変える（0 = 一定）。既定 1000 / 1000 / 0（v3 と同じ）。D は不変
+- 監視: loss/G_id、diag/lambda_id、loss/G_total に λ_id·G_id を含める。採点（util/validator.py）に `val/ry_rms_HU` = 実 EID 32 枚の体内 RMS(G(y) − y)（eval）を追加。**score には入れない**（オン・オフの比較を同じ score でするため）。val_log.txt と best.txt にも出る
+- オン・オフ: `--identity false` で従来どおり（G_id / lambda_id は 0 で記録）。resume で切り替え可（重みの形は不変）。導入前の run は identity false、lambda_id* 0 として続く（LEGACY_MODE_DEFAULTS / LEGACY_TRAIN_DEFAULTS）
+- 検証（scratch venv、CPU、合成データ）: オン（G_id が下がる）、オフ（G_id 0）、減衰 1000 → 10 / 2 epoch（epoch 2 で λ 505）、導入前 run の resume（互換移行で identity false）

@@ -50,7 +50,7 @@ LOSS_KEYS_BAR = ("D", "G_GAN", "G_fid")  # バー末尾に出す損失
 GRID_PAD = 0.5  # 画像グリッドの区切り（中間グレー。差分列の白 = 0 と混ざらないように）
 to_u8 = lambda x01: (np.clip(x01, 0.0, 1.0) * 255.0).round().astype(np.uint8)  # noqa: E731
 to_u16 = lambda x01: (np.clip(x01, 0.0, 1.0) * 65535.0).round().astype(np.uint16)  # noqa: E731
-DIAG_KEYS = ("D_real", "D_fake", "D_sep", "D_acc")  # TB で diag/ に分類する損失名（D_sep / D_acc は D の分離の診断。2026-11-02）
+DIAG_KEYS = ("D_real", "D_fake", "D_sep", "D_acc", "lambda_id")  # TB で diag/ に分類する損失名（D_sep / D_acc は D の分離の診断。2026-11-02）
 
 
 class TrainMonitor:
@@ -115,7 +115,7 @@ class TrainMonitor:
         for k, v in losses.items():
             self.tb.add_scalar(("diag/" if k in DIAG_KEYS else "loss/") + k, v, total_iters)
         if "G_GAN" in losses and "G_fid" in losses:
-            self.tb.add_scalar("loss/G_total", losses["G_GAN"] + self.opt.lambda_fid * losses["G_fid"], total_iters)
+            self.tb.add_scalar("loss/G_total", losses["G_GAN"] + self.opt.lambda_fid * losses["G_fid"] + losses.get("lambda_id", 0.0) * losses.get("G_id", 0.0), total_iters)
         self.tb.add_scalar("diag/d_in_HU", d_in_hu, total_iters)
         self.tb.add_scalar("time/sec_per_step", t_comp, total_iters)
         self.tb.add_scalar("time/data_sec_per_step", t_data, total_iters)

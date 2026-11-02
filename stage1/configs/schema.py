@@ -34,6 +34,9 @@ TRAIN = {
     "optim.compile":        Key(bool,  "--compile",        "CUDA で G / D を torch.compile(mode='max-autotune') する（CPU では無効）。初回 iteration と 512 フル推論の初回はコンパイルで遅い。Docker image に build-essential が要る（docker/Dockerfile.gen30/gen50）"),
     # loss
     "loss.lambda_fid":      Key(float, "--lambda_fid",     '論文 "We empirically choose λ = 10"。fidelity ‖G(z)−z‖² の重み'),
+    "loss.lambda_id":       Key(float, "--lambda_id",      "恒等項 λ_id · mean((G(y) − y)²)（実 EID y を G に通したときの差。mode.yaml identity: true のときだけ効く）。正規化単位で RMS 20 HU ≈ MSE 5e-5 なので λ_fid より大きい値が要る（stage1_v3 は 1000）"),
+    "loss.lambda_id_final": Key(float, "--lambda_id_final", "減衰後の λ_id（lambda_id_decay_epochs > 0 のときだけ使う）"),
+    "loss.lambda_id_decay_epochs": Key(int, "--lambda_id_decay_epochs", "λ_id を lambda_id から lambda_id_final まで線形に変える epoch 数（0 = 一定）"),
     # network
     "network.ngf":          Key(int,   "--ngf",            "G 最初の段のチャネル数。Fig. 3 = 32"),
     "network.ndf":          Key(int,   "--ndf",            "D 1 層目のチャネル数。Fig. 3 = 32"),
@@ -87,15 +90,16 @@ MODE = {
     "netG":           Key(str,  "--netG",           "wavelet（論文 Fig.3）| wavelet_packet（HF skip なし、L も H も再分解。network.packet_*。2026-11-02）| unet_128 | unet_256 | resnet_6blocks | resnet_9blocks（ablation）"),
     "netD":           Key(str,  "--netD",           "paper（論文 Fig.3、受容野 22）| wavelet_paper（固定 Haar 1 段 → [LL|LH,HL,HH] 4ch → paper D。2026-11-02）| wavelet_paper_hf（同上、高周波 3 帯だけ）| basic（70×70 PatchGAN）| n_layers | pixel"),
     "final_norm_act": Key(bool, "--final_norm_act", "G 最終 conv に bnorm+LReLU を付ける（確定: false。ablation 用）"),
+    "identity":       Key(bool, "--identity",       "true で恒等項を入れる: 実 EID y も G に通し（PCD と連結して 1 回の forward）、λ_id · mean((G(y) − y)²) を G の損失に足す（stage1_v3 の L_id の移植、2026-11-02）。false で従来どおり。resume で切り替え可（重みの形は不変）"),
     "residual":       Key(bool, "--residual",       "true で G を residual 化: G(z) = z + F(z)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変。false = 論文どおり G(z) を直接出力（段階 5-1、2026-09-11）"),
     "serial_batches": Key(bool, "--serial_batches", "true で sampler を index 決定的に（再現用）"),
     "task":           Key(str,  "--task",           "degrade（論文どおり A = PCD512 → B = EID512 の劣化生成。pcd_dir / eid_dir、分割なし）| sr（一発超解像: A = EID1024（eid1024_dir、EID_v5 を ×2 補間）→ B = PCD1024（pcd1024_dir）。configs/sr.yaml を読む: A の症例分割、B の除外、train.yaml の差し替え。2026-10-12）"),
 }
 # 導入前の run の launch.yaml / state.pth に無い mode のキーと、そのとき仮定する値。無い = その機構なしで学習された重みなので、推論・crop・resume では「導入前の意味」で扱う
 # （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の値で補うと旧 run の重みの意味が変わる。2026-09-11 residual、2026-10-12 task）
-LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade"}
+LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade", "identity": False}
 # 導入前の run を resume するときだけ使う train の移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値。設定欠落の暗黙補完には使わない（2026-11-02）
-LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False}
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.lambda_id": 0.0, "loss.lambda_id_final": 0.0, "loss.lambda_id_decay_epochs": 0}
 
 # ---------------------------------------------------------------------------
 # stage1/configs/sr.yaml — task: sr（一発超解像）のときだけ読む。degrade では一切読まない（既存の挙動は不変）
@@ -390,6 +394,8 @@ def check_values(train, mode, machine):
     if train["optim.seed"] < 0: P.append("optim.seed ≥ 0")
     if train["optim.precision"] not in PRECISIONS: P.append(f"optim.precision は {PRECISIONS}")
     if train["loss.lambda_fid"] < 0: P.append("loss.lambda_fid ≥ 0")
+    if train["loss.lambda_id"] < 0 or train["loss.lambda_id_final"] < 0: P.append("loss.lambda_id / lambda_id_final ≥ 0")
+    if train["loss.lambda_id_decay_epochs"] < 0: P.append("loss.lambda_id_decay_epochs ≥ 0")
     if train["network.ngf"] < 1 or train["network.ndf"] < 1: P.append("network.ngf / ndf ≥ 1")
     if train["network.norm"] not in NORMS: P.append(f"network.norm は {NORMS}")
     if train["network.init_type"] not in INIT_TYPES: P.append(f"network.init_type は {INIT_TYPES}")
