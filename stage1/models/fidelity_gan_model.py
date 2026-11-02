@@ -47,6 +47,18 @@ from . import networks
 from configs.schema import check_opt
 
 
+def _quiet_inductor_autotune_success_logs():
+    """探索は維持し、成功した max-autotune 候補の大量表示だけ止める（stage1_v3 / 008 と同じ）。"""
+    import torch._inductor.select_algorithm as select_algorithm
+
+    select_algorithm.PRINT_AUTOTUNE = False
+    import torch._inductor.config as inductor_config
+    if hasattr(inductor_config, "autotune_num_choices_displayed"):
+        inductor_config.autotune_num_choices_displayed = 0
+    if hasattr(inductor_config, "max_autotune_report_choices_stats"):
+        inductor_config.max_autotune_report_choices_stats = False
+
+
 def _to_tuple(x):
     """random.setstate は入れ子の tuple を要求する。torch.load 後に list になっている場合に戻す。"""
     return tuple(_to_tuple(v) for v in x) if isinstance(x, (list, tuple)) else x
@@ -74,6 +86,8 @@ class FidelityGANModel(BaseModel):
         )
         parser.add_argument("--final_norm_act", action="store_true", help="G 最終 conv に bnorm+LReLU を付ける（確定: 付けない。ablation 用）")
         parser.add_argument("--residual", action="store_true", help="G を residual 化: fake_B = real_A + F(real_A)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変（段階 5-1、2026-09-11）")
+        parser.add_argument("--precision", type=str, default=None, help="fp32 | bf16（CUDA autocast。G / D の forward だけ。損失は FP32。stage1_v3 から移植、2026-11-02）")
+        parser.add_argument("--compile", action="store_true", help="CUDA で G / D を torch.compile(mode='max-autotune')（CPU では無効）")
         if is_train:
             parser.set_defaults(
                 lr=None, beta1=None, n_epochs=None, n_epochs_decay=None, lr_policy=None,
@@ -116,6 +130,12 @@ class FidelityGANModel(BaseModel):
 
         # G: A→B (論文 G: z → G(z))
         self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain, final_norm_act=opt.final_norm_act, residual=opt.residual)
+        # 高速化（stage1_v3 / 008 と同じ、2026-11-02 移植）: bf16 autocast は G / D の forward だけ（損失・重み・optimizer は FP32、fgan_kl の exp も FP32）。
+        # compile は nn.Module.compile（state_dict のキーを保つ）。compiled module の CUDA Graph は出力 buffer を再利用するので、保持する出力は _run_net で clone する
+        self.use_bf16 = opt.precision == "bf16" and self.device.type == "cuda"
+        self.compile_enabled = bool(opt.compile) and self.device.type == "cuda"
+        if self.compile_enabled and not (shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc")):
+            raise RuntimeError("torch.compile に必要な C コンパイラがありません。Docker image を再ビルドしてください: bash start.sh <machine> down → bash start.sh <machine> build")
 
         if self.isTrain:
             # D: B 側の判別器 (論文 D: x vs G(z))
@@ -128,6 +148,21 @@ class FidelityGANModel(BaseModel):
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
             self.optimizers = [self.optimizer_G, self.optimizer_D]
+            if self.compile_enabled:
+                _quiet_inductor_autotune_success_logs()
+                self.netG.compile(mode="max-autotune")
+                self.netD.compile(mode="max-autotune")
+
+    def _autocast(self):
+        """BF16 は GradScaler 不要。重みと optimizer state は FP32 のまま。CPU / fp32 では無効（enabled=False）。"""
+        return torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16)
+
+    def _run_net(self, net, x):
+        """autocast で forward し、出力を FP32 に戻す。compiled module の CUDA Graph 出力を次の呼び出しによる上書きから守る（clone）。"""
+        with self._autocast():
+            y = net(x)
+        y = y.float()
+        return y.clone() if self.compile_enabled else y
 
     # ------------------------------------------------------------------
     # 論文 Eq.(6) の D の値域: D := 1 − exp(v)。v は netD の生出力
@@ -150,14 +185,14 @@ class FidelityGANModel(BaseModel):
 
     def forward(self):
         """fake_B = G(real_A)。論文 Fig. 3 の generator G の順伝播。--residual のときは G = z + F(z)（networks.ResidualGenerator）なので fake_B − real_A が F の生出力 R。"""
-        self.fake_B = self.netG(self.real_A)
+        self.fake_B = self._run_net(self.netG, self.real_A)
 
     def backward_D(self):
         """D の損失と勾配。論文 Eq.(12) の D:  max_D  E_x[D(x)] + E_z[log(1 − D(G(z)))]
         → 最小化するのは  loss_D = −( E_x[D(x)] + E_z[log(1 − D(G(z)))] )。係数 0.5 は付けない (Eq.(12) に無い)。
         """
-        v_real = self.netD(self.real_B)
-        v_fake = self.netD(self.fake_B.detach())
+        v_real = self._run_net(self.netD, self.real_B)
+        v_fake = self._run_net(self.netD, self.fake_B.detach())
         if self.gan_mode == "fgan_kl":
             D_real = self._D_from_v(v_real)              # D(x) = 1 − exp(v)
             log1mD_fake = self._log1mD_from_v(v_fake)    # log(1 − D(G(z))) = v
@@ -173,7 +208,7 @@ class FidelityGANModel(BaseModel):
 
     def backward_G(self):
         """G の損失と勾配。論文 Eq.(12) の G:  min_G  E_z[log(1 − D(G(z)))] + λ E_z[‖G(z) − z‖²]"""
-        v_fake = self.netD(self.fake_B)
+        v_fake = self._run_net(self.netD, self.fake_B)
         if self.gan_mode == "fgan_kl":
             self.loss_G_GAN = self._log1mD_from_v(v_fake).mean()   # E[log(1 − D(G(z)))] = E[v]
         else:  # ablation: 本家 GANLoss

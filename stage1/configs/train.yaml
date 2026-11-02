@@ -12,6 +12,8 @@ optim:
   n_epochs_decay: 0     # 論文未記載 (Q-T2)。減衰なし
   lr_policy: linear     # decay 0 なら定常。再開が対応するのは linear のみ
   seed: 0               # python / numpy / torch の乱数 seed（再現条件）。cudnn.benchmark は本家のままなので完全決定ではない
+  precision: bf16       # CUDA autocast（stage1_v3 の高速化を移植、2026-11-02）。重み・optimizer・損失は FP32。fp32 で従来どおり
+  compile: true         # CUDA で torch.compile(max-autotune)。初回だけコンパイルで遅い。build-essential 入りの image が要る（down → build）
 
 loss:
   lambda_fid:  100.0      # 論文 "We empirically choose λ = 10"。範囲 [−1,1] では再整対象

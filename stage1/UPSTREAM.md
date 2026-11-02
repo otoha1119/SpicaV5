@@ -271,3 +271,10 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 
 - `log.display_hu_max`: 2100 → 3000（stored 0〜3500 → 0〜4400）。下限 −1400 は据え置き。TB の 8bit 表示・preview パネル・推論 / crop のパネルに共通で、Stage 1 / 2 / 3 と ablation（`ablation/*/configs/train.yaml`）を全部揃える。学習・推論の正規化窓（`data.hu_min` / `hu_max` = −1400 / 4096）と 16bit の生出力は変えない
 - 推論・crop は現在の `train.yaml` の表示設定を読むので、古い run の重みでも 3000 になる。既存 run を resume した学習中の TB / preview は `state.pth` の実効値（2100）のまま。揃えたいときは `--display_hu_max 3000` を付ける
+
+### bf16 autocast と torch.compile を v1 に移植 `train.yaml optim.precision / optim.compile`（2026-11-02、ユーザー指示）
+
+- `stage1_v3`（ブランチ 012、元は 008）の高速化を `stage1/` に同じ形で移植。`optim.precision: bf16` = CUDA autocast を G / D の forward だけに掛ける（`_run_net` で出力を FP32 に戻す。損失・重み・optimizer state・fgan_kl の exp は FP32）。`optim.compile: true` = `nn.Module.compile(mode="max-autotune")`（state_dict のキーを保つ。CUDA Graph の出力 buffer 再利用に備えて `_run_net` が clone）。CPU / fp32 では両方とも無効（autocast enabled=False、compile しない）。compile は C コンパイラが無ければ起動時にエラー（`docker/Dockerfile.gen30/gen50` に build-essential を追加。012 と同じ。既に 012 の image で動いているコンテナならそのまま使える）
+- 監視用の forward（`util/monitor.py` の fixed / full 512）は従来どおり FP32 のまま（autocast を掛けない）。compile 時は 512 の初回だけ再コンパイルで遅い
+- `schema.py`: TRAIN に 2 キー、`PRECISIONS`、`LEGACY_TRAIN_DEFAULTS = {precision fp32, compile False}`（導入前の run を resume するときだけ従来動作で続ける。`run_train.py` が「互換移行」と表示。変えるなら `--precision bf16 --compile true` を明示）
+- 検証（scratch venv、CPU、合成データ）: 新規 run の launch に bf16 / true が記録される、導入前の run の resume が fp32 / false で続く、`--precision bf16 --compile true` 付きの resume が実効値を更新する。CUDA での速度・数値は PC1 で確認する

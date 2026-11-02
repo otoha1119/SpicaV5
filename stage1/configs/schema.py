@@ -30,6 +30,8 @@ TRAIN = {
     "optim.n_epochs_decay": Key(int,   "--n_epochs_decay", "lr 線形減衰の epoch 数。論文未記載 (Q-T2) → 0"),
     "optim.lr_policy":      Key(str,   "--lr_policy",      "junyanz の scheduler 名。再開が対応するのは linear のみ（F-12）。decay 0 なら定常"),
     "optim.seed":           Key(int,   "--seed",           "python / numpy / torch の乱数 seed（F-15）。再現条件として launch.yaml に残る。cudnn.benchmark は本家のままなので完全決定ではない"),
+    "optim.precision":      Key(str,   "--precision",      "演算精度 fp32 | bf16。bf16 は CUDA の autocast（G / D の forward だけ。重み・optimizer state・損失は FP32）。stage1_v3 の高速化と同じ（2026-11-02 移植）"),
+    "optim.compile":        Key(bool,  "--compile",        "CUDA で G / D を torch.compile(mode='max-autotune') する（CPU では無効）。初回 iteration と 512 フル推論の初回はコンパイルで遅い。Docker image に build-essential が要る（docker/Dockerfile.gen30/gen50）"),
     # loss
     "loss.lambda_fid":      Key(float, "--lambda_fid",     '論文 "We empirically choose λ = 10"。fidelity ‖G(z)−z‖² の重み'),
     # network
@@ -84,6 +86,8 @@ MODE = {
 # 導入前の run の launch.yaml / state.pth に無い mode のキーと、そのとき仮定する値。無い = その機構なしで学習された重みなので、推論・crop・resume では「導入前の意味」で扱う
 # （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の値で補うと旧 run の重みの意味が変わる。2026-09-11 residual、2026-10-12 task）
 LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade"}
+# 導入前の run を resume するときだけ使う train の移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値。設定欠落の暗黙補完には使わない（2026-11-02）
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False}
 
 # ---------------------------------------------------------------------------
 # stage1/configs/sr.yaml — task: sr（一発超解像）のときだけ読む。degrade では一切読まない（既存の挙動は不変）
@@ -350,6 +354,7 @@ SAMPLINGS = ("random", "paper", "aligned")
 GAN_MODES = ("fgan_kl", "lsgan", "vanilla")
 NETGS = ("wavelet", "unet_128", "unet_256", "resnet_6blocks", "resnet_9blocks")
 NETDS = ("paper", "basic", "n_layers", "pixel")
+PRECISIONS = ("fp32", "bf16")
 TASKS = ("degrade", "sr")
 NORMS = ("batch", "instance", "none")
 INIT_TYPES = ("normal", "xavier", "kaiming", "orthogonal")
@@ -375,6 +380,7 @@ def check_values(train, mode, machine):
     if train["optim.n_epochs_decay"] < 0: P.append("optim.n_epochs_decay ≥ 0")
     if train["optim.lr_policy"] not in LR_POLICIES: P.append(f"optim.lr_policy は {LR_POLICIES} のみ（他方式は再開時の scheduler 復元が未実装）")
     if train["optim.seed"] < 0: P.append("optim.seed ≥ 0")
+    if train["optim.precision"] not in PRECISIONS: P.append(f"optim.precision は {PRECISIONS}")
     if train["loss.lambda_fid"] < 0: P.append("loss.lambda_fid ≥ 0")
     if train["network.ngf"] < 1 or train["network.ndf"] < 1: P.append("network.ngf / ndf ≥ 1")
     if train["network.norm"] not in NORMS: P.append(f"network.norm は {NORMS}")
