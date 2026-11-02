@@ -288,3 +288,10 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 検証（scratch venv、合成データ 128 px、CPU、2026-11-02）: G 単体（depth 1/2/3 の形状・backward・R = 0 で厳密に恒等・8 の倍数でない入力はエラー・512 フル推論）、学習 1 epoch（launch に packet キーと `--packet_*` が入る）、resume、推論（run_infer → inference_dir）、`--netG wavelet` の run の launch から packet キーを消した推論（補完の警告を出して成功）、netG=wavelet_packet の launch からキーを消すとエラー。旧 G（wavelet）のパラメータ数は不変
 - 変えていないもの: 損失（fidelity ‖R‖²、λ_fid は main の 100 のまま）、D、residual、データ、z なし。1 変更 = G の構造だけ。合否は Stage 2 ではなく Stage 1 の物理量（`docs/experiments/EXP-20261102-01.md`）
 
+
+### D の real / fake 連結 forward と診断値 D_sep / D_acc（2026-11-02、ユーザー決定。ブランチ 015-f_014-stage1_wavelet_D）
+
+- 症状（PC1 run 2026_1102_1806、packet G、125 epoch）: D_real ≈ 0、D_fake ≈ 0 が平常で、ときどき D_fake が −8 に落ちて G_GAN が跳ね、すぐ戻る。EID-like はぼけるが PCD の粒が残り、実 EID の粒に置き換わっていない（ユーザー目視）。D が質感の違いを見られていない
+- 原因（stage1_v3 で 2026-10-30 に HU の水準が epoch ごとに揺れた原因と同じ）: `backward_D` / `backward_G` が D を本物 40 枚・偽物 40 枚の**別 forward** で呼ぶ。D の BN（paper は BN 固定）はそのバッチの統計で正規化するので、偽物群に共通する差（高周波エネルギー、HU の水準）が正規化で消え、D は局所の模様でしか判定できない
+- 修正: `_D_real_fake(fake)` = 本物と偽物を batch 次元で連結して 1 回で D に通し、前半・後半に分ける（`stage1_v3/models/projection_model.py` の同名メソッドを移植）。D の backward と G の backward の両方で使う。損失の式・λ・batch 40・非ペアの性質は不変。optimizer から見た batch も不変（統計の範囲だけ 40 → 80）
+- 診断値: `loss_names` に `D_sep`（mean(v_fake) − mean(v_real)。0 = 見分けていない）と `D_acc`（patch 単位で v_fake > v_real の割合。0.5 = 当てずっぽう）。TB の diag/ に出る（`util/monitor.py DIAG_KEYS`）。resume は可（D の重みは同じ構造）

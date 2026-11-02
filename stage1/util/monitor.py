@@ -10,6 +10,7 @@ junyanz の util/visualizer.py（wandb / HTML）は使わない。train.py は�
      loss/D, loss/G_GAN, loss/G_fid, loss/G_total（= G_GAN + λ·G_fid）
      diag/D_real, diag/D_fake（E[D(x)], E[D(G(z))]。最適で 1 − p_G/p_x。D_fake の急落 = KL 発散の兆候）
      diag/d_in_HU（mean|G(z) − z| を HU 換算。恒等退行 ≈ 0 / 暴走の監視）
+     diag/D_sep, diag/D_acc（D が本物と偽物を分けている度合い。0 / 0.5 = 見分けていない。2026-11-02）
      time/sec_per_step, time/data_sec_per_step（データ律速の検出）
      train/lr（epoch ごと）
      images/current（いま学習中のバッチ先頭 n_images 枚）, images/fixed（学習開始時に固定した同じ patch）
@@ -49,7 +50,7 @@ LOSS_KEYS_BAR = ("D", "G_GAN", "G_fid")  # バー末尾に出す損失
 GRID_PAD = 0.5  # 画像グリッドの区切り（中間グレー。差分列の白 = 0 と混ざらないように）
 to_u8 = lambda x01: (np.clip(x01, 0.0, 1.0) * 255.0).round().astype(np.uint8)  # noqa: E731
 to_u16 = lambda x01: (np.clip(x01, 0.0, 1.0) * 65535.0).round().astype(np.uint16)  # noqa: E731
-DIAG_KEYS = ("D_real", "D_fake")           # TB で diag/ に分類する損失名
+DIAG_KEYS = ("D_real", "D_fake", "D_sep", "D_acc")  # TB で diag/ に分類する損失名（D_sep / D_acc は D の分離の診断。2026-11-02）
 
 
 class TrainMonitor:
