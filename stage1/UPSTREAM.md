@@ -329,3 +329,7 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 監視: loss/G_id、diag/lambda_id、loss/G_total に λ_id·G_id を含める。採点（util/validator.py）に `val/ry_rms_HU` = 実 EID 32 枚の体内 RMS(G(y) − y)（eval）を追加。**score には入れない**（オン・オフの比較を同じ score でするため）。val_log.txt と best.txt にも出る
 - オン・オフ: `--identity false` で従来どおり（G_id / lambda_id は 0 で記録）。resume で切り替え可（重みの形は不変）。導入前の run は identity false、lambda_id* 0 として続く（LEGACY_MODE_DEFAULTS / LEGACY_TRAIN_DEFAULTS）
 - 検証（scratch venv、CPU、合成データ）: オン（G_id が下がる）、オフ（G_id 0）、減衰 1000 → 10 / 2 epoch（epoch 2 で λ 505）、導入前 run の resume（互換移行で identity false）
+
+### 恒等パネル（代表 EID を G に通した G(EID) と G(EID) − EID）を epoch 末に保存（2026-11-03、ユーザー指示。ブランチ 015-f_014-stage1_wavelet_D）
+
+- `util/monitor.save_full_images`: 代表 EID（`log.eid_slice`）を G に通し（eval、clone）、パネル [EID (input) | G(EID) epoch N | G(EID) − EID + ゲージ] を作る。TB `images/full/eid_identity`、表示用 `output_images/preview_identity_<eid>/epoch_NNN_{G_eid,R_eid_color,panel}.png`、生 16bit `output_images/epoch_NNN/<eid>_{eid,G_eid,R_eid}.png`（R は 0 HU = 32768）。identity のオン・オフに関係なく毎回出す（オフの run との比較用）。task: sr では名前が pcd になる

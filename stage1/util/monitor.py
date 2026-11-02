@@ -176,6 +176,7 @@ class TrainMonitor:
         <run>/output_images/epoch_NNN/<slice>_{pcd,eidlike,R}.png を uint16 で保存する（TB にも images/full/fixed|random を 8bit で）。
         表示用は preview_fixed_<slice>/（代表 PCD / EID を 1 回、epoch ごとに EID-like / R カラー / パネル）と preview_random/（パネルだけ）。
         パネルは [EID | EID-like | PCD | R + ゲージ]（util/panel.py。各列の下にラベル、R の右に縦ゲージ。TB の images/full/* も同じ絵）。
+        加えて代表 EID を G に通した恒等パネル [EID | G(EID) | G(EID) − EID]（TB images/full/eid_identity、preview_identity_<eid>/、epoch_NNN/<eid>_{eid,G_eid,R_eid}.png。2026-11-02）。
         task: sr では名前が入れ替わる（util/task_names.py）: <slice>_{eid,pcdlike,R}.png、00_eid_ / 01_pcd_ / epoch_NNN_pcdlike、パネル [PCD | PCD-like | EID | R]。並びと中身（A / G(z) / B）は同じ。
         推論は full-image モード（G は全畳み込み + 3 段 Haar なので H, W が 8 の倍数なら一発で通る）。
         uint16 化は inference_dir.py と同じ関数（denormalize / residual_stored）で、eidlike = pcd + (R − 32768) が厳密に成り立つ。"""
@@ -227,6 +228,28 @@ class TrainMonitor:
                 write_png(d / f"{ep}_panel.png", rgb_png(panel01))
             else:
                 write_png(preview_dir(self.run_dir, "random") / f"{ep}_{stem}.png", rgb_png(panel01))  # preview_random/epoch_NNN_<slice>.png（パネルだけ）
+        if self.eid_ref is not None:  # 恒等の確認: 代表 EID を G に通した G(EID) と差 G(EID) − EID（2026-11-02。identity のオン・オフに関係なく毎回）
+            net.eval()
+            with torch.no_grad():
+                b = self.eid_ref["B"].to(model.device)
+                gb = net(b).clone()
+            net.train(was_training)
+            Bh, GBh = to_hu(b)[0], to_hu(gb)[0]
+            RB = GBh - Bh
+            b16 = denormalize(b[0, 0].detach().cpu().numpy(), *hu)
+            gb16 = denormalize(gb[0, 0].detach().cpu().numpy(), *hu)
+            nb = self.nm["b"]
+            write_png(out_dir / f"{self.eid_stem}_{nb}.png", b16)                           # 入力の実 EID（16bit）
+            write_png(out_dir / f"{self.eid_stem}_G_{nb}.png", gb16)                        # G(EID)
+            write_png(out_dir / f"{self.eid_stem}_R_{nb}.png", residual_stored(b16, gb16))  # G(EID) − EID（0 HU = 32768）
+            hwc = lambda p3: p3.permute(1, 2, 0).numpy()  # noqa: E731
+            idt01 = build_panel([hwc(lin(Bh)), hwc(lin(GBh)), hwc(col(RB))],
+                                [f"{nb.upper()} (input)", f"G({nb.upper()}) epoch {int(epoch)}", f"G({nb.upper()}) - {nb.upper()}"], o.diff_range_hu)
+            self.tb.add_image("images/full/eid_identity", to_u8(idt01), total_iters, dataformats="HWC")
+            d = preview_dir(self.run_dir, f"identity_{self.eid_stem}")
+            write_png(d / f"{ep}_G_{nb}.png", gray_png(lin(GBh)))
+            write_png(d / f"{ep}_R_{nb}_color.png", rgb_png(col(RB).permute(1, 2, 0).numpy()))
+            write_png(d / f"{ep}_panel.png", rgb_png(idt01))
         self.write(f"saved full-size images ({len(full['paths'])} slices) -> {out_dir}")
 
     def close(self):
