@@ -111,6 +111,11 @@ class FidelityGANModel(BaseModel):
             parser.add_argument("--preview_bits", type=int, default=None, help="output_images/preview_<slice>/ のビット深度（8 | 16）")
             parser.add_argument("--lambda_fid", type=float, default=None, help="weight λ of the fidelity term ‖G(z) − z‖² (paper: λ = 10)")
             parser.add_argument("--seed", type=int, default=None, help="乱数 seed（F-15。train.py が起動直後に python / numpy / torch に適用）")
+            # 採点（util/validator.py）。値は configs/train.yaml の val: から
+            parser.add_argument("--val_pcd_slices", type=int, default=None, help="採点用の固定 PCD スライス数（0 で採点しない）")
+            parser.add_argument("--val_eid_slices", type=int, default=None, help="参照の固定 実 EID スライス数")
+            parser.add_argument("--auto_best", action="store_true", help="score 最良で <run>/best_eNNN/ を自動更新")
+            parser.add_argument("--body_threshold_hu", type=int, default=None, help="採点の体内判定の HU 閾値")
             parser.add_argument("--require_cuda", action="store_true", help="CUDA が使えなければ止める（F-16。run_train が machines.yaml の gpu_gen ≠ 0 のとき付ける）")
             # 再開用（run_train.py --resume が付ける。設定値ではなく起動器の内部フラグなので schema には無い）
             parser.add_argument("--resume_state", type=str, default=None, help="重みディレクトリの state.pth のパス。--continue_train と併用。optimizer / scheduler / RNG / iteration 数を復元する")

@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import CROP, MACHINE, TRAIN, ConfigError, apply_overrides, check_crop_cases, check_crop_values, to_argv, validate  # noqa: E402
 from run_infer import display_argv, generator_argv, load_yaml  # noqa: E402
-from util.run_paths import LAUNCH_FILE, crop_output_dir, find_run_dir, latest_launch  # noqa: E402
+from util.run_paths import LAUNCH_FILE, crop_output_dir, find_run_dir, latest_launch, resolve_weight_dir  # noqa: E402
 
 # 表示の設定は「現在の configs/train.yaml の log」から取る（run の launch.yaml ではない。古い run でも今の見た目にする）
 DISPLAY_TRAIN_KEYS = {"log.display_hu_min": "--display_hu_min", "log.display_hu_max": "--display_hu_max", "log.preview_bits": "--preview_bits", "log.diff_range_hu": "--diff_range_hu"}
@@ -72,7 +72,7 @@ def main():
         check_crop_values(crop)
         if crop["device"] == "cuda" and machine["gpu_gen"] == 0:
             raise ConfigError(f"device=cuda ですが machines.yaml の '{a.machine}' は gpu_gen 0（CPU）です")
-        weight_dir = Path(path_over.get("--weight_dir", a.weight_dir))
+        weight_dir = resolve_weight_dir(path_over.get("--weight_dir", a.weight_dir))  # <run>/best は best_eNNN に解決（2026-11-02）
         if not (weight_dir / "net_G.pth").is_file():
             raise ConfigError(f"重みディレクトリに net_G.pth がありません: {weight_dir}（<run>/latest | <run>/best | <run>/weights/epoch_NNN を指定）")
         run_dir = find_run_dir(weight_dir)

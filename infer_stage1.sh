@@ -7,7 +7,7 @@
 # ■ ここに書くもの（下の 4 変数。start.sh の MACHINE と同じ流儀。パスはコンテナ内から見えるもの）
 #   WEIGHT_DIR     重みディレクトリ = net_G.pth があるディレクトリ。次のどれか:
 #                    <checkpoints_dir>/<run>/latest            最後に保存したもの
-#                    <checkpoints_dir>/<run>/best              bash start.sh best <run> <epoch> で作ったもの
+#                    <checkpoints_dir>/<run>/best              best_eNNN/ に解決される（採点で自動更新。bash start.sh best <run> <epoch> で手動上書き）
 #                    <checkpoints_dir>/<run>/weights/epoch_NNN  epoch ごとの checkpoint
 #   INPUT_DIR      処理する PNG 群のフォルダ（uint16 1ch、stored = HU + 1400。直下に症例フォルダ PCD-nnn/、中に PCD-nnn-sss.png）。
 #                  machines.yaml の host_data_root → container_data_root のマウント配下（/workspace/DataSet/...）に置くこと
