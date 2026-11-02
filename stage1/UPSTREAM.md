@@ -291,3 +291,11 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 
 - Windows バインドマウント上で `os.replace(latest.tmp → latest)` が PermissionError になり学習が落ちた（ablation で 10-27 に PC3 で出たものと同じ）。`fidelity_gan_model._swap_dirs`（stage1_v3 / ablation と同じ）を移植: 3 秒間隔で 10 回再試行 → ファイル単位の置き換え → それでも駄目なら警告して学習を続け次回の保存で再試行。失敗しても重みディレクトリに新旧が混ざらない
 - 落ちた run は `latest` が無く `latest.old`（直前の epoch 末）と `latest.tmp` が残る。`weights/epoch_NNN/` は無事なので `bash start.sh PC1 resume <run> <epoch>` で再開する。次の保存で .old / .tmp は片付く
+
+### 学習 → 推論 → Stage 2 のデータ作成 → Stage 2 の学習を 1 本で `bash start.sh <マシン> chain`（2026-11-03、ユーザー指示）
+
+- `chain_stage1to2.sh`（リポジトリ直下、コンテナ内）: 1. `train_stage1.sh "$@"`（`resume` 併用可。n_epochs まで学習済みなら即終わる）→ 2. `stage1/run_infer.py`（重み = `<run>/$CHAIN_WEIGHT`、既定 best = best_eNNN、入力 = その run の最新 launch の `machine.pcd_dir`（`--dir_A` の上書きを反映）、`--mode full`、png）→ 3. `stage2/make_dataset.py`（入力 = 推論の `full/`、出力 = `$CHAIN_DATA_ROOT/EIDlike1024_<run>_<重みディレクトリ名>`。既にあれば止まる）→ 4. `train_stage2.sh --eidlike1024_dir <3 の出力> $CHAIN_STAGE2_ARGS`（Stage 1 の SPICA_RESUME は外す。TensorBoard は machines.yaml の stage2_tb_port）。どこかで失敗したらそこで止まり、手前の成果物は残る。task: sr の run は対象外
+- 実験ごとに変えるもの（重み・データの置き場・Stage 2 への上書き）は sh 冒頭の変数（infer_stage1.sh と同じ流儀）
+- `run_train.py` は環境変数 `SPICA_RUN_RECORD` があれば run ディレクトリを、`run_infer.py` は `SPICA_INFER_RECORD` があれば出力先を書き残す（chain がつなぐため。通常の起動では何もしない）
+- `start.sh`: `chain` サブコマンド（`train` と同じ TB・exec。`resume <run> [tag]` と併用可）
+- 検証（scratch にリポジトリを複製、合成データ 20 症例 × 2 枚、CPU）: 新規 run → chain resume で 4 段すべて完走（推論 40 枚 → EIDlike1024 → Stage 2 1 epoch、best 自動）。macOS の bash 3.2 で見つかった不具合（全角文字直後の変数展開、空配列）を修正。コンテナ内は bash 5

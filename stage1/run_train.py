@@ -335,6 +335,8 @@ def main():
         )
 
     cmd = [sys.executable, str(HERE / "train.py")] + argv
+    if os.environ.get("SPICA_RUN_RECORD"):  # chain_stage1to2.sh 用: この run のディレクトリを書き残す（学習後に推論 → Stage 2 へつなぐため。2026-11-03）
+        Path(os.environ["SPICA_RUN_RECORD"]).write_text(str(out_dir), encoding="utf-8")
     print(f"[run_train] run {name} → {out_dir / launch_name}（全引数はこのファイルの argv）", flush=True)
     if os.environ.get("SPICA_TB_PORT"):  # start.sh 経由のとき。手動起動や scratch では起動しない
         try:
