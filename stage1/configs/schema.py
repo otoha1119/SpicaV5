@@ -80,7 +80,7 @@ MODE = {
     "sampling":       Key(str,  "--sampling",       "random（ケース 1 完全ランダム）| paper（論文の固定 40 patch/画像）| aligned（ケース 2、未実装）"),
     "gan_mode":       Key(str,  "--gan_mode",       "fgan_kl（論文 Eq.6）| lsgan | vanilla（ablation、論文の式ではない）"),
     "netG":           Key(str,  "--netG",           "wavelet（論文 Fig.3）| wavelet_packet（HF skip なし、L も H も再分解。network.packet_*。2026-11-02）| unet_128 | unet_256 | resnet_6blocks | resnet_9blocks（ablation）"),
-    "netD":           Key(str,  "--netD",           "paper（論文 Fig.3、受容野 22）| basic（70×70 PatchGAN）| n_layers | pixel"),
+    "netD":           Key(str,  "--netD",           "paper（論文 Fig.3、受容野 22）| wavelet_paper（固定 Haar 1 段 → [LL|LH,HL,HH] 4ch → paper D。2026-11-02）| wavelet_paper_hf（同上、高周波 3 帯だけ）| basic（70×70 PatchGAN）| n_layers | pixel"),
     "final_norm_act": Key(bool, "--final_norm_act", "G 最終 conv に bnorm+LReLU を付ける（確定: false。ablation 用）"),
     "residual":       Key(bool, "--residual",       "true で G を residual 化: G(z) = z + F(z)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変。false = 論文どおり G(z) を直接出力（段階 5-1、2026-09-11）"),
     "serial_batches": Key(bool, "--serial_batches", "true で sampler を index 決定的に（再現用）"),
@@ -356,7 +356,7 @@ LR_POLICIES = ("linear",)  # 再開（scheduler の作り直し）が linear 前
 SAMPLINGS = ("random", "paper", "aligned")
 GAN_MODES = ("fgan_kl", "lsgan", "vanilla")
 NETGS = ("wavelet", "wavelet_packet", "unet_128", "unet_256", "resnet_6blocks", "resnet_9blocks")
-NETDS = ("paper", "basic", "n_layers", "pixel")
+NETDS = ("paper", "wavelet_paper", "wavelet_paper_hf", "basic", "n_layers", "pixel")
 PRECISIONS = ("fp32", "bf16")
 TASKS = ("degrade", "sr")
 NORMS = ("batch", "instance", "none")

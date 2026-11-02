@@ -5,6 +5,7 @@ import functools
 from torch.optim import lr_scheduler
 from .wavelet_generator import WaveletGenerator  # [SpicaV5] Park et al. 2019 Fig. 3 の generator
 from .wavelet_packet_generator import WaveletPacketGenerator  # [SpicaV5] wavelet packet 型（HF skip なし、L も H も再分解。2026-11-02）
+from .wavelet_discriminator import WaveletPaperDiscriminator  # [SpicaV5] 固定 Haar 1 段 → paper D（2026-11-02）
 from .paper_discriminator import PaperDiscriminator  # [SpicaV5] Park et al. 2019 Fig. 3 の discriminator
 
 
@@ -227,6 +228,10 @@ def define_D(input_nc, ndf, netD, n_layers_D=3, norm="batch", init_type="normal"
         net = PixelDiscriminator(input_nc, ndf, norm_layer=norm_layer)
     elif netD == "paper":  # [SpicaV5] Park et al. 2019: 4×4 s2 ×3 (ndf, ndf, 4ndf) + 1×1、受容野 22。論文どおり BatchNorm 固定のため norm_layer は使わない
         net = PaperDiscriminator(input_nc, ndf=ndf)
+    elif netD == "wavelet_paper":  # [SpicaV5] 固定 Haar 1 段 → [LL | LH, HL, HH] 4ch → paper D（2026-11-02）
+        net = WaveletPaperDiscriminator(input_nc, ndf=ndf, bands="all")
+    elif netD == "wavelet_paper_hf":  # [SpicaV5] 同上、高周波 3 帯だけ（LL = HU の水準は fidelity に任せる）
+        net = WaveletPaperDiscriminator(input_nc, ndf=ndf, bands="hf")
     else:
         raise NotImplementedError("Discriminator model name [%s] is not recognized" % netD)
     return net

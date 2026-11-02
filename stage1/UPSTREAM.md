@@ -295,3 +295,10 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 原因（stage1_v3 で 2026-10-30 に HU の水準が epoch ごとに揺れた原因と同じ）: `backward_D` / `backward_G` が D を本物 40 枚・偽物 40 枚の**別 forward** で呼ぶ。D の BN（paper は BN 固定）はそのバッチの統計で正規化するので、偽物群に共通する差（高周波エネルギー、HU の水準）が正規化で消え、D は局所の模様でしか判定できない
 - 修正: `_D_real_fake(fake)` = 本物と偽物を batch 次元で連結して 1 回で D に通し、前半・後半に分ける（`stage1_v3/models/projection_model.py` の同名メソッドを移植）。D の backward と G の backward の両方で使う。損失の式・λ・batch 40・非ペアの性質は不変。optimizer から見た batch も不変（統計の範囲だけ 40 → 80）
 - 診断値: `loss_names` に `D_sep`（mean(v_fake) − mean(v_real)。0 = 見分けていない）と `D_acc`（patch 単位で v_fake > v_real の割合。0.5 = 当てずっぽう）。TB の diag/ に出る（`util/monitor.py DIAG_KEYS`）。resume は可（D の重みは同じ構造）
+
+### wavelet 入力の D `mode.yaml netD: wavelet_paper | wavelet_paper_hf`（2026-11-02、ユーザー決定。ブランチ 015-f_014-stage1_wavelet_D）
+
+- `models/wavelet_discriminator.py`（新）: 固定 Haar 1 段（`wavelet_generator.HaarDWT`、学習しない）で入力を [LL | LH, HL, HH] に分けてチャネルに積み、Park Fig. 3 の `PaperDiscriminator` に入れる。`wavelet_paper` = 4 帯域（4ch）、`wavelet_paper_hf` = 高周波 3 帯だけ（3ch。LL = HU の水準は fidelity に任せ、D が非ペアのコホート差を学ぶ経路を塞ぐ）。D の構造・損失・ndf は不変で、1 層目が見る表現だけ変わる。paper D の受容野 22 は wavelet 係数上なので画像では 44 px
+- 根拠: `docs/surveys/20261102_wavelet-discriminator.md`（SWAGAN の対照実験: wavelet G + 通常 D で FID 5.22 → 12.27、高周波帯に D の勾配が届かない。HF だけ D が見て LL は画素損失、が先行例の相場）。連結 forward（直前の項）と合わせて入れる。wavelet D は BN の群正規化の問題を直さないので、連結 forward が先に要る
+- `mode.yaml netD` を `wavelet_paper` に（この枝の実験条件。`--netD paper` で旧 D、`--netD wavelet_paper_hf` で HF だけ）。D の構造が変わるので旧 run からの resume は不可（新規 run）。推論は D を使わないので不変
+- 検証（scratch venv、CPU、合成データ）: wavelet_paper / wavelet_paper_hf / paper の 3 通りで学習 1 epoch
