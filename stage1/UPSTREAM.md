@@ -302,3 +302,9 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 根拠: `docs/surveys/20261102_wavelet-discriminator.md`（SWAGAN の対照実験: wavelet G + 通常 D で FID 5.22 → 12.27、高周波帯に D の勾配が届かない。HF だけ D が見て LL は画素損失、が先行例の相場）。連結 forward（直前の項）と合わせて入れる。wavelet D は BN の群正規化の問題を直さないので、連結 forward が先に要る
 - `mode.yaml netD` を `wavelet_paper` に（この枝の実験条件。`--netD paper` で旧 D、`--netD wavelet_paper_hf` で HF だけ）。D の構造が変わるので旧 run からの resume は不可（新規 run）。推論は D を使わないので不変
 - 検証（scratch venv、CPU、合成データ）: wavelet_paper / wavelet_paper_hf / paper の 3 通りで学習 1 epoch
+
+### G を直接出力に戻す `mode.yaml residual: false`（2026-11-02、ユーザー決定。ブランチ 015-f_014-stage1_wavelet_D）
+
+- 「差分（R）を生成させているから高周波の扱いがややこしくなっているのではないか」というユーザーの判断で、この枝の既定を論文どおりの直接出力（`residual: false`、2026-09-11 以前の方式）に戻す。コードは不変（`networks.define_G` が ResidualGenerator で包まなくなるだけ）。fidelity は ‖G(z) − z‖² のまま。表示の R 列 = `fake_B − real_A` は変わらず出る
+- packet G の場合: 恒等を外側で与えないので、各帯域は葉を通って**画像そのものを**再構成する（wave-dec は完全再構成なので表現は可能。初期は出力 ≈ 0 で fidelity が x に引く）。`residual: true` は `--residual true` で戻せる。resume で変更不可（schema）、推論・crop は run の launch から自動判別
+- 検証（scratch venv、CPU、合成データ）: packet G + wavelet_paper D + residual false で学習 1 epoch と推論
