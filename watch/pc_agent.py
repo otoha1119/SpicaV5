@@ -14,6 +14,7 @@ import os
 import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -239,6 +240,10 @@ def codex(cfg, rid, req_text):
     out = Path(cfg["data_dir"]) / ".local" / "codex" / f"{rid}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [c.replace("{repo_dir}", cfg["repo_dir"]).replace("{out}", str(out)) for c in cfg["codex_cmd"]]
+    exe = shutil.which(cmd[0])  # Windows の npm は codex.cmd を入れる。subprocess は裸の名前から .cmd を探さないので PATH から解決する
+    if exe is None:
+        raise WatchError(f"{cmd[0]} が PATH にありません（pc_config.json の codex_cmd を確認）")
+    cmd[0] = exe
     try:
         p = subprocess.run(cmd, input=prompt + ctx, capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=cfg["codex_timeout_s"])
