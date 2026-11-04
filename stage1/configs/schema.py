@@ -44,6 +44,7 @@ TRAIN = {
     "loss.spec_weights":    Key(str,   "--spec_weights",   "帯域ごとの L_T / L_⊥ の重み（低域の 1 枚ずつの錨を lp fidelity に任せる帯域は 0）"),
     "loss.spec_delta":      Key(float, "--spec_delta",     "L_⊥ の余裕 δ（γ² − γ²_EID − δ を超えた分だけ罰する）"),
     "loss.lambda_T":        Key(float, "--lambda_T",       "L_T = Σ w·(a − a_target)² の重み"),
+    "loss.spec_window":     Key(str,   "--spec_window",    "帯域のスペクトルの取り方: mirror（patch を鏡で折り返して 2 倍に広げ窓なし。全画素が同じ重み）| hann（Hann 窓。patch の端がほぼ無拘束になり、512 推論の外周に市松模様の枠が出た。導入前の run の値）"),
     "loss.spec_power_target": Key(str, "--spec_power_target", "帯域ごとの出力パワー比の目標 r = S_EID / S_PCD（実測、n_power_ratio.py）。L_N = Σ (log(S_yy/S_xx) − log r)² の目標"),
     "loss.lambda_N":        Key(float, "--lambda_N",       "L_N（出力の強さの錨）の重み"),
     "loss.lambda_perp":     Key(float, "--lambda_perp",    "L_⊥ = Σ w·max(0, γ² − γ²_EID − δ) の重み"),
@@ -110,7 +111,7 @@ MODE = {
 # （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の値で補うと旧 run の重みの意味が変わる。2026-09-11 residual、2026-10-12 task）
 LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade", "identity": False, "fidelity": "pixel"}
 # 導入前の run を resume するときだけ使う train の移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値。設定欠落の暗黙補完には使わない（2026-11-02）
-LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.lambda_id": 0.0, "loss.lambda_id_final": 0.0, "loss.lambda_id_decay_epochs": 0, "loss.lp_fid_sigma": 3.0, "loss.spec_edges": "0.03,0.08,0.15,0.25,0.71", "loss.spec_a_target": "0.875,0.487,0.047,0.0", "loss.spec_g2_target": "0.979,0.839,0.131,0.0", "loss.spec_weights": "0,1,1,1", "loss.spec_delta": 0.05, "loss.lambda_T": 0.0, "loss.lambda_perp": 0.0, "loss.spec_power_target": "0.5336,0.2477,0.0472,0.0048", "loss.lambda_N": 0.0}
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.lambda_id": 0.0, "loss.lambda_id_final": 0.0, "loss.lambda_id_decay_epochs": 0, "loss.lp_fid_sigma": 3.0, "loss.spec_edges": "0.03,0.08,0.15,0.25,0.71", "loss.spec_a_target": "0.875,0.487,0.047,0.0", "loss.spec_g2_target": "0.979,0.839,0.131,0.0", "loss.spec_weights": "0,1,1,1", "loss.spec_delta": 0.05, "loss.lambda_T": 0.0, "loss.lambda_perp": 0.0, "loss.spec_power_target": "0.5336,0.2477,0.0472,0.0048", "loss.lambda_N": 0.0, "loss.spec_window": "hann"}
 
 # ---------------------------------------------------------------------------
 # stage1/configs/sr.yaml — task: sr（一発超解像）のときだけ読む。degrade では一切読まない（既存の挙動は不変）
@@ -408,6 +409,7 @@ def check_values(train, mode, machine):
     if train["loss.lambda_id"] < 0 or train["loss.lambda_id_final"] < 0: P.append("loss.lambda_id / lambda_id_final ≥ 0")
     if train["loss.lambda_id_decay_epochs"] < 0: P.append("loss.lambda_id_decay_epochs ≥ 0")
     if mode["fidelity"] not in ("pixel", "spectral"): P.append("fidelity は pixel | spectral")
+    if train["loss.spec_window"] not in ("mirror", "hann"): P.append("loss.spec_window は mirror | hann")
     try:
         _e = [float(t) for t in train["loss.spec_edges"].split(",")]; _n = len(_e) - 1
         _l = {k: [float(t) for t in train[k].split(",")] for k in ("loss.spec_a_target", "loss.spec_g2_target", "loss.spec_weights", "loss.spec_power_target")}

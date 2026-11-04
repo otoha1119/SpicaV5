@@ -143,7 +143,7 @@ class FidelityGANModel(BaseModel):
             parser.add_argument("--display_hu_max", type=int, default=None, help="表示用の線形範囲の上限 HU")
             parser.add_argument("--diff_range_hu", type=int, default=None, help="差分パネル（R）のカラー表示の ±範囲 HU（白 = 0、純青 = −、純赤 = +）")
             parser.add_argument("--preview_bits", type=int, default=None, help="output_images/preview_<slice>/ のビット深度（8 | 16）")
-            for _k, _t in (("lp_fid_sigma", float), ("spec_edges", str), ("spec_a_target", str), ("spec_g2_target", str), ("spec_weights", str), ("spec_delta", float), ("lambda_T", float), ("lambda_perp", float), ("spec_power_target", str), ("lambda_N", float)):
+            for _k, _t in (("lp_fid_sigma", float), ("spec_edges", str), ("spec_a_target", str), ("spec_g2_target", str), ("spec_weights", str), ("spec_delta", float), ("lambda_T", float), ("lambda_perp", float), ("spec_power_target", str), ("lambda_N", float), ("spec_window", str)):
                 parser.add_argument(f"--{_k}", type=_t, default=None, help="fidelity: spectral の設定（train.yaml loss.*）")
             parser.add_argument("--lambda_id", type=float, default=None, help="恒等項の重み λ_id（--identity のときだけ効く）")
             parser.add_argument("--lambda_id_final", type=float, default=None, help="減衰後の λ_id")
@@ -183,7 +183,7 @@ class FidelityGANModel(BaseModel):
             self.spec = dict(edges=parse_floats(opt.spec_edges, "spec_edges"), a=parse_floats(opt.spec_a_target, "spec_a_target"),
                              g2=parse_floats(opt.spec_g2_target, "spec_g2_target"), w=parse_floats(opt.spec_weights, "spec_weights"),
                              delta=opt.spec_delta, lam_T=opt.lambda_T, lam_perp=opt.lambda_perp, lp_sigma=opt.lp_fid_sigma,
-                             p=parse_floats(opt.spec_power_target, "spec_power_target"), lam_N=opt.lambda_N)
+                             p=parse_floats(opt.spec_power_target, "spec_power_target"), lam_N=opt.lambda_N, window=opt.spec_window)
             nb = len(self.spec["edges"]) - 1
             self.loss_names += ["G_T", "G_perp", "G_N"] + [f"spec_a{i + 1}" for i in range(nb)] + [f"spec_g{i + 1}" for i in range(nb)] + [f"spec_p{i + 1}" for i in range(nb)]
             self.loss_G_T = self.loss_G_perp = self.loss_G_N = 0.0
@@ -311,13 +311,13 @@ class FidelityGANModel(BaseModel):
         sp = self.spec
         if self.fidelity == "spectral":  # 低域だけの 1 枚ずつの錨 + 帯域の伝達一致 + 情報の上限（2026-11-04）
             self.loss_G_fid = torch.mean((gaussian_blur(self.fake_B, sp["lp_sigma"]) - gaussian_blur(self.real_A, sp["lp_sigma"])) ** 2)
-            l_t, l_perp, l_n, av, gv, pv = spectral_losses(self.real_A, self.fake_B, sp["edges"], sp["a"], sp["g2"], sp["w"], sp["delta"], sp["p"])
+            l_t, l_perp, l_n, av, gv, pv = spectral_losses(self.real_A, self.fake_B, sp["edges"], sp["a"], sp["g2"], sp["w"], sp["delta"], sp["p"], sp["window"])
             self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid + sp["lam_T"] * l_t + sp["lam_perp"] * l_perp + sp["lam_N"] * l_n
         else:
             self.loss_G_fid = torch.mean((self.fake_B - self.real_A) ** 2)  # ‖G(z) − z‖² の画素平均
             self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid
             with torch.no_grad():  # 監視用（pixel でも帯域の伝達とコヒーレンスを記録して、spectral の run と同じ物差しで比べる）
-                l_t, l_perp, l_n, av, gv, pv = spectral_losses(self.real_A, self.fake_B.detach(), sp["edges"], sp["a"], sp["g2"], sp["w"], sp["delta"], sp["p"])
+                l_t, l_perp, l_n, av, gv, pv = spectral_losses(self.real_A, self.fake_B.detach(), sp["edges"], sp["a"], sp["g2"], sp["w"], sp["delta"], sp["p"], sp["window"])
         self.loss_G_T, self.loss_G_perp, self.loss_G_N = float(l_t.detach()), float(l_perp.detach()), float(l_n.detach())
         for i, (va, vg, vp) in enumerate(zip(av, gv, pv)):
             setattr(self, f"loss_spec_a{i + 1}", va); setattr(self, f"loss_spec_g{i + 1}", vg); setattr(self, f"loss_spec_p{i + 1}", vp)

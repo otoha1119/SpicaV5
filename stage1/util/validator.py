@@ -103,7 +103,7 @@ class Validator:
         if getattr(o, "spec_edges", None) and tiles_x:  # 入力 PCD と出力の帯域ごとの伝達 a・コヒーレンス γ²（漏れの監視。score には入れない。2026-11-04）
             from models.spectral_loss import band_transfer, parse_floats
             tx_ = torch.from_numpy(np.stack(tiles_x))[:, None]; ty_ = torch.from_numpy(np.stack(tiles_y))[:, None]
-            av, gv, pv = band_transfer(tx_, ty_, parse_floats(o.spec_edges, "spec_edges"))
+            av, gv, pv = band_transfer(tx_, ty_, parse_floats(o.spec_edges, "spec_edges"), window=getattr(o, "spec_window", "hann"))
             spec_a, spec_g, spec_p = [float(v) for v in av], [float(v) for v in gv], [float(v) for v in pv]
             for i, (va, vg, vp) in enumerate(zip(spec_a, spec_g, spec_p)):
                 self.tb.add_scalar(f"val/spec_a{i + 1}", va, total_iters); self.tb.add_scalar(f"val/spec_g{i + 1}", vg, total_iters); self.tb.add_scalar(f"val/spec_p{i + 1}", vp, total_iters)

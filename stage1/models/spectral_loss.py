@@ -32,17 +32,32 @@ def gaussian_blur(x, sigma):
     return F.conv2d(x, k.view(1, 1, -1, 1))
 
 
-def band_transfer(x, y, edges, detrend_sigma=6.0):
-    """x, y: (N,1,H,W)。帯域ごとの伝達 a と コヒーレンス γ² を返す（tensor、y について微分可能）。edges は cycles/px の境界（昇順）。
+def _spectra(z, detrend_sigma, window):
+    """トレンド除去した z（N,1,H,W）の FFT と周波数の半径。window: hann（Hann 窓。patch の端の重みがほぼ 0）| mirror（鏡で折り返して 2 倍に広げ、窓なし。全画素が同じ重み）。"""
+    a = (z - gaussian_blur(z, detrend_sigma)).float()
+    n, _, h, w = a.shape
+    if window == "hann":
+        a = a * torch.outer(torch.hann_window(h, periodic=False, device=z.device), torch.hann_window(w, periodic=False, device=z.device))
+    elif window == "mirror":  # 端で値が途切れないので窓が要らない（DCT と同じ考え方）。patch の端も損失に入る（hann では端の数画素が無拘束になり、512 推論の外周に市松模様の枠が出た。PC3 2026_1104_1956）
+        a = torch.cat([a, a.flip(-1)], -1); a = torch.cat([a, a.flip(-2)], -2); h, w = 2 * h, 2 * w
+    else:
+        raise ValueError(f"window は hann | mirror: {window}")
+    fy = torch.fft.fftfreq(h, device=z.device).abs()[:, None]; fx = torch.fft.fftfreq(w, device=z.device).abs()[None, :]
+    return torch.fft.fft2(a), torch.sqrt(fy ** 2 + fx ** 2)
+
+
+def band_power(z, edges, detrend_sigma=6.0, window="mirror"):
+    """帯域ごとのパワー（目標値の実測用。損失と同じ前処理）。"""
+    Z, fr = _spectra(z, detrend_sigma, window)
+    s = (Z.abs() ** 2).mean(0)[0]
+    return torch.stack([s[(fr >= lo) & (fr < hi)].sum() for lo, hi in zip(edges[:-1], edges[1:])])
+
+
+def band_transfer(x, y, edges, detrend_sigma=6.0, window="mirror"):
+    """x, y: (N,1,H,W)。帯域ごとの伝達 a、コヒーレンス γ²、パワー比 S_yy/S_xx を返す（tensor、y について微分可能）。edges は cycles/px の境界（昇順）。
     半径周波数は斜め方向で最大 √2/2 ≈ 0.707 になる。上端を 0.5 にすると角の成分（市松模様など）がどの帯域にも入らず無拘束になる（PC3 で崩壊）ので、上端は 0.71 にする。"""
-    n, _, h, w = x.shape
-    win = torch.outer(torch.hann_window(h, periodic=False, device=x.device), torch.hann_window(w, periodic=False, device=x.device))
-    a = (x - gaussian_blur(x, detrend_sigma)).float() * win
-    b = (y - gaussian_blur(y, detrend_sigma)).float() * win
-    X, Y = torch.fft.fft2(a), torch.fft.fft2(b)
+    X, fr = _spectra(x, detrend_sigma, window); Y, _ = _spectra(y, detrend_sigma, window)
     sxx = (X.abs() ** 2).mean(0)[0]; syy = (Y.abs() ** 2).mean(0)[0]; syx = (Y * X.conj()).mean(0)[0]
-    fy = torch.fft.fftfreq(h, device=x.device).abs()[:, None]; fx = torch.fft.fftfreq(w, device=x.device).abs()[None, :]
-    fr = torch.sqrt(fy ** 2 + fx ** 2)
     av, gv, pv = [], [], []
     for lo, hi in zip(edges[:-1], edges[1:]):
         m = (fr >= lo) & (fr < hi)
@@ -53,9 +68,9 @@ def band_transfer(x, y, edges, detrend_sigma=6.0):
     return torch.stack(av), torch.stack(gv), torch.stack(pv)
 
 
-def spectral_losses(x, y, edges, a_target, g2_target, weights, delta, p_target):
+def spectral_losses(x, y, edges, a_target, g2_target, weights, delta, p_target, window="mirror"):
     """L_T, L_⊥, L_N と、監視用の a / γ² / パワー比（float のリスト）。"""
-    a, g2, pr = band_transfer(x, y, edges)
+    a, g2, pr = band_transfer(x, y, edges, window=window)
     at = torch.tensor(a_target, device=x.device, dtype=a.dtype); gt = torch.tensor(g2_target, device=x.device, dtype=a.dtype)
     wv = torch.tensor(weights, device=x.device, dtype=a.dtype)
     l_t = (wv * (a - at) ** 2).sum()
