@@ -30,6 +30,7 @@ MAC_CONFIG = HERE / "mac_config.json"
 KINDS = ["stop", "run", "resume", "free", "job"]
 SKILL_LINK = Path.home() / ".claude" / "skills" / "watch-training"
 SUMMARY_TAG_HINTS = ("loss", "val/", "diag/", "sigma", "fid", "D_", "G_")
+CHAT_POLL_S = 10   # wait が #watch-chat を見る間隔（Discord への問い合わせは軽い。git の ls-remote は --poll 秒ごとのまま）
 
 
 def repo():
@@ -77,12 +78,15 @@ def wait(timeout, poll):
         print(f"[watch] Discord の確認に失敗（git の監視は続行）: {one_line(str(e))}", flush=True)
     base = r.head()
     t0 = time.time()
+    last_git = 0.0
     while time.time() - t0 < timeout:
-        try:
-            sha = r.remote_sha()
-        except WatchError as e:
-            print(f"[watch] ls-remote 失敗（続行）: {one_line(str(e))}", flush=True)
-            sha = base
+        sha = base
+        if time.time() - last_git >= poll:   # git（ls-remote）は poll 秒ごと、Discord は毎周（CHAT_POLL_S 秒ごと）
+            last_git = time.time()
+            try:
+                sha = r.remote_sha()
+            except WatchError as e:
+                print(f"[watch] ls-remote 失敗（続行）: {one_line(str(e))}", flush=True)
         if sha and sha != base:
             # status/ だけの更新（数値の定期送信）では起きない。応答・自動停止・依頼など status/ 以外が来たら起きる。
             # 数値は timeout ごとの定期確認で見る（毎回起きると夜通しトークンを使い続けるため）
@@ -101,7 +105,7 @@ def wait(timeout, poll):
             chat_check_content(msgs)
             print(f"[watch] Discord #watch-chat に新しいメッセージ（{len(msgs)} 件）。chat-inbox で読んでください")
             return
-        time.sleep(poll)
+        time.sleep(CHAT_POLL_S)
     print(f"[watch] {timeout} 秒、更新なし（定期確認として status を見てください）")
 
 
