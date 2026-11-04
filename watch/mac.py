@@ -108,7 +108,10 @@ def status(r=None):
         j = json.loads(b.read_text(encoding="utf-8"))
         print(f"[{b.parent.name}] エージェント最終応答 {j['at']}、コンテナ {j['container']}、active {j['active_runs']}")
     for f in files:
-        if f.name != "_agent.json":
+        if f.name == "_jobs.json":
+            for rid, j in json.loads(f.read_text(encoding="utf-8"))["jobs"].items():
+                print(f"[{f.parent.name}] job {rid}（{j['started']} 開始）: {j['summary']}\n    " + "\n    ".join(j["log_tail"][-5:]))
+        elif f.name != "_agent.json":
             print(run_summary(f))
     print(f"（詳細: {r.path / 'status'}/<machine>/<run>.json の tags.*.series）")
 
@@ -143,7 +146,7 @@ def sync():
         if fm.get("discord_call_posted") != "true" and f"{fm['id']}:call" not in relayed:
             discord_post("call", head_line + "（判断が必要）", mention=True)
             relayed.add(f"{fm['id']}:call")
-    stat = [n for n in changed if n.startswith("status/") and not n.endswith("_agent.json")]
+    stat = [n for n in changed if n.startswith("status/") and not n.endswith(("_agent.json", "_jobs.json"))]
     if stat:
         print("\n## 更新された status")
         for n in sorted(stat):

@@ -333,6 +333,21 @@ def finish_job(repo, cfg, rid, info, exit_code):
             f"job {rid} {'終了' if ok else '失敗（終了コード ' + exit_code + '）'}: {info['summary']}")
 
 
+def job_progress(repo, cfg):
+    """走っている job のログの末尾を status/<machine>/_jobs.json に書く（数値の送信と同じ間隔。Mac は status/ だけでは起きないので定期確認で読む）。"""
+    jobs = repo.read_state("jobs")
+    f = repo.path / "status" / cfg["machine"] / "_jobs.json"
+    if not jobs and not f.is_file():
+        return
+    rows = {}
+    for rid, info in jobs.items():
+        log = job_root(cfg, rid) / "_out" / "job.log"
+        lines = log.read_text(encoding="utf-8", errors="replace").replace("\r", "\n").splitlines() if log.is_file() else []
+        rows[rid] = {"started": info["started"], "summary": info["summary"], "log_tail": [x for x in lines if x.strip()][-20:]}
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"at": now_iso(), "jobs": rows}, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
 def check_jobs(repo, cfg):
     jobs = repo.read_state("jobs")
     for rid, info in list(jobs.items()):
@@ -465,6 +480,7 @@ def loop(cfg):
                 last_export = time.time()   # 書き出しが失敗しても毎分やり直さない
                 data = export(cfg)
                 changed = write_status(repo, cfg, data)
+                job_progress(repo, cfg)
                 repo.commit_push(f"watch: {cfg['machine']} status ({len(changed)} run)")
                 hard_stops(repo, cfg, data)
                 repo.commit_push(f"watch: {cfg['machine']} autostop")
