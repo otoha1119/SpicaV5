@@ -16,6 +16,7 @@ Discord: #watch-log（やり取りの履歴・改良内容の md）、#watch-cal
 - コード: このディレクトリ（ブランチ `016-f_main-train_watch`）。学習ブランチとは独立に、別の checkout から動かす
 - データ: orphan ブランチ `watch-data`（コードは置かない。書き手ごとにディレクトリが分かれているので衝突しない）
 - 送るのは数値と Markdown だけ。**医用画像とその派生画像は送らない**
+- **job**（kind job、2026-11-04 追加）: 学習と並べて解析・推論を走らせる。pc_agent が依頼の commit（省略時は HEAD）を学習リポジトリ内の別 worktree `.watch_jobs/<id>/`（`.git/info/exclude` 済み）に展開し、添付スクリプトを `_job/` に置き、コンテナ内で `cd /workspace/.watch_jobs/<id> && <command>` を裏で実行（`$SPICA_JOB_OUT` = `_out/`）。終了で `_out/` のテキストだけを `results/<id>/` に push して応答を書く。画像などは PC の `data_dir/.local/jobs/<id>/` に残す。`_out/blobs/` のファイル（重みなど。画像・ボリュームの拡張子は拒否、95 MB まで）は使い捨てブランチ `watch-blob/<id>` に 1 commit で push し、Mac の `mac.py fetch-blobs <id> --to <dir>` が取り出してブランチを消す。Codex は通さない
 - 自律範囲: 停止は承認なし。パラメータと、それに伴うバグの修正は同じブランチで直してよい。新しい損失・構造などの大きな変更は、新しいブランチを切るなら可。今のブランチへの大きな変更と Pivot は研究者の承認（#watch-call）。詳細は `skill/SKILL.md` と `codex_prompt.md`
 
 ## 学習 PC のセットアップ（Windows、Git Bash）

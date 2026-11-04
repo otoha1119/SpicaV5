@@ -1,10 +1,12 @@
 """train-watch の Mac 側の道具（Claude Code の /watch-training スキルから使う。stdlib のみ）。
 
     python3 watch/mac.py setup                    # data worktree の確認と Discord のチャンネル作成（初回だけ）
-    python3 watch/mac.py wait --timeout 1800      # watch-data に更新が来るまで待つ（run_in_background で使う）
+    python3 watch/mac.py wait --timeout 180       # watch-data に更新が来るまで待つ（run_in_background で使う。timeout は状況を見て毎回選ぶ）
     python3 watch/mac.py sync                     # pull → 新しい応答・status の要約、未投稿の応答を Discord に中継
     python3 watch/mac.py status                   # いま手元にある status の要約（pull しない）
     python3 watch/mac.py request --machine PC1 --kind resume --summary "..." --command "bash start.sh PC1 resume <run> --lr 1e-4" ...
+    python3 watch/mac.py request --machine PC1 --kind job --summary "..." --script eval.py --command 'python _job/eval.py --out "$SPICA_JOB_OUT"' ...
+    python3 watch/mac.py fetch-blobs <job id> --to <dir>   # job の _out/blobs/（重みなど）を取り出し、使い捨てブランチを消す
     python3 watch/mac.py log "..." [--file note.md] / call "..."
     python3 watch/mac.py install-skill            # watch/skill を ~/.claude/skills/watch-training に symlink
 
@@ -12,6 +14,7 @@
 """
 import argparse
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -21,7 +24,7 @@ from common import (HERE, SHARED_CONFIG, DataRepo, WatchError, discord_api, disc
                     load_json, need, now_iso, now_stamp, one_line, read_doc, shared_config, write_doc)
 
 MAC_CONFIG = HERE / "mac_config.json"
-KINDS = ["stop", "run", "resume", "free"]
+KINDS = ["stop", "run", "resume", "free", "job"]
 SKILL_LINK = Path.home() / ".claude" / "skills" / "watch-training"
 SUMMARY_TAG_HINTS = ("loss", "val/", "diag/", "sigma", "fid", "D_", "G_")
 
@@ -130,6 +133,9 @@ def sync():
             continue
         fm, body = read_doc(f)
         print(f"\n## 応答 {fm['id']}（{fm['machine']}、{fm['kind']}、{fm['result']}）\n{fm['summary']}\n  → {f}")
+        res = r.path / "results" / fm["id"]
+        if res.is_dir():
+            print(f"  結果: {', '.join(x.relative_to(res).as_posix() for x in sorted(res.rglob('*')) if x.is_file())}（{res}）")
         head_line = f"[{fm['machine']}] {fm['summary']}"
         if fm.get("discord_log_posted") != "true" and f"{fm['id']}:log" not in relayed:   # PC が投稿できなかった分だけ中継
             discord_post("log", head_line)
@@ -152,6 +158,10 @@ def sync():
 def request(a):
     if a.kind in ("run", "resume") and not a.command:
         raise WatchError(f"kind {a.kind} には --command が要ります")
+    if a.kind == "job" and not a.command:
+        raise WatchError("kind job には --command が要ります（コンテナ内で job の worktree を cwd にして bash -c で走る）")
+    if a.script and a.kind != "job":
+        raise WatchError("--script は kind job だけです")
     if a.kind == "stop" and not a.run:
         raise WatchError("kind stop には --run が要ります")
     if a.kind in ("run", "resume") and not (a.branch and a.commit):
@@ -172,10 +182,36 @@ def request(a):
         note.write_text(Path(a.note_file).read_text(encoding="utf-8"), encoding="utf-8")
         fm["note"] = f"notes/{rid}.md"
         files.append(note)
+    if a.script:   # job に添付するスクリプト。PC で job の worktree の _job/ に置かれる
+        d = r.path / "jobs" / rid
+        d.mkdir(parents=True, exist_ok=True)
+        for sp in a.script:
+            sp = Path(sp)
+            if not sp.is_file():
+                raise WatchError(f"--script のファイルがありません: {sp}")
+            (d / sp.name).write_bytes(sp.read_bytes())
+        fm["scripts"] = ", ".join(Path(x).name for x in a.script)
     write_doc(r.path / "requests" / f"{rid}.md", fm, f"# {a.summary}\n\n{body}")
     r.commit_push(f"watch: request {rid}")
     discord_post("log", f"[Mac→{a.machine}] {a.kind}: {a.summary}", files=files)
     print(f"[watch] 依頼 {rid} を push しました")
+
+
+def fetch_blobs(rid, to):
+    r = repo()
+    ref = f"watch-blob/{rid}"
+    p = git(r.path, "fetch", "-q", "origin", f"refs/heads/{ref}", check=False, timeout=1800)
+    if p.returncode != 0:
+        raise WatchError(f"{ref} がありません（job の応答の「使い捨てブランチ」を確認）:\n{p.stderr.strip()}")
+    sha = git(r.path, "rev-parse", "FETCH_HEAD").stdout.strip()
+    out = Path(to)
+    out.mkdir(parents=True, exist_ok=True)
+    for name in git(r.path, "ls-tree", "--name-only", sha).stdout.split("\n"):
+        if name:
+            data = subprocess.run(["git", "-C", str(r.path), "cat-file", "blob", f"{sha}:{name}"], capture_output=True, check=True).stdout
+            (out / name).write_bytes(data)
+            print(f"[watch] {out / name}（{len(data) / 1e6:.1f} MB）")
+    git(r.path, "push", "-q", "origin", "--delete", ref, check=False, timeout=180)
 
 
 def install_skill():
@@ -208,7 +244,8 @@ def main():
     s.add_argument("--stop_first", help="先に止める run")
     s.add_argument("--branch")
     s.add_argument("--commit")
-    s.add_argument("--command", help="学習 PC で launch するコマンド（bash start*.sh ...）")
+    s.add_argument("--command", help="run / resume: 学習 PC で launch するコマンド（bash start*.sh ...）。job: コンテナ内で走るコマンド")
+    s.add_argument("--script", action="append", default=[], help="job に添付するファイル（PC で _job/ に置かれる。複数可）")
     s.add_argument("--body", help="依頼の本文（目的・根拠・起動後に見る点）")
     s.add_argument("--body_file")
     s.add_argument("--note_file", help="改良内容の md（notes/ に保存し Discord に添付）")
@@ -216,6 +253,9 @@ def main():
         s = sub.add_parser(k)
         s.add_argument("text")
         s.add_argument("--file", action="append", default=[])
+    s = sub.add_parser("fetch-blobs")
+    s.add_argument("rid")
+    s.add_argument("--to", required=True)
     sub.add_parser("install-skill")
     a = ap.parse_args()
     try:
@@ -231,6 +271,8 @@ def main():
             request(a)
         elif a.cmd in ("log", "call"):
             discord_post(a.cmd, ("[Mac] " if a.cmd == "log" else "") + a.text, files=a.file, mention=(a.cmd == "call"))
+        elif a.cmd == "fetch-blobs":
+            fetch_blobs(a.rid, a.to)
         elif a.cmd == "install-skill":
             install_skill()
     except WatchError as e:
