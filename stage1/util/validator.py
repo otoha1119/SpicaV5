@@ -20,6 +20,7 @@ import numpy as np
 import torch
 
 from data.ct_dataset import normalize, read_stored
+from models.spectral_loss import parse_floats
 from util.metrics import analyze_slice, body_mask, summarize
 from util.run_paths import BEST_NOTE, best_dirname, retire_other_bests
 
@@ -101,13 +102,19 @@ class Validator:
         gen = {k: summarize(rows, k) for k in KEYS}
         spec_a, spec_g, spec_p = [], [], []
         if getattr(o, "spec_edges", None) and tiles_x:  # 入力 PCD と出力の帯域ごとの伝達 a・コヒーレンス γ²（漏れの監視。score には入れない。2026-11-04）
-            from models.spectral_loss import band_transfer, parse_floats
+            from models.spectral_loss import band_transfer
             tx_ = torch.from_numpy(np.stack(tiles_x))[:, None]; ty_ = torch.from_numpy(np.stack(tiles_y))[:, None]
             av, gv, pv = band_transfer(tx_, ty_, parse_floats(o.spec_edges, "spec_edges"), window=getattr(o, "spec_window", "hann"))
             spec_a, spec_g, spec_p = [float(v) for v in av], [float(v) for v in gv], [float(v) for v in pv]
             for i, (va, vg, vp) in enumerate(zip(spec_a, spec_g, spec_p)):
                 self.tb.add_scalar(f"val/spec_a{i + 1}", va, total_iters); self.tb.add_scalar(f"val/spec_g{i + 1}", vg, total_iters); self.tb.add_scalar(f"val/spec_p{i + 1}", vp, total_iters)
         dist = {k: abs(gen[k]["median"] - self.ref[k]["median"]) / self.ref[k]["iqr"] if np.isfinite(gen[k]["median"]) else float("nan") for k in KEYS}
+        if getattr(o, "score_spec", False) and spec_a:  # 帯域の目標からの距離（2026-11-05。6 指標だけでは縁のぼけを見落とし best_e020 を選んだ）
+            w_ = parse_floats(o.spec_weights, "spec_weights"); at_ = parse_floats(o.spec_a_target, "spec_a_target"); gt_ = parse_floats(o.spec_g2_target, "spec_g2_target")
+            on = [i for i, wi in enumerate(w_) if wi > 0]
+            dist["spec_a"] = float(np.mean([abs(spec_a[i] - at_[i]) for i in on])) / 0.05
+            dist["spec_g"] = float(np.mean([abs(spec_g[i] - gt_[i]) for i in on])) / 0.10
+            self.tb.add_scalar("val/spec_a_dist", dist["spec_a"], total_iters); self.tb.add_scalar("val/spec_g_dist", dist["spec_g"], total_iters)
         score = float(sum(dist.values()))
         is_best = bool(np.isfinite(score) and score < self.best_score)
         if is_best:
@@ -121,7 +128,8 @@ class Validator:
         self.tb.add_scalar("val/best_score", self.best_score, total_iters)
         line = (f"val epoch {int(epoch)} | score {score:.3f}{' *best*' if is_best else ''} | ry_rms {ry:.1f} HU | "
                 + (("spec a " + "/".join(f"{v:.3f}" for v in spec_a) + " γ² " + "/".join(f"{v:.2f}" for v in spec_g) + " P " + "/".join(f"{v:.3f}" for v in spec_p) + " | ") if spec_a else "")
-                + " ".join(f"{k} {gen[k]['median']:.2f} (eid {self.ref[k]['median']:.2f}, d {dist[k]:.2f})" for k in KEYS) + f" | {time.time() - t0:.1f}s")
+                + " ".join(f"{k} {gen[k]['median']:.2f} (eid {self.ref[k]['median']:.2f}, d {dist[k]:.2f})" for k in KEYS)
+                + (f" spec_a_d {dist['spec_a']:.2f} spec_g_d {dist['spec_g']:.2f}" if "spec_a" in dist else "") + f" | {time.time() - t0:.1f}s")
         with open(self.run_dir / VAL_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
         print(line, flush=True)

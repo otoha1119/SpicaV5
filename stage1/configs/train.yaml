@@ -27,6 +27,7 @@ loss:
   spec_g2_target: "0.9747,0.8466,0.1348,0.0"    # 情報の上限 γ²_EID（mirror）
   spec_weights: "0,1,1,1"    # 一番低い帯域は lp fidelity に任せる
   spec_delta: 0.05
+  spec_perp_two_sided: false # true で L_⊥ に下限も（γ² が γ²_EID − δ を下回ったら罰する = 消しすぎ・ぼかしすぎを止める。2026-11-05）
   lambda_T: 10.0             # 今の G の縁の帯域で (0.157 − 0.047)² ≈ 0.012 → ×10 ≈ 0.12（GAN 項と同程度）
   lambda_perp: 0.5           # 同 max(0, 0.85 − 0.13 − 0.05) ≈ 0.67 → ×0.5 ≈ 0.34
   spec_power_target: "0.5311,0.2403,0.0480,0.0052"   # 出力パワー比の目標 r = S_EID / S_PCD（ImageCAS、128 patch で実測）
@@ -61,6 +62,7 @@ data:
 val:                    # epoch ごとの自動採点（util/validator.py、2026-11-02）。score = Σ_k |median_gen,k − median_eid,k| / IQR_eid,k（k = local_sd, nps_f_av, edge_grad_p90, edge_grad_p99, hu_p50, hu_p90。小さいほど良い）
   n_pcd_slices: 32      # 固定 PCD スライス（学習症例から乱択、seed = data.patch_seed）。0 で採点しない
   n_eid_slices: 128     # 固定 実 EID スライス（参照統計）
+  score_spec: false     # true で score に帯域の目標からの距離を足す（6 指標だけでは縁のぼけを見落とした。2026-11-05）
   auto_best: true       # score 最良で <run>/best_eNNN/ を自動更新（best.txt に記録。bash start.sh best <run> <epoch> で手動上書き可）
   body_threshold_hu: -500   # 体内判定の HU 閾値（stage1_v3 と同じ）
 

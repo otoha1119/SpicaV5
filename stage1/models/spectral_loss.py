@@ -68,13 +68,17 @@ def band_transfer(x, y, edges, detrend_sigma=6.0, window="mirror"):
     return torch.stack(av), torch.stack(gv), torch.stack(pv)
 
 
-def spectral_losses(x, y, edges, a_target, g2_target, weights, delta, p_target, window="mirror"):
-    """L_T, L_⊥, L_N と、監視用の a / γ² / パワー比（float のリスト）。"""
+def spectral_losses(x, y, edges, a_target, g2_target, weights, delta, p_target, window="mirror", two_sided=False):
+    """L_T, L_⊥, L_N と、監視用の a / γ² / パワー比（float のリスト）。
+    two_sided: L_⊥ に下限も足す（γ² が γ²_EID − δ を下回っても罰する）。上限だけだと「情報を消しすぎる」側（ぼかしすぎ）が無罰で、
+    best_e020 は縁の帯域 γ² 0.05（目標 0.13）、肺境界 ESF 4.81 px（ImageCAS 4.16–4.68）になった（2026-11-05）"""
     a, g2, pr = band_transfer(x, y, edges, window=window)
     at = torch.tensor(a_target, device=x.device, dtype=a.dtype); gt = torch.tensor(g2_target, device=x.device, dtype=a.dtype)
     wv = torch.tensor(weights, device=x.device, dtype=a.dtype)
     l_t = (wv * (a - at) ** 2).sum()
     l_perp = (wv * torch.relu(g2 - gt - delta)).sum()
+    if two_sided:
+        l_perp = l_perp + (wv * torch.relu(gt - delta - g2)).sum()
     pt = torch.tensor(p_target, device=x.device, dtype=a.dtype)
     l_n = ((torch.log(pr + 1e-12) - torch.log(pt)) ** 2).sum()
     return l_t, l_perp, l_n, [float(v) for v in a.detach()], [float(v) for v in g2.detach()], [float(v) for v in pr.detach()]
