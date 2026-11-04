@@ -1,0 +1,4 @@
+# 端末ごとの設定（例は *.example.json）
+pc_config.json
+mac_config.json
+__pycache__/

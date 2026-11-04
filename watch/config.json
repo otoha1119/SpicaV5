@@ -1,0 +1,12 @@
+{
+  "data_branch": "watch-data",
+  "discord": {
+    "guild_id": "1276078209993150496",
+    "category": "spica-watch",
+    "log_channel_name": "watch-log",
+    "call_channel_name": "watch-call",
+    "log_channel_id": "1567515079820312798",
+    "call_channel_id": "1567515086568947813",
+    "call_user_id": "697046306165620796"
+  }
+}
