@@ -33,7 +33,8 @@ def gaussian_blur(x, sigma):
 
 
 def band_transfer(x, y, edges, detrend_sigma=6.0):
-    """x, y: (N,1,H,W)。帯域ごとの伝達 a と コヒーレンス γ² を返す（tensor、y について微分可能）。edges は cycles/px の境界（昇順）。"""
+    """x, y: (N,1,H,W)。帯域ごとの伝達 a と コヒーレンス γ² を返す（tensor、y について微分可能）。edges は cycles/px の境界（昇順）。
+    半径周波数は斜め方向で最大 √2/2 ≈ 0.707 になる。上端を 0.5 にすると角の成分（市松模様など）がどの帯域にも入らず無拘束になる（PC3 で崩壊）ので、上端は 0.71 にする。"""
     n, _, h, w = x.shape
     win = torch.outer(torch.hann_window(h, periodic=False, device=x.device), torch.hann_window(w, periodic=False, device=x.device))
     a = (x - gaussian_blur(x, detrend_sigma)).float() * win

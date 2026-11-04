@@ -110,7 +110,7 @@ MODE = {
 # （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の値で補うと旧 run の重みの意味が変わる。2026-09-11 residual、2026-10-12 task）
 LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade", "identity": False, "fidelity": "pixel"}
 # 導入前の run を resume するときだけ使う train の移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値。設定欠落の暗黙補完には使わない（2026-11-02）
-LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.lambda_id": 0.0, "loss.lambda_id_final": 0.0, "loss.lambda_id_decay_epochs": 0, "loss.lp_fid_sigma": 3.0, "loss.spec_edges": "0.03,0.08,0.15,0.25,0.5", "loss.spec_a_target": "0.875,0.487,0.047,0.0", "loss.spec_g2_target": "0.979,0.839,0.131,0.0", "loss.spec_weights": "0,1,1,1", "loss.spec_delta": 0.05, "loss.lambda_T": 0.0, "loss.lambda_perp": 0.0, "loss.spec_power_target": "0.5336,0.2477,0.0472,0.0044", "loss.lambda_N": 0.0}
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.lambda_id": 0.0, "loss.lambda_id_final": 0.0, "loss.lambda_id_decay_epochs": 0, "loss.lp_fid_sigma": 3.0, "loss.spec_edges": "0.03,0.08,0.15,0.25,0.71", "loss.spec_a_target": "0.875,0.487,0.047,0.0", "loss.spec_g2_target": "0.979,0.839,0.131,0.0", "loss.spec_weights": "0,1,1,1", "loss.spec_delta": 0.05, "loss.lambda_T": 0.0, "loss.lambda_perp": 0.0, "loss.spec_power_target": "0.5336,0.2477,0.0472,0.0048", "loss.lambda_N": 0.0}
 
 # ---------------------------------------------------------------------------
 # stage1/configs/sr.yaml — task: sr（一発超解像）のときだけ読む。degrade では一切読まない（既存の挙動は不変）
@@ -412,7 +412,7 @@ def check_values(train, mode, machine):
         _e = [float(t) for t in train["loss.spec_edges"].split(",")]; _n = len(_e) - 1
         _l = {k: [float(t) for t in train[k].split(",")] for k in ("loss.spec_a_target", "loss.spec_g2_target", "loss.spec_weights", "loss.spec_power_target")}
         if any(v <= 0 for v in _l["loss.spec_power_target"]): P.append("loss.spec_power_target は正")
-        if _n < 1 or any(b <= a for a, b in zip(_e, _e[1:])) or _e[0] < 0 or _e[-1] > 0.5: P.append("loss.spec_edges は 0〜0.5 の昇順で 2 個以上")
+        if _n < 1 or any(b <= a for a, b in zip(_e, _e[1:])) or _e[0] < 0 or _e[-1] > 0.71: P.append("loss.spec_edges は 0〜0.71 の昇順で 2 個以上（斜めの最高周波数 √2/2 まで覆うには上端 0.71）")
         if any(len(v) != _n for v in _l.values()): P.append(f"loss.spec_a_target / g2_target / weights は帯域数 {_n} 個ずつ")
     except ValueError:
         P.append("loss.spec_* はカンマ区切りの数値")
