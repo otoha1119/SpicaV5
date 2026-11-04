@@ -26,6 +26,7 @@ from common import (HERE, DataRepo, WatchError, discord_post, discord_token, loa
                     now_stamp, one_line, read_doc, shared_config, write_doc)
 
 PC_CONFIG = HERE / "pc_config.json"
+REQUEST_POLL_S = 60   # 依頼の確認間隔（git の pull だけなので軽い）。数値の書き出しは pc_config の interval_s ごと
 KEYS = ["machine", "repo_dir", "data_dir", "container", "interval_s", "active_min", "codex_cmd", "codex_timeout_s",
         "discord", "launch_shell", "git_bash"]
 RESULT_RE = re.compile(r"^RESULT:\s*(ok|failed|needs_user)\s*$", re.M)
@@ -321,19 +322,22 @@ def loop(cfg):
     repo = DataRepo(cfg["data_dir"], need(shared_config(), "data_branch", "watch/config.json"))
     if cfg["discord"]:
         discord_token()   # 投稿する設定ならトークンが無いと始めない
-    print(f"[watch] {cfg['machine']} のエージェントを開始（{cfg['interval_s']} 秒ごと）", flush=True)
+    print(f"[watch] {cfg['machine']} のエージェントを開始（依頼の確認 {REQUEST_POLL_S} 秒ごと、数値の送信 {cfg['interval_s']} 秒ごと）", flush=True)
+    last_export = 0.0
     while True:
         try:
             repo.pull()
-            data = export(cfg)
-            changed = write_status(repo, cfg, data)
-            repo.commit_push(f"watch: {cfg['machine']} status ({len(changed)} run)")
-            hard_stops(repo, cfg, data)
-            repo.commit_push(f"watch: {cfg['machine']} autostop")
+            if time.time() - last_export >= cfg["interval_s"]:
+                last_export = time.time()   # 書き出しが失敗しても毎分やり直さない
+                data = export(cfg)
+                changed = write_status(repo, cfg, data)
+                repo.commit_push(f"watch: {cfg['machine']} status ({len(changed)} run)")
+                hard_stops(repo, cfg, data)
+                repo.commit_push(f"watch: {cfg['machine']} autostop")
             handle_requests(repo, cfg)
         except Exception:
             print(f"[watch] {now_iso()} ループでエラー（続行）:\n{traceback.format_exc()}", flush=True)
-        time.sleep(cfg["interval_s"])
+        time.sleep(REQUEST_POLL_S)
 
 
 def main():

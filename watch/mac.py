@@ -72,8 +72,13 @@ def wait(timeout, poll):
             print(f"[watch] ls-remote 失敗（続行）: {one_line(str(e))}", flush=True)
             sha = base
         if sha and sha != base:
-            print(f"[watch] 更新あり（{(base or '')[:8]} → {sha[:8]}）。sync してください")
-            return
+            # status/ だけの更新（数値の定期送信）では起きない。応答・自動停止・依頼など status/ 以外が来たら起きる。
+            # 数値は timeout ごとの定期確認で見る（毎回起きると夜通しトークンを使い続けるため）
+            git(r.path, "fetch", "-q", "origin", r.branch, timeout=180)
+            paths = git(r.path, "diff", "--name-only", f"{base}..{sha}").stdout.split() if base else ["?"]
+            if any(not x.startswith("status/") for x in paths):
+                print(f"[watch] 更新あり（{(base or '')[:8]} → {sha[:8]}）。sync してください")
+                return
         time.sleep(poll)
     print(f"[watch] {timeout} 秒、更新なし（定期確認として status を見てください）")
 

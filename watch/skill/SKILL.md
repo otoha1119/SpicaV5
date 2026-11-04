@@ -17,7 +17,7 @@ data リポジトリと作業用 worktree の場所は `<watch>/mac_config.json`
 3. 対象 run の EXP 記録（`docs/experiments/`）と、直近の decisions / memory から、この run で何を見るべきかを確認する
 
 ## ループ
-1. `mac.py wait --timeout 1800` を **run_in_background** で起動して待つ（更新が来たら終わって起こされる。待っている間はトークンを使わない）
+1. `mac.py wait --timeout 1800` を **run_in_background** で起動して待つ（応答・自動停止など status/ 以外の更新が来たら終わって起こされる。数値（status/）だけの更新では起きないので、数値は timeout ごとの定期確認で見る。待っている間はトークンを使わない）
 2. 起きたら `mac.py sync`。必要に応じて `status/<machine>/<run>.json` の `tags.*.series` を読む
 3. 判断して、下の行動のどれかをとる（何もしないなら何もしない。Discord にも書かない）
 4. 1 に戻る
