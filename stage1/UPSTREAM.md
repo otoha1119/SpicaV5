@@ -351,3 +351,4 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 監視: pixel のときも帯域ごとの a・γ² を勾配なしで計算し、TB の diag/spec_a<i>・spec_g<i>、loss/G_T・G_perp に出す。採点（util/validator.py）の固定 PCD スライスでも 128 タイルで a・γ² を測り val/spec_a<i>・val/spec_g<i>（score には入れない）
 - 導入前の run は fidelity pixel として続く（LEGACY_MODE_DEFAULTS、spec の train キーは LEGACY_TRAIN_DEFAULTS で λ_T・λ_perp 0）。resume で pixel ↔ spectral を切り替え可
 - 検証: 合成データで spectral・pixel の学習と導入前 run の resume。実データ（mac MPS、6 epoch × 12,000 枚）の確認は EXP-20261104-01 に記録
+- **追記（同日）: 出力の強さの錨 L_N を追加。** PC3 run 2026_1104_1949 は L_T・L_⊥ の帯域指標が目標どおり（epoch 1: a 0.875/0.426/0.040/0.005、γ² 0.93/0.37/0.00/0.00）なのに、一様部ノイズ SD 426 HU・HU 中央値 961 で、epoch 2 で崩壊（採点 NaN、D_acc 0.003）。L_T・L_⊥ は入力との比しか見ないので、入力と無関係なゴミを足しても罰されないため（設計 §4.3 の L_N を実装し忘れていた）。L_N = Σ_band (log(S_yy/S_xx) − log r)²、r = S_EID/S_PCD = 0.5336 / 0.2477 / 0.0472 / 0.0044（ImageCAS、128 patch で実測）、λ_N 1。監視に spec_p<i>（パワー比）、val/spec_p<i> を追加

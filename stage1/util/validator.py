@@ -99,14 +99,14 @@ class Validator:
         ry = float(np.sqrt(np.nanmean(sq))) if sq else float("nan")
         net.train(was_training)
         gen = {k: summarize(rows, k) for k in KEYS}
-        spec_a, spec_g = [], []
+        spec_a, spec_g, spec_p = [], [], []
         if getattr(o, "spec_edges", None) and tiles_x:  # 入力 PCD と出力の帯域ごとの伝達 a・コヒーレンス γ²（漏れの監視。score には入れない。2026-11-04）
             from models.spectral_loss import band_transfer, parse_floats
             tx_ = torch.from_numpy(np.stack(tiles_x))[:, None]; ty_ = torch.from_numpy(np.stack(tiles_y))[:, None]
-            av, gv = band_transfer(tx_, ty_, parse_floats(o.spec_edges, "spec_edges"))
-            spec_a, spec_g = [float(v) for v in av], [float(v) for v in gv]
-            for i, (va, vg) in enumerate(zip(spec_a, spec_g)):
-                self.tb.add_scalar(f"val/spec_a{i + 1}", va, total_iters); self.tb.add_scalar(f"val/spec_g{i + 1}", vg, total_iters)
+            av, gv, pv = band_transfer(tx_, ty_, parse_floats(o.spec_edges, "spec_edges"))
+            spec_a, spec_g, spec_p = [float(v) for v in av], [float(v) for v in gv], [float(v) for v in pv]
+            for i, (va, vg, vp) in enumerate(zip(spec_a, spec_g, spec_p)):
+                self.tb.add_scalar(f"val/spec_a{i + 1}", va, total_iters); self.tb.add_scalar(f"val/spec_g{i + 1}", vg, total_iters); self.tb.add_scalar(f"val/spec_p{i + 1}", vp, total_iters)
         dist = {k: abs(gen[k]["median"] - self.ref[k]["median"]) / self.ref[k]["iqr"] if np.isfinite(gen[k]["median"]) else float("nan") for k in KEYS}
         score = float(sum(dist.values()))
         is_best = bool(np.isfinite(score) and score < self.best_score)
@@ -120,7 +120,7 @@ class Validator:
         self.tb.add_scalar("val/score", score, total_iters)
         self.tb.add_scalar("val/best_score", self.best_score, total_iters)
         line = (f"val epoch {int(epoch)} | score {score:.3f}{' *best*' if is_best else ''} | ry_rms {ry:.1f} HU | "
-                + (("spec a " + "/".join(f"{v:.3f}" for v in spec_a) + " γ² " + "/".join(f"{v:.2f}" for v in spec_g) + " | ") if spec_a else "")
+                + (("spec a " + "/".join(f"{v:.3f}" for v in spec_a) + " γ² " + "/".join(f"{v:.2f}" for v in spec_g) + " P " + "/".join(f"{v:.3f}" for v in spec_p) + " | ") if spec_a else "")
                 + " ".join(f"{k} {gen[k]['median']:.2f} (eid {self.ref[k]['median']:.2f}, d {dist[k]:.2f})" for k in KEYS) + f" | {time.time() - t0:.1f}s")
         with open(self.run_dir / VAL_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")

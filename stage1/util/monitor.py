@@ -115,7 +115,7 @@ class TrainMonitor:
         for k, v in losses.items():
             self.tb.add_scalar(("diag/" if (k in DIAG_KEYS or k.startswith("spec_")) else "loss/") + k, v, total_iters)  # spec_a<i> / spec_g<i> = 帯域ごとの伝達・コヒーレンス（2026-11-04）
         if "G_GAN" in losses and "G_fid" in losses:
-            self.tb.add_scalar("loss/G_total", losses["G_GAN"] + self.opt.lambda_fid * losses["G_fid"] + losses.get("lambda_id", 0.0) * losses.get("G_id", 0.0) + ((self.opt.lambda_T * losses.get("G_T", 0.0) + self.opt.lambda_perp * losses.get("G_perp", 0.0)) if getattr(self.opt, "fidelity", "pixel") == "spectral" else 0.0), total_iters)
+            self.tb.add_scalar("loss/G_total", losses["G_GAN"] + self.opt.lambda_fid * losses["G_fid"] + losses.get("lambda_id", 0.0) * losses.get("G_id", 0.0) + ((self.opt.lambda_T * losses.get("G_T", 0.0) + self.opt.lambda_perp * losses.get("G_perp", 0.0) + self.opt.lambda_N * losses.get("G_N", 0.0)) if getattr(self.opt, "fidelity", "pixel") == "spectral" else 0.0), total_iters)
         self.tb.add_scalar("diag/d_in_HU", d_in_hu, total_iters)
         self.tb.add_scalar("time/sec_per_step", t_comp, total_iters)
         self.tb.add_scalar("time/data_sec_per_step", t_data, total_iters)
