@@ -9,5 +9,6 @@
   "codex_cmd": ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "-C", "{repo_dir}", "-o", "{out}", "-"],
   "codex_timeout_s": 1800,
   "discord": true,
+  "launch_shell": "wsl",
   "git_bash": "C:/Program Files/Git/git-bash.exe"
 }

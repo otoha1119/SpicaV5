@@ -27,7 +27,7 @@ Discord: #watch-log（やり取りの履歴・改良内容の md）、#watch-cal
    git clone -b 016-f_main-train_watch https://github.com/otoha1119/SpicaV5.git SpicaV5-watch
    git clone -b watch-data --single-branch https://github.com/otoha1119/SpicaV5.git SpicaV5-watch-data
    ```
-3. `SpicaV5-watch/watch/pc_config.example.json` を `pc_config.json` にコピーして書き換える（`machine` / `repo_dir` = 学習に使う SpicaV5 の checkout / `data_dir` / `git_bash`）
+3. `SpicaV5-watch/watch/pc_config.example.json` を `pc_config.json` にコピーして書き換える（`machine` / `repo_dir` = 学習に使う SpicaV5 の checkout / `data_dir` / `launch_shell`（`wsl` = ふだん VS Code のターミナルで `bash start.sh` を打つのと同じ WSL、`git_bash`）/ `git_bash`）
 4. Discord に直接書くなら（推奨）、Windows のユーザー環境変数 `DISCORD_BOT_TOKEN` に auto-study の bot トークンを入れる（Mac の `~/.config/autostudy/secrets.env` と同じ値）。
    入れない場合は `"discord": false` にすると Mac が sync のときに中継する（Mac が止まっていると通知が遅れる）
 5. 起動（Git Bash で。閉じると止まる）:

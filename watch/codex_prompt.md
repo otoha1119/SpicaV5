@@ -13,7 +13,7 @@
 - **大の変更**（損失・モデル構造・学習方式・データ・評価の中身を変えること）。必要だと思ったら何も変えずに `RESULT: needs_user` で返す
 - 学習中（`<pc_agent> running` に何か出ている）の checkout・pull（コンテナは作業ツリーをそのままマウントしているため、学習中のコードが変わる）。
   依頼が「先に止める」（stop_first）なら止めてから行う。止める指示が無く学習中なら、何もせず `RESULT: failed` で理由を返す
-- `bash start*.sh` を前面で実行すること。学習の起動は必ず `<pc_agent> launch -- bash start.sh ...` を使う（前面で走らせると終わらない）
+- `bash start*.sh` を前面で実行すること。学習の起動は必ず `<pc_agent> launch -- bash start.sh ...` を使う（前面で走らせると終わらない）。Windows では start.sh は WSL の bash で動く（研究者がふだん使う環境。python3 も WSL 側）。Git Bash / MSYS2 の python3 で start.sh が失敗しても、start.sh を直さない
 - `bash start.sh down` / `build`（コンテナを作り直すと他の処理も止まる）。依頼に明記されているときだけ可
 - 依頼に無い実験を始めること、データ・checkpoint・run ディレクトリを消すこと
 - 会社の GitHub organization のリポジトリに触れること（origin は otoha1119/SpicaV5 だけ）

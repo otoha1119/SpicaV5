@@ -27,7 +27,7 @@ from common import (HERE, DataRepo, WatchError, discord_post, discord_token, loa
 
 PC_CONFIG = HERE / "pc_config.json"
 KEYS = ["machine", "repo_dir", "data_dir", "container", "interval_s", "active_min", "codex_cmd", "codex_timeout_s",
-        "discord", "git_bash"]
+        "discord", "launch_shell", "git_bash"]
 RESULT_RE = re.compile(r"^RESULT:\s*(ok|failed|needs_user)\s*$", re.M)
 
 # コンテナ内で学習プロセスを列挙する（tensorboard・推論を除き、train*.py を動かしている python）。
@@ -184,7 +184,8 @@ def stop(cfg, run_dir):
 
 
 def launch(cfg, command):
-    """学習を裏で起動する。Windows（Git Bash）は git-bash.exe の新しいウィンドウ（winpty が端末を要るため）、それ以外は nohup。"""
+    """学習を裏で起動する。Windows は新しいウィンドウ（start.sh が端末を要るため）、それ以外は nohup。
+    Windows のシェルは pc_config の launch_shell: wsl（研究者がふだん VS Code のターミナルで打つ `bash` = WSL と同じ）| git_bash。"""
     if not command:
         raise WatchError("launch に起動コマンドがありません（launch -- bash start.sh ...）")
     if len(command) < 2 or command[0] != "bash" or not Path(command[1]).name.startswith("start"):
@@ -192,12 +193,22 @@ def launch(cfg, command):
     repo = Path(cfg["repo_dir"])
     line = shlex.join(command)
     if platform.system() == "Windows":
-        gb = Path(need(cfg, "git_bash", str(PC_CONFIG)))
-        if not gb.is_file():
-            raise WatchError(f"git-bash.exe がありません: {gb}")
-        script = f"cd {shlex.quote(repo.as_posix())} && {line}; echo; echo '[watch] 終了コード' $?; exec bash"
-        subprocess.Popen([str(gb), "-c", script], cwd=str(repo), creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-        return f"新しいウィンドウで起動: {line}"
+        shell = need(cfg, "launch_shell", str(PC_CONFIG))
+        tail = f"{line}; echo; echo '[watch] 終了コード' $?; exec bash"
+        if shell == "wsl":
+            wsl = shutil.which("wsl")
+            if wsl is None:
+                raise WatchError("wsl.exe が PATH にありません（launch_shell: wsl）")
+            subprocess.Popen([wsl, "--cd", str(repo), "--", "bash", "-c", tail], creationflags=subprocess.CREATE_NEW_CONSOLE)
+        elif shell == "git_bash":
+            gb = Path(need(cfg, "git_bash", str(PC_CONFIG)))
+            if not gb.is_file():
+                raise WatchError(f"git-bash.exe がありません: {gb}")
+            subprocess.Popen([str(gb), "-c", f"cd {shlex.quote(repo.as_posix())} && {tail}"], cwd=str(repo),
+                             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+        else:
+            raise WatchError(f"launch_shell は wsl | git_bash です: {shell!r}（{PC_CONFIG}）")
+        return f"新しいウィンドウ（{shell}）で起動: {line}"
     logdir = Path(cfg["data_dir"]) / ".local" / "launch"
     logdir.mkdir(parents=True, exist_ok=True)
     log = logdir / f"{now_stamp()}.log"
