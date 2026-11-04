@@ -281,6 +281,9 @@ def start_job(repo, cfg, rid, fm):
     att = repo.path / "jobs" / rid
     if att.is_dir():
         shutil.copytree(att, root / "_job")
+        for f in (root / "_job").rglob("*"):   # Windows の git（autocrlf）が CRLF にする。コンテナの bash / python は LF で読む
+            if f.is_file() and f.suffix.lower() in (".sh", ".py", ".yaml", ".yml", ".json", ".txt", ".md"):
+                f.write_bytes(f.read_bytes().replace(b"\r\n", b"\n"))
     (root / "_out").mkdir()
     cdir = f"/workspace/{JOBS_DIR}/{rid}"
     inner = (f"cd {cdir} && export SPICA_JOB_OUT={cdir}/_out && ( {fm['command']} ) > _out/job.log 2>&1; "
