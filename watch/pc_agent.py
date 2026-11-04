@@ -297,7 +297,23 @@ def start_job(repo, cfg, rid, fm):
     jobs[rid] = {"started": now_iso(), "commit": git(root, "rev-parse", "HEAD").stdout.strip(), "kind": "job",
                  "summary": fm.get("summary", ""), "command": fm["command"]}
     repo.write_state("jobs", jobs)
+    open_job_window(cfg, rid, fm.get("summary", ""))
     post(cfg, "log", f"[{cfg['machine']}] job {rid} を開始: {fm.get('summary', '')}")
+
+
+def open_job_window(cfg, rid, summary):
+    """Windows では job のログを流す見るだけのウィンドウを開く（閉じても job は止まらない。job 本体は裏の docker exec）。"""
+    if platform.system() != "Windows" or cfg.get("launch_shell") != "wsl" or shutil.which("wsl") is None:
+        return
+    log = f"{JOBS_DIR}/{rid}/_out/job.log"
+    tail = (f"printf '\\033]0;job {rid}\\007'; echo '[watch] job {rid}: {shlex.quote(summary)[1:-1]}'; "
+            f"echo '[watch] ログを表示しているだけです。このウィンドウを閉じても job は止まりません'; echo; "
+            f"tail -n +1 -F {log} 2>/dev/null; exec bash")
+    try:
+        subprocess.Popen([shutil.which("wsl"), "--cd", str(Path(cfg["repo_dir"])), "--", "bash", "-c", tail],
+                         creationflags=subprocess.CREATE_NEW_CONSOLE)
+    except OSError as e:
+        print(f"[watch] job のログ表示ウィンドウを開けませんでした（job は続行）: {e}", flush=True)
 
 
 def finish_job(repo, cfg, rid, info, exit_code):

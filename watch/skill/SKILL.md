@@ -44,7 +44,7 @@ timeout は表や段階を決めずに、その時々の状況を見てあなた
   - スクリプトは Mac で書き（置き場は `$CLAUDE_JOB_DIR/tmp` か SpicaV5 の `docs/experiments/<EXP>_scripts/`。**SpicaV5 のリポジトリには commit しない**）、`--script` で添付する
   - `mac.py request --machine <PC> --kind job --size none --summary "<一行>" --script <file> [--script ...] --command '<コンテナ内のコマンド>' [--branch <b> --commit <sha>] --body "<目的・判断に使う数値>"`
   - PC では依頼の commit（省略時は学習中のコードの HEAD）が学習リポジトリ内の別 worktree（`/workspace/.watch_jobs/<id>/`）に展開され、そこを cwd にコンテナ内で裏で走る。学習は止まらないし、学習中の作業ツリーも変わらない。添付は `_job/<file>`、出力先は環境変数 `$SPICA_JOB_OUT`（`--command` は単引用符で囲む）
-  - 走っている間は、ログの末尾 20 行が数値の送信と同じ間隔で `status/<PC>/_jobs.json` に届く（`mac.py status` に出る。これでは起きないので定期確認で見る）。終わると応答が来て起こされる。`$SPICA_JOB_OUT` のテキスト（json / csv / md / txt / yaml、1 ファイル 200 KB まで）だけが watch-data の `results/<id>/` に届く。画像はそこに置いても PC の `data_dir/.local/jobs/<id>/` に残るだけで届かない。**判断に要るものは数値か文章にして出す**
+  - PC1（Windows・WSL）では job のログを流すウィンドウが手前に開く（見るだけ。閉じても job は止まらない）。走っている間は、ログの末尾 20 行が数値の送信と同じ間隔で `status/<PC>/_jobs.json` に届く（`mac.py status` に出る。これでは起きないので定期確認で見る）。終わると応答が来て起こされる。`$SPICA_JOB_OUT` のテキスト（json / csv / md / txt / yaml、1 ファイル 200 KB まで）だけが watch-data の `results/<id>/` に届く。画像はそこに置いても PC の `data_dir/.local/jobs/<id>/` に残るだけで届かない。**判断に要るものは数値か文章にして出す**
   - GPU は学習と共有する。バッチを小さくし、長く占有しない
 - **学習コードに測る仕組みを足す**: 毎 epoch 見たい量（例: Stage 2 の実 EID の縁の鋭さ）は、TB の scalar に書くようにすれば exporter がそのまま status に載せる。足し方は「直して回し直す」と同じ（測るだけで学習を変えないなら小）
 - **重みを Mac に取ってきて自分で見る**: job で `$SPICA_JOB_OUT/blobs/` に重みなどを置くと（1 ファイル 95 MB まで。画像・ボリュームの拡張子は送られない）、使い捨てブランチ `watch-blob/<id>` で届く。
