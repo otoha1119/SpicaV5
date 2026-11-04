@@ -21,7 +21,7 @@
 ## 手順
 1. `<pc_agent> running` で学習中のプロセスを確認する
 2. 依頼に `stop_first` があれば `<pc_agent> stop <run>` で止める
-3. `git -C <学習リポジトリ> status` で未コミットの変更が無いことを確認（あれば触らず `RESULT: failed`）。依頼のブランチ・commit に checkout する（`git fetch origin` → `git checkout <branch>` → `git reset --hard <commit>` は使わず `git merge --ff-only origin/<branch>` で合わせ、HEAD が依頼の commit と一致することを確認）
+3. コードを依頼の commit に合わせる。**HEAD がすでに依頼の commit なら何もしない**（fetch も merge もしない。研究者の未コミットの変更はそのまま残してよい）。違うときだけ: `git fetch origin` → `git checkout <branch>` → `git merge --ff-only <commit>`（origin/<branch> の最新ではなく**依頼の commit**に合わせる）で、HEAD が依頼の commit と一致することを確認。未コミットの変更は触らない（stash・reset・commit しない）。git が衝突で checkout を拒否したとき、または依頼の commit が HEAD より古いとき（巻き戻しが要る）は、何もせず `RESULT: needs_user`
 4. 依頼のコマンドを `<pc_agent> launch -- <コマンド>` で起動する
 5. 起動して 3 分以内に動き出したか確かめる（`<pc_agent> running` に出る、run ディレクトリと launch.yaml ができる、event が増える）。
    失敗していればログ・エラーを読み、小の修正で直せるなら直して起動し直す（2 回まで）
