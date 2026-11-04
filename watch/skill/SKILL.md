@@ -70,4 +70,4 @@ timeout は表や段階を決めずに、その時々の状況を見てあなた
 - Discord は簡潔に（「止めました」「lr を 1e-4 にして再開を依頼」程度）。**医用画像とその派生画像は送らない**（数値と md だけ）
 
 ## 終了
-caffeinate を止め、#watch-log に「監視を終了します」を一行。
+caffeinate を止め、`python3 ~/.claude/hooks/watch_stop_guard.py off` を実行し（wait 無しでターンを終えるのを止める Stop フックの解除）、#watch-log に「監視を終了します」を一行。
