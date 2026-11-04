@@ -251,8 +251,8 @@ def push_blobs(repo, rid, d):
         entries.append(f"100644 blob {sha}\t{f.name}")
         sent.append(f"{f.name}（{f.stat().st_size / 1e6:.1f} MB）")
     if entries:
-        tree = subprocess.run(["git", "-C", str(repo.path), "mktree"], input="\n".join(entries) + "\n", capture_output=True,
-                              text=True, encoding="utf-8", check=True).stdout.strip()
+        tree = subprocess.run(["git", "-C", str(repo.path), "mktree"], input=("\n".join(entries) + "\n").encode("utf-8"),
+                              capture_output=True, check=True).stdout.decode().strip()   # bytes で渡す（Windows の text モードは \n を \r\n にし、名前に \r が付く）
         commit = git(repo.path, "commit-tree", tree, "-m", f"watch: blobs {rid}").stdout.strip()
         git(repo.path, "push", "-q", "-f", "origin", f"{commit}:refs/heads/watch-blob/{rid}", timeout=1800)
     return sent, refused

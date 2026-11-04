@@ -209,9 +209,11 @@ def fetch_blobs(rid, to):
     sha = git(r.path, "rev-parse", "FETCH_HEAD").stdout.strip()
     out = Path(to)
     out.mkdir(parents=True, exist_ok=True)
-    for name in git(r.path, "ls-tree", "--name-only", sha).stdout.split("\n"):
-        if name:
-            data = subprocess.run(["git", "-C", str(r.path), "cat-file", "blob", f"{sha}:{name}"], capture_output=True, check=True).stdout
+    for ent in git(r.path, "ls-tree", "-z", sha).stdout.split("\0"):
+        if ent:
+            obj, name = ent.split()[2], ent.split("\t", 1)[1]
+            data = subprocess.run(["git", "-C", str(r.path), "cat-file", "blob", obj], capture_output=True, check=True).stdout
+            name = name.strip()   # 古い pc_agent は Windows の改行変換で名前の末尾に \r が付いていた
             (out / name).write_bytes(data)
             print(f"[watch] {out / name}（{len(data) / 1e6:.1f} MB）")
     git(r.path, "push", "-q", "origin", "--delete", ref, check=False, timeout=180)
