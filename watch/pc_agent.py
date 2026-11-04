@@ -196,7 +196,10 @@ def launch(cfg, command):
     line = shlex.join(command)
     if platform.system() == "Windows":
         shell = need(cfg, "launch_shell", str(PC_CONFIG))
-        tail = f"{line}; echo; echo '[watch] 終了コード' $?; exec bash"
+        # 正常終了なら 30 秒後に閉じる（ウィンドウが溜まらないように）。失敗したときだけ残して原因を読めるようにする
+        tail = (f"{line}; rc=$?; echo; echo '[watch] 終了コード' $rc; "
+                f"if [ $rc -ne 0 ]; then echo '[watch] 失敗したのでウィンドウを残します'; exec bash; fi; "
+                f"echo '[watch] 30 秒後に閉じます'; sleep 30")
         if shell == "wsl":
             wsl = shutil.which("wsl")
             if wsl is None:
@@ -307,8 +310,12 @@ def open_job_window(cfg, rid, summary):
         return
     log = f"{JOBS_DIR}/{rid}/_out/job.log"
     tail = (f"printf '\\033]0;job {rid}\\007'; echo '[watch] job {rid}: {shlex.quote(summary)[1:-1]}'; "
-            f"echo '[watch] ログを表示しているだけです。このウィンドウを閉じても job は止まりません'; echo; "
-            f"tail -n +1 -F {log} 2>/dev/null; exec bash")
+            f"echo '[watch] ログを表示しているだけです。このウィンドウを閉じても job は止まりません。正常に終われば自動で閉じます'; echo; "
+            f"tail -n +1 -F {log} 2>/dev/null & t=$!; "
+            f"while [ ! -f {JOBS_DIR}/{rid}/_out/exit_code ] && [ -d {JOBS_DIR}/{rid} ]; do sleep 5; done; "
+            f"rc=$(cat {JOBS_DIR}/{rid}/_out/exit_code 2>/dev/null); sleep 2; kill $t 2>/dev/null; echo; echo \"[watch] job 終了（終了コード ${{rc:-不明}}）\"; "
+            f"if [ -n \"$rc\" ] && [ \"$rc\" != 0 ]; then echo '[watch] 失敗したのでウィンドウを残します'; exec bash; fi; "
+            f"echo '[watch] 30 秒後に閉じます'; sleep 30")
     try:
         subprocess.Popen([shutil.which("wsl"), "--cd", str(Path(cfg["repo_dir"])), "--", "bash", "-c", tail],
                          creationflags=subprocess.CREATE_NEW_CONSOLE)

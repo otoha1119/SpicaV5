@@ -20,7 +20,7 @@ data リポジトリと作業用 worktree の場所は `<watch>/mac_config.json`
 1. `mac.py wait --timeout <秒>` を **run_in_background** で起動して待つ（応答・自動停止・job の終了など status/ 以外の更新が来たら終わって起こされる。数値（status/）だけの更新では起きないので、数値は timeout ごとの定期確認で見る。待っている間はトークンを使わない）。timeout は下の「確認の間隔」で毎回自分で決める
 2. 起きたら `mac.py sync`。必要に応じて `status/<machine>/<run>.json` の `tags.*.series` を読む。wait が「Discord #watch-chat に新しいメッセージ」で終わったときは、下の「会話（#watch-chat）」に従う
 3. 判断して、下の行動のどれかをとる（何もしないなら何もしない。Discord にも書かない）
-4. 1 に戻る
+4. 1 に戻る。**ターミナルでユーザーと話したターンも含め、どのターンも wait が動いている状態で終える**（止まっていると #watch-chat に返事ができない）
 
 ## 確認の間隔
 timeout は表や段階を決めずに、その時々の状況を見てあなたが毎回選ぶ。
