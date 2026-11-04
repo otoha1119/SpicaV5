@@ -8,6 +8,9 @@
     python3 watch/mac.py request --machine PC1 --kind job --summary "..." --script eval.py --command 'python _job/eval.py --out "$SPICA_JOB_OUT"' ...
     python3 watch/mac.py fetch-blobs <job id> --to <dir>   # job の _out/blobs/（重みなど）を取り出し、使い捨てブランチを消す
     python3 watch/mac.py log "..." [--file note.md] / call "..."
+    python3 watch/mac.py setup-chat               # #watch-chat（研究者と会話するチャンネル）を作る（初回だけ）
+    python3 watch/mac.py chat-inbox               # #watch-chat の研究者の未読メッセージを表示して既読にする
+    python3 watch/mac.py chat "..." [--file x.md] # #watch-chat に返事する（.md / .txt だけ添付可）
     python3 watch/mac.py install-skill            # watch/skill を ~/.claude/skills/watch-training に symlink
 
 設定は watch/mac_config.json（例: mac_config.example.json）。
@@ -20,8 +23,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (HERE, SHARED_CONFIG, DataRepo, WatchError, discord_api, discord_post, discord_token, git,  # noqa: E402
-                    load_json, need, now_iso, now_stamp, one_line, read_doc, shared_config, write_doc)
+from common import (DISCORD_MAX, HERE, SHARED_CONFIG, DataRepo, WatchError, discord_api, discord_post, discord_token,  # noqa: E402
+                    git, load_json, need, now_iso, now_stamp, one_line, read_doc, shared_config, write_doc)
 
 MAC_CONFIG = HERE / "mac_config.json"
 KINDS = ["stop", "run", "resume", "free", "job"]
@@ -66,6 +69,12 @@ def setup():
 
 def wait(timeout, poll):
     r = repo()
+    tok = discord_token()
+    chat = chat_config()
+    try:   # 初回はここで既読位置を決める（過去のメッセージで起きない）。Discord が落ちていても git の監視は続ける
+        chat_state(r, tok, chat)
+    except (WatchError, OSError) as e:
+        print(f"[watch] Discord の確認に失敗（git の監視は続行）: {one_line(str(e))}", flush=True)
     base = r.head()
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -82,6 +91,16 @@ def wait(timeout, poll):
             if any(not x.startswith("status/") for x in paths):
                 print(f"[watch] 更新あり（{(base or '')[:8]} → {sha[:8]}）。sync してください")
                 return
+        # git とは別に、#watch-chat に研究者の新しいメッセージが来たら起きる（status/ だけの git 更新で起きない規則はそのまま）
+        try:
+            msgs, _ = chat_fetch(r, tok, chat)
+        except (WatchError, OSError) as e:   # URLError・timeout は OSError。Discord の一時的な障害で監視を止めない
+            print(f"[watch] Discord の確認に失敗（続行）: {one_line(str(e))}", flush=True)
+            msgs = []
+        if msgs:
+            chat_check_content(msgs)
+            print(f"[watch] Discord #watch-chat に新しいメッセージ（{len(msgs)} 件）。chat-inbox で読んでください")
+            return
         time.sleep(poll)
     print(f"[watch] {timeout} 秒、更新なし（定期確認として status を見てください）")
 
@@ -154,6 +173,116 @@ def sync():
                 print(run_summary(r.path / n))
     st.update({"last_sha": head, "relayed": sorted(relayed)[-500:], "synced_at": now_iso()})
     r.write_state("mac", st)
+
+
+# ---------------------------------------------------------------- chat（#watch-chat。研究者が外出先から Discord でホストと会話する）
+
+def chat_config():
+    d = need(shared_config(), "discord", str(SHARED_CONFIG))
+    return {"channel": need(d, "chat_channel_id", f"{SHARED_CONFIG} の discord（mac.py setup-chat で作る）"),
+            "user": need(d, "call_user_id", f"{SHARED_CONFIG} の discord")}
+
+
+def chat_state(r, tok, chat):
+    """既読位置（最後に見たメッセージ id）。無ければ今の最新を既読にする（過去の会話を新着として扱わない）。"""
+    st = r.read_state("chat")
+    if st.get("channel") != chat["channel"]:
+        latest = discord_api("GET", f"/channels/{chat['channel']}/messages?limit=1", tok)
+        st = {"channel": chat["channel"], "last_seen": latest[0]["id"] if latest else "0", "at": now_iso()}
+        r.write_state("chat", st)
+        print(f"[watch] #watch-chat の既読位置を初期化しました（{st['last_seen']}）", flush=True)
+    return st
+
+
+def chat_fetch(r, tok, chat):
+    """既読位置より後のメッセージを古い順に全部取る。返すのは（研究者本人が書いた bot 以外のもの, 見た中で最大の id）。"""
+    after = chat_state(r, tok, chat)["last_seen"]
+    seen, top = [], after
+    while True:
+        page = discord_api("GET", f"/channels/{chat['channel']}/messages?after={top}&limit=100", tok)
+        if not page:
+            break
+        page.sort(key=lambda m: int(m["id"]))
+        seen += page
+        top = page[-1]["id"]
+        if len(page) < 100:
+            break
+    mine = [m for m in seen if m["author"]["id"] == chat["user"] and not m["author"].get("bot")]
+    return mine, top
+
+
+def chat_check_content(msgs):
+    # Message Content Intent が無効だと、bot へのメンションが無いメッセージの本文・添付が空で返る。黙って読み飛ばさない
+    if any(not m.get("content") and not m.get("attachments") and not m.get("sticker_items") for m in msgs):
+        raise WatchError("#watch-chat のメッセージの本文が空で届きました。Discord Developer Portal → bot（auto-study）→ Bot → "
+                         "Privileged Gateway Intents の Message Content Intent を有効にしてください")
+
+
+def chat_inbox():
+    r = repo()
+    tok = discord_token()
+    chat = chat_config()
+    msgs, top = chat_fetch(r, tok, chat)
+    chat_check_content(msgs)   # 本文が読めないうちは既読にしない
+    if not msgs:
+        print("[watch] #watch-chat に未読はありません")
+    for m in msgs:
+        at = m["timestamp"][:19].replace("T", " ")
+        files = [a["filename"] for a in m.get("attachments", [])]
+        print(f"\n## {at} UTC（{m['id']}）\n{m.get('content', '')}" + (f"\n  添付（開いていない）: {', '.join(files)}" if files else ""))
+    st = r.read_state("chat")
+    st.update({"last_seen": top, "at": now_iso()})
+    r.write_state("chat", st)
+
+
+def chat_send(text, files):
+    """#watch-chat に返事する。長い本文は行で分けて最大 3 通、それを超えるなら全文を md にして添付する。"""
+    chunks, cur = [], ""
+    for line in text.splitlines(keepends=True):
+        while len(line) > DISCORD_MAX:   # 1 行が長すぎるときはそのまま切る
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            chunks.append(line[:DISCORD_MAX])
+            line = line[DISCORD_MAX:]
+        if len(cur) + len(line) > DISCORD_MAX:
+            chunks.append(cur)
+            cur = ""
+        cur += line
+    if cur.strip():
+        chunks.append(cur)
+    if not chunks and not files:
+        raise WatchError("chat: 本文も添付もありません")
+    files = list(files)
+    if len(chunks) > 3:
+        full = repo().local / "chat" / f"{now_stamp()}_reply.md"
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(text, encoding="utf-8")
+        chunks = [one_line(text, 200) + "\n（長いので全文を md で添付します）"]
+        files.append(str(full))
+    for i, c in enumerate(chunks or [""]):
+        discord_post("chat", c, files=files if i == len(chunks or [""]) - 1 else None)
+
+
+def setup_chat():
+    cfg = shared_config()
+    d = need(cfg, "discord", str(SHARED_CONFIG))
+    if d.get("chat_channel_id"):
+        print(f"[watch] #watch-chat は設定済みです（{d['chat_channel_id']}）")
+        return
+    tok = discord_token()
+    name = "watch-chat"
+    chans = discord_api("GET", f"/guilds/{need(d, 'guild_id', 'discord')}/channels", tok)
+    cat = next((c for c in chans if c["type"] == 4 and c["name"] == need(d, "category", "discord")), None)
+    if cat is None:
+        raise WatchError(f"カテゴリ {d['category']} がありません（先に mac.py setup）")
+    if any(c["type"] == 0 and c["name"] == name and c.get("parent_id") == cat["id"] for c in chans):
+        raise WatchError(f"#{name} が既にありますが config.json に id がありません。自分で作っていないチャンネルは使わないので、確認して消してから実行してください")
+    ch = discord_api("POST", f"/guilds/{d['guild_id']}/channels", tok,
+                     {"name": name, "type": 0, "parent_id": cat["id"], "topic": "train-watch: 研究者とホストの Claude の会話"})
+    d["chat_channel_name"], d["chat_channel_id"] = name, ch["id"]
+    SHARED_CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"[watch] チャンネル #{name} を作り、{SHARED_CONFIG} に id を書きました（commit して共有する）")
 
 
 # ---------------------------------------------------------------- request / log / call
@@ -258,6 +387,11 @@ def main():
         s = sub.add_parser(k)
         s.add_argument("text")
         s.add_argument("--file", action="append", default=[])
+    sub.add_parser("setup-chat")
+    sub.add_parser("chat-inbox")
+    s = sub.add_parser("chat")
+    s.add_argument("text")
+    s.add_argument("--file", action="append", default=[])
     s = sub.add_parser("fetch-blobs")
     s.add_argument("rid")
     s.add_argument("--to", required=True)
@@ -276,6 +410,12 @@ def main():
             request(a)
         elif a.cmd in ("log", "call"):
             discord_post(a.cmd, ("[Mac] " if a.cmd == "log" else "") + a.text, files=a.file, mention=(a.cmd == "call"))
+        elif a.cmd == "setup-chat":
+            setup_chat()
+        elif a.cmd == "chat-inbox":
+            chat_inbox()
+        elif a.cmd == "chat":
+            chat_send(a.text, a.file)
         elif a.cmd == "fetch-blobs":
             fetch_blobs(a.rid, a.to)
         elif a.cmd == "install-skill":

@@ -208,7 +208,7 @@ def discord_api(method, path, token, payload=None, files=None):
 
 
 def discord_post(kind, text, files=None, mention=False, token=None):
-    """kind = 'log' | 'call'。call は呼び出し先のユーザーにメンションする。files = [Path]。"""
+    """kind = 'log' | 'call' | 'chat'。call は呼び出し先のユーザーにメンションする。files = [Path]。"""
     cfg = need(shared_config(), "discord", "watch/config.json")
     channel = need(cfg, f"{kind}_channel_id", "watch/config.json の discord")
     token = token or discord_token()

@@ -10,13 +10,14 @@ pc_agent.py loop ── status/<PC>/<run>.json ──▶                  ──
   ・NaN / Inf は即停止（autostop）                                      → mac.py request
   ・requests/ を処理（stop は自分、それ以外は Codex） ◀── requests/<id>.md, notes/<id>.md ──
   └ responses/<id>.md ─────────────────────────▶                   ──▶ sync で確認・Discord に中継
-Discord: #watch-log（やり取りの履歴・改良内容の md）、#watch-call（研究者の判断が必要なときの呼び出し）
+Discord: #watch-log（やり取りの履歴・改良内容の md）、#watch-call（研究者の判断が必要なときの呼び出し）、#watch-chat（研究者とホストの会話）
 ```
 
 - コード: このディレクトリ（ブランチ `016-f_main-train_watch`）。学習ブランチとは独立に、別の checkout から動かす
 - データ: orphan ブランチ `watch-data`（コードは置かない。書き手ごとにディレクトリが分かれているので衝突しない）
 - 送るのは数値と Markdown だけ。**医用画像とその派生画像は送らない**
 - **job**（kind job、2026-11-04 追加）: 学習と並べて解析・推論を走らせる。pc_agent が依頼の commit（省略時は HEAD）を学習リポジトリ内の別 worktree `.watch_jobs/<id>/`（`.git/info/exclude` 済み）に展開し、添付スクリプトを `_job/` に置き、コンテナ内で `cd /workspace/.watch_jobs/<id> && <command>` を裏で実行（`$SPICA_JOB_OUT` = `_out/`）。終了で `_out/` のテキストだけを `results/<id>/` に push して応答を書く。画像などは PC の `data_dir/.local/jobs/<id>/` に残す。`_out/blobs/` のファイル（重みなど。画像・ボリュームの拡張子は拒否、95 MB まで）は使い捨てブランチ `watch-blob/<id>` に 1 commit で push し、Mac の `mac.py fetch-blobs <id> --to <dir>` が取り出してブランチを消す。Codex は通さない
+- **#watch-chat**（2026-11-04 追加）: 外出先から Discord でホストの Claude と会話する（Remote Control / 公式 channels は使わない）。`mac.py wait` は git の更新（status/ だけの更新を除く）に加え、#watch-chat に `call_user_id` 本人が書いた bot 以外のメッセージが来ても終わる。`mac.py chat-inbox` で読んで既読に（既読位置は data_dir/.local/chat.json）、`mac.py chat "..." [--file x.md]` で返事（.md / .txt だけ添付）。初回は `mac.py setup-chat`。bot の **Message Content Intent**（Developer Portal → Bot → Privileged Gateway Intents）を有効にしておくこと（無効だと本文が空で届き、chat-inbox がエラーで止まる）
 - 自律範囲: 停止は承認なし。パラメータと、それに伴うバグの修正は同じブランチで直してよい。新しい損失・構造などの大きな変更は、新しいブランチを切るなら可。今のブランチへの大きな変更と Pivot は研究者の承認（#watch-call）。詳細は `skill/SKILL.md` と `codex_prompt.md`
 
 ## 学習 PC のセットアップ（Windows、Git Bash）

@@ -18,7 +18,7 @@ data リポジトリと作業用 worktree の場所は `<watch>/mac_config.json`
 
 ## ループ
 1. `mac.py wait --timeout <秒>` を **run_in_background** で起動して待つ（応答・自動停止・job の終了など status/ 以外の更新が来たら終わって起こされる。数値（status/）だけの更新では起きないので、数値は timeout ごとの定期確認で見る。待っている間はトークンを使わない）。timeout は下の「確認の間隔」で毎回自分で決める
-2. 起きたら `mac.py sync`。必要に応じて `status/<machine>/<run>.json` の `tags.*.series` を読む
+2. 起きたら `mac.py sync`。必要に応じて `status/<machine>/<run>.json` の `tags.*.series` を読む。wait が「Discord #watch-chat に新しいメッセージ」で終わったときは、下の「会話（#watch-chat）」に従う
 3. 判断して、下の行動のどれかをとる（何もしないなら何もしない。Discord にも書かない）
 4. 1 に戻る
 
@@ -55,6 +55,14 @@ timeout は表や段階を決めずに、その時々の状況を見てあなた
 - **呼び出す（#watch-call）**: 大の変更を今のブランチに入れたい、Pivot、候補が尽きた、同じ失敗が 2〜3 回続いた、Codex が needs_user を返した
 - **歯止め**: 同じ失敗が 2〜3 回続いたらその方向は打ち切る。1 晩に Codex へ出す依頼は 8 件まで（超えたら呼び出して待つ）。
   候補が尽きたら GPU を空けたまま朝に報告する
+
+## 会話（#watch-chat）
+研究者が外出先から Discord の #watch-chat で話しかけてくる。wait はそれでも起きる（研究者本人のメッセージだけ。他人と bot は無視）。
+- `mac.py chat-inbox` で未読を読み（既読になる）、`mac.py chat "<返事>"` で #watch-chat に**簡潔に**返す。👀 などの反応は付けず、返事だけ
+- 研究者の指示として扱う。自律範囲の規則は変わらない。承認待ちの件への「OK」もここで受けてよいが、**どの件への承認か**を返事で確かめてから実行する（複数あるとき、曖昧なときは聞き返す）
+- 状況の質問には status / responses / results / EXP 記録 / docs / memory から答える。md を求められたら `mac.py chat "..." --file <md>` で添付（.md / .txt だけ。長い返事は自動で分割、3 通を超えると全文を md にして添付）
+- 研究者の添付はファイル名しか出さない（開かない）。中身が要るなら本文に貼ってもらう
+- **医用画像とその派生画像は送らない**（数値と文章だけ）。Message Content Intent が無効だと chat-inbox がエラーで止まるので、#watch-call で研究者に有効化を頼む
 
 ## 記録
 - 回し直した run は毎回新しい実験として扱い、`docs/experiments/` の EXP 記録に追記する（ネガティブ結果も。work_dir 側でコミット）
