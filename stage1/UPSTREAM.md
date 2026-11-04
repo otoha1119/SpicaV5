@@ -341,3 +341,13 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - `run_train.py` は環境変数 `SPICA_RUN_RECORD` があれば run ディレクトリを、`run_infer.py` は `SPICA_INFER_RECORD` があれば出力先を書き残す（chain がつなぐため。通常の起動では何もしない）
 - `start.sh`: `chain` サブコマンド（`train` と同じ TB・exec。`resume <run> [tag]` と併用可）
 - 検証（scratch にリポジトリを複製、合成データ 20 症例 × 2 枚、CPU）: 新規 run → chain resume で 4 段すべて完走（推論 40 枚 → EIDlike1024 → Stage 2 1 epoch、best 自動）。macOS の bash 3.2 で見つかった不具合（全角文字直後の変数展開、空配列）を修正。コンテナ内は bash 5
+
+### 画素 fidelity の代わり `mode.yaml fidelity: spectral`（2026-11-04、ユーザー決定。ブランチ 015-f_014-stage1_wavelet_D）
+
+- 動機: 画素 fidelity ‖G(z) − z‖² は、出力の強さが D に決められているとき「入力を縮めたコピー」を必ず選ばせる（周波数ごとの損失 = 1 − 2a + P が伝達 a の減少関数）。λ_fid 100 の G は packet / Park とも、入力 PCD とのコヒーレンスが 0.96〜0.99、血管の縁の帯域（0.15–0.25 cycles/px）で本物の EID の 13 倍の情報を残していた（docs/plans/20261104_math-step-by-step.md、EXP-20261103-01 追記 2）。λ_fid 0 ではコピーは消えるが解剖も壊れる
+- `models/spectral_loss.py`（新）: バッチの patch（σ6 のトレンド除去 + Hann）の FFT から帯域ごとに伝達 a = Re S_yx / S_xx とコヒーレンス γ² = |S_yx|² / (S_xx S_yy)（帯域内で和を取ってから比）。L_T = Σ w (a − a_target)²、L_⊥ = Σ w max(0, γ² − γ²_EID − δ)
+- `fidelity: spectral` の G の損失: L_GAN + λ_fid · MSE(Gσ(G(z)), Gσ(z))（σ = lp_fid_sigma 3 px、< 約 0.08 cycles/px だけの 1 枚ずつの錨）+ λ_T L_T + λ_perp L_⊥。低域 fidelity だけでは 7 epoch で崩壊した（比較実験 B）ので、高域は L_T・L_⊥ で縛る
+- 目標値（train.yaml、ImageCAS 基準、128 patch で実測。`docs/experiments/EXP-20261103-01_scripts/m_targets128.py`）: 帯域 0.03 / 0.08 / 0.15 / 0.25 / 0.5、a_target 0.875 / 0.487 / 0.047 / 0、γ²_EID 0.979 / 0.839 / 0.131 / 0、重み 0 / 1 / 1 / 1（一番低い帯域は低域 fidelity に任せる）、δ 0.05、λ_T 10、λ_perp 0.5
+- 監視: pixel のときも帯域ごとの a・γ² を勾配なしで計算し、TB の diag/spec_a<i>・spec_g<i>、loss/G_T・G_perp に出す。採点（util/validator.py）の固定 PCD スライスでも 128 タイルで a・γ² を測り val/spec_a<i>・val/spec_g<i>（score には入れない）
+- 導入前の run は fidelity pixel として続く（LEGACY_MODE_DEFAULTS、spec の train キーは LEGACY_TRAIN_DEFAULTS で λ_T・λ_perp 0）。resume で pixel ↔ spectral を切り替え可
+- 検証: 合成データで spectral・pixel の学習と導入前 run の resume。実データ（mac MPS、6 epoch × 12,000 枚）の確認は EXP-20261104-01 に記録

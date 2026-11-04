@@ -6,6 +6,7 @@ gan_mode: fgan_kl       # fgan_kl（論文 Eq.6）| lsgan | vanilla（ablation�
 netG: wavelet_packet    # wavelet（論文 Fig.3）| wavelet_packet（HF skip なし、L も H も再分解。幅・段数は train.yaml network.packet_*。2026-11-02）| unet_128 | resnet_9blocks ...（ablation）
 netD: wavelet_paper     # paper（論文 Fig.3、受容野 22）| wavelet_paper（固定 Haar 1 段 → [LL|LH,HL,HH] 4ch → paper D。画像上の受容野 44。2026-11-02）| wavelet_paper_hf（高周波 3 帯だけ）| basic（70×70 PatchGAN）
 final_norm_act: false   # G 最終 conv に bnorm+LReLU（確定: false。ablation 用）
+fidelity: spectral      # pixel（Park の画素 fidelity）| spectral（低域 fidelity + 帯域の伝達一致 L_T + 情報の上限 L_⊥。2026-11-04）。値は train.yaml loss.lp_fid_sigma / spec_* / lambda_T / lambda_perp
 identity: true          # 恒等項のオン・オフ（実 EID y を G に通して λ_id · mean((G(y) − y)²)。値は train.yaml loss.lambda_id*。2026-11-02）。false で従来どおり。resume で切り替え可
 residual: false         # false: 論文どおり G(z) を直接出力（packet G でも final conv の出力がそのまま画像。2026-11-02 ユーザー決定、ブランチ 015）| true: G(z) = z + F(z)（F の生出力が R。段階 5-1、2026-09-11。bash start.sh --residual true）。resume で変更不可
 serial_batches: false   # true で sampler を index 決定的に（再現用）

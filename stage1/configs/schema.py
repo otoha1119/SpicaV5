@@ -37,6 +37,14 @@ TRAIN = {
     "loss.lambda_id":       Key(float, "--lambda_id",      "恒等項 λ_id · mean((G(y) − y)²)（実 EID y を G に通したときの差。mode.yaml identity: true のときだけ効く）。正規化単位で RMS 20 HU ≈ MSE 5e-5 なので λ_fid より大きい値が要る（stage1_v3 は 1000）"),
     "loss.lambda_id_final": Key(float, "--lambda_id_final", "減衰後の λ_id（lambda_id_decay_epochs > 0 のときだけ使う）"),
     "loss.lambda_id_decay_epochs": Key(int, "--lambda_id_decay_epochs", "λ_id を lambda_id から lambda_id_final まで線形に変える epoch 数（0 = 一定）"),
+    "loss.lp_fid_sigma":    Key(float, "--lp_fid_sigma",   "fidelity: spectral のとき、1 枚ずつの錨に使う低域 fidelity のぼかし σ [px@512]（両方をぼかしてからの MSE、重みは lambda_fid）。本物の EID が情報をほぼ全部持つ帯域（< 約 0.08 cycles/px）だけを縛る"),
+    "loss.spec_edges":      Key(str,   "--spec_edges",     "fidelity: spectral の帯域の境界 cycles/px（カンマ区切り、昇順）。監視（画素 fidelity でも記録）にも使う"),
+    "loss.spec_a_target":   Key(str,   "--spec_a_target",  "帯域ごとの伝達の目標 a_target = h_E·S_s/S_x（本物の EID の値。docs/plans/20261104_math-step-by-step.md、m_targets128.py で実測）"),
+    "loss.spec_g2_target":  Key(str,   "--spec_g2_target", "帯域ごとのコヒーレンスの上限 γ²_EID = h_E²S_s/(h_E²S_s + N_E)"),
+    "loss.spec_weights":    Key(str,   "--spec_weights",   "帯域ごとの L_T / L_⊥ の重み（低域の 1 枚ずつの錨を lp fidelity に任せる帯域は 0）"),
+    "loss.spec_delta":      Key(float, "--spec_delta",     "L_⊥ の余裕 δ（γ² − γ²_EID − δ を超えた分だけ罰する）"),
+    "loss.lambda_T":        Key(float, "--lambda_T",       "L_T = Σ w·(a − a_target)² の重み"),
+    "loss.lambda_perp":     Key(float, "--lambda_perp",    "L_⊥ = Σ w·max(0, γ² − γ²_EID − δ) の重み"),
     # network
     "network.ngf":          Key(int,   "--ngf",            "G 最初の段のチャネル数。Fig. 3 = 32"),
     "network.ndf":          Key(int,   "--ndf",            "D 1 層目のチャネル数。Fig. 3 = 32"),
@@ -90,6 +98,7 @@ MODE = {
     "netG":           Key(str,  "--netG",           "wavelet（論文 Fig.3）| wavelet_packet（HF skip なし、L も H も再分解。network.packet_*。2026-11-02）| unet_128 | unet_256 | resnet_6blocks | resnet_9blocks（ablation）"),
     "netD":           Key(str,  "--netD",           "paper（論文 Fig.3、受容野 22）| wavelet_paper（固定 Haar 1 段 → [LL|LH,HL,HH] 4ch → paper D。2026-11-02）| wavelet_paper_hf（同上、高周波 3 帯だけ）| basic（70×70 PatchGAN）| n_layers | pixel"),
     "final_norm_act": Key(bool, "--final_norm_act", "G 最終 conv に bnorm+LReLU を付ける（確定: false。ablation 用）"),
+    "fidelity":       Key(str,  "--fidelity",       "pixel（Park の ‖G(z) − z‖²、λ_fid）| spectral（低域 fidelity σ lp_fid_sigma + 帯域の伝達一致 L_T + 情報の上限 L_⊥。models/spectral_loss.py、2026-11-04）。resume で切り替え可"),
     "identity":       Key(bool, "--identity",       "true で恒等項を入れる: 実 EID y も G に通し（PCD と連結して 1 回の forward）、λ_id · mean((G(y) − y)²) を G の損失に足す（stage1_v3 の L_id の移植、2026-11-02）。false で従来どおり。resume で切り替え可（重みの形は不変）"),
     "residual":       Key(bool, "--residual",       "true で G を residual 化: G(z) = z + F(z)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変。false = 論文どおり G(z) を直接出力（段階 5-1、2026-09-11）"),
     "serial_batches": Key(bool, "--serial_batches", "true で sampler を index 決定的に（再現用）"),
@@ -97,9 +106,9 @@ MODE = {
 }
 # 導入前の run の launch.yaml / state.pth に無い mode のキーと、そのとき仮定する値。無い = その機構なしで学習された重みなので、推論・crop・resume では「導入前の意味」で扱う
 # （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の値で補うと旧 run の重みの意味が変わる。2026-09-11 residual、2026-10-12 task）
-LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade", "identity": False}
+LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade", "identity": False, "fidelity": "pixel"}
 # 導入前の run を resume するときだけ使う train の移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値。設定欠落の暗黙補完には使わない（2026-11-02）
-LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.lambda_id": 0.0, "loss.lambda_id_final": 0.0, "loss.lambda_id_decay_epochs": 0}
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.lambda_id": 0.0, "loss.lambda_id_final": 0.0, "loss.lambda_id_decay_epochs": 0, "loss.lp_fid_sigma": 3.0, "loss.spec_edges": "0.03,0.08,0.15,0.25,0.5", "loss.spec_a_target": "0.875,0.487,0.047,0.0", "loss.spec_g2_target": "0.979,0.839,0.131,0.0", "loss.spec_weights": "0,1,1,1", "loss.spec_delta": 0.05, "loss.lambda_T": 0.0, "loss.lambda_perp": 0.0}
 
 # ---------------------------------------------------------------------------
 # stage1/configs/sr.yaml — task: sr（一発超解像）のときだけ読む。degrade では一切読まない（既存の挙動は不変）
@@ -396,6 +405,15 @@ def check_values(train, mode, machine):
     if train["loss.lambda_fid"] < 0: P.append("loss.lambda_fid ≥ 0")
     if train["loss.lambda_id"] < 0 or train["loss.lambda_id_final"] < 0: P.append("loss.lambda_id / lambda_id_final ≥ 0")
     if train["loss.lambda_id_decay_epochs"] < 0: P.append("loss.lambda_id_decay_epochs ≥ 0")
+    if mode["fidelity"] not in ("pixel", "spectral"): P.append("fidelity は pixel | spectral")
+    try:
+        _e = [float(t) for t in train["loss.spec_edges"].split(",")]; _n = len(_e) - 1
+        _l = {k: [float(t) for t in train[k].split(",")] for k in ("loss.spec_a_target", "loss.spec_g2_target", "loss.spec_weights")}
+        if _n < 1 or any(b <= a for a, b in zip(_e, _e[1:])) or _e[0] < 0 or _e[-1] > 0.5: P.append("loss.spec_edges は 0〜0.5 の昇順で 2 個以上")
+        if any(len(v) != _n for v in _l.values()): P.append(f"loss.spec_a_target / g2_target / weights は帯域数 {_n} 個ずつ")
+    except ValueError:
+        P.append("loss.spec_* はカンマ区切りの数値")
+    if min(train["loss.lambda_T"], train["loss.lambda_perp"], train["loss.spec_delta"], train["loss.lp_fid_sigma"]) < 0: P.append("loss.lambda_T / lambda_perp / spec_delta / lp_fid_sigma ≥ 0")
     if train["network.ngf"] < 1 or train["network.ndf"] < 1: P.append("network.ngf / ndf ≥ 1")
     if train["network.norm"] not in NORMS: P.append(f"network.norm は {NORMS}")
     if train["network.init_type"] not in INIT_TYPES: P.append(f"network.init_type は {INIT_TYPES}")

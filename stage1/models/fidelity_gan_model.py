@@ -119,6 +119,7 @@ class FidelityGANModel(BaseModel):
         parser.add_argument("--final_norm_act", action="store_true", help="G 最終 conv に bnorm+LReLU を付ける（確定: 付けない。ablation 用）")
         parser.add_argument("--residual", action="store_true", help="G を residual 化: fake_B = real_A + F(real_A)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変（段階 5-1、2026-09-11）")
         parser.add_argument("--precision", type=str, default=None, help="fp32 | bf16（CUDA autocast。G / D の forward だけ。損失は FP32。stage1_v3 から移植、2026-11-02）")
+        parser.add_argument("--fidelity", type=str, default=None, help="pixel | spectral（2026-11-04）")
         parser.add_argument("--identity", action="store_true", help="恒等項: 実 EID y も G に通し λ_id · mean((G(y) − y)²) を G の損失に足す（2026-11-02）")
         parser.add_argument("--compile", action="store_true", help="CUDA で G / D を torch.compile(mode='max-autotune')（CPU では無効）")
         # netG=wavelet_packet の構造（train.yaml network.packet_*）。他の netG では読まないが、既定値は無いので run_train.py が常に渡す
@@ -142,6 +143,8 @@ class FidelityGANModel(BaseModel):
             parser.add_argument("--display_hu_max", type=int, default=None, help="表示用の線形範囲の上限 HU")
             parser.add_argument("--diff_range_hu", type=int, default=None, help="差分パネル（R）のカラー表示の ±範囲 HU（白 = 0、純青 = −、純赤 = +）")
             parser.add_argument("--preview_bits", type=int, default=None, help="output_images/preview_<slice>/ のビット深度（8 | 16）")
+            for _k, _t in (("lp_fid_sigma", float), ("spec_edges", str), ("spec_a_target", str), ("spec_g2_target", str), ("spec_weights", str), ("spec_delta", float), ("lambda_T", float), ("lambda_perp", float)):
+                parser.add_argument(f"--{_k}", type=_t, default=None, help="fidelity: spectral の設定（train.yaml loss.*）")
             parser.add_argument("--lambda_id", type=float, default=None, help="恒等項の重み λ_id（--identity のときだけ効く）")
             parser.add_argument("--lambda_id_final", type=float, default=None, help="減衰後の λ_id")
             parser.add_argument("--lambda_id_decay_epochs", type=int, default=None, help="λ_id を線形に変える epoch 数（0 = 一定）")
@@ -172,6 +175,19 @@ class FidelityGANModel(BaseModel):
         #   G_id     : mean((G(y) − y)²)（恒等項、λ を掛ける前。identity: false なら 0）
         #   lambda_id: その step の λ_id（スケジュール後。identity: false なら 0）
         self.loss_names = ["D", "D_real", "D_fake", "G_GAN", "G_fid", "G_id", "lambda_id", "D_sep", "D_acc"]
+        # fidelity: spectral（2026-11-04）。帯域ごとの伝達 a とコヒーレンス γ² は pixel のときも監視用に記録する（spec_a<i> / spec_g<i>）
+        self.fidelity = getattr(opt, "fidelity", None) or "pixel"
+        self.spec = None
+        if self.isTrain:
+            from .spectral_loss import parse_floats
+            self.spec = dict(edges=parse_floats(opt.spec_edges, "spec_edges"), a=parse_floats(opt.spec_a_target, "spec_a_target"),
+                             g2=parse_floats(opt.spec_g2_target, "spec_g2_target"), w=parse_floats(opt.spec_weights, "spec_weights"),
+                             delta=opt.spec_delta, lam_T=opt.lambda_T, lam_perp=opt.lambda_perp, lp_sigma=opt.lp_fid_sigma)
+            nb = len(self.spec["edges"]) - 1
+            self.loss_names += ["G_T", "G_perp"] + [f"spec_a{i + 1}" for i in range(nb)] + [f"spec_g{i + 1}" for i in range(nb)]
+            self.loss_G_T = self.loss_G_perp = 0.0
+            for i in range(nb):
+                setattr(self, f"loss_spec_a{i + 1}", 0.0); setattr(self, f"loss_spec_g{i + 1}", 0.0)
         self.identity = bool(getattr(opt, "identity", False))
         self.loss_G_id, self.loss_lambda_id = 0.0, 0.0
         # 表示・保存する画像名
@@ -290,8 +306,20 @@ class FidelityGANModel(BaseModel):
             self.loss_G_GAN = self._log1mD_from_v(v_fake).mean()   # E[log(1 − D(G(z)))] = E[v]
         else:  # ablation: 本家 GANLoss
             self.loss_G_GAN = self.criterionGAN(v_fake, True)
-        self.loss_G_fid = torch.mean((self.fake_B - self.real_A) ** 2)  # ‖G(z) − z‖² の画素平均
-        self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid
+        from .spectral_loss import gaussian_blur, spectral_losses
+        sp = self.spec
+        if self.fidelity == "spectral":  # 低域だけの 1 枚ずつの錨 + 帯域の伝達一致 + 情報の上限（2026-11-04）
+            self.loss_G_fid = torch.mean((gaussian_blur(self.fake_B, sp["lp_sigma"]) - gaussian_blur(self.real_A, sp["lp_sigma"])) ** 2)
+            l_t, l_perp, av, gv = spectral_losses(self.real_A, self.fake_B, sp["edges"], sp["a"], sp["g2"], sp["w"], sp["delta"])
+            self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid + sp["lam_T"] * l_t + sp["lam_perp"] * l_perp
+        else:
+            self.loss_G_fid = torch.mean((self.fake_B - self.real_A) ** 2)  # ‖G(z) − z‖² の画素平均
+            self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid
+            with torch.no_grad():  # 監視用（pixel でも帯域の伝達とコヒーレンスを記録して、spectral の run と同じ物差しで比べる）
+                l_t, l_perp, av, gv = spectral_losses(self.real_A, self.fake_B.detach(), sp["edges"], sp["a"], sp["g2"], sp["w"], sp["delta"])
+        self.loss_G_T, self.loss_G_perp = float(l_t.detach()), float(l_perp.detach())
+        for i, (va, vg) in enumerate(zip(av, gv)):
+            setattr(self, f"loss_spec_a{i + 1}", va); setattr(self, f"loss_spec_g{i + 1}", vg)
         if self.identity:  # 恒等項: 実 EID は G を通しても実 EID のまま（2026-11-02、mode.yaml identity）
             lam = self.lambda_id_now()
             g_id = torch.mean((self.idt_B - self.real_B) ** 2)

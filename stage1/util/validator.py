@@ -76,10 +76,14 @@ class Validator:
         net = model.netG
         was_training = net.training
         net.eval()  # 採点は BN の running 統計で（monitor と同じ）
-        rows = []
+        rows = []; tiles_x, tiles_y = [], []
         for p in self.pcd_paths:
             x = torch.from_numpy(normalize(read_stored(p), o.hu_offset, o.hu_min, o.hu_max))[None, None].to(model.device)
             y = net(x).clone().float().cpu().numpy()[0, 0]  # clone: compile 時の CUDA Graph 出力の上書き対策
+            xn = x.float().cpu().numpy()[0, 0]
+            for ty in range(0, xn.shape[0] - 127, 128):  # 帯域の伝達・コヒーレンス用の 128 タイル（学習の patch と同じ大きさ）
+                for tx in range(0, xn.shape[1] - 127, 128):
+                    tiles_x.append(xn[ty:ty + 128, tx:tx + 128]); tiles_y.append(y[ty:ty + 128, tx:tx + 128])
             hu = (y + 1.0) / 2.0 * (o.hu_max - o.hu_min) + o.hu_min
             rows.append(analyze_slice(hu, self.thr, rng))
         # EID 側: 実 EID を G に通したときの体内の差 RMS(G(y) − y)（恒等項の効き。identity のオン・オフどちらでも測る。score には入れない = オン・オフで比較できる）
@@ -95,6 +99,14 @@ class Validator:
         ry = float(np.sqrt(np.nanmean(sq))) if sq else float("nan")
         net.train(was_training)
         gen = {k: summarize(rows, k) for k in KEYS}
+        spec_a, spec_g = [], []
+        if getattr(o, "spec_edges", None) and tiles_x:  # 入力 PCD と出力の帯域ごとの伝達 a・コヒーレンス γ²（漏れの監視。score には入れない。2026-11-04）
+            from models.spectral_loss import band_transfer, parse_floats
+            tx_ = torch.from_numpy(np.stack(tiles_x))[:, None]; ty_ = torch.from_numpy(np.stack(tiles_y))[:, None]
+            av, gv = band_transfer(tx_, ty_, parse_floats(o.spec_edges, "spec_edges"))
+            spec_a, spec_g = [float(v) for v in av], [float(v) for v in gv]
+            for i, (va, vg) in enumerate(zip(spec_a, spec_g)):
+                self.tb.add_scalar(f"val/spec_a{i + 1}", va, total_iters); self.tb.add_scalar(f"val/spec_g{i + 1}", vg, total_iters)
         dist = {k: abs(gen[k]["median"] - self.ref[k]["median"]) / self.ref[k]["iqr"] if np.isfinite(gen[k]["median"]) else float("nan") for k in KEYS}
         score = float(sum(dist.values()))
         is_best = bool(np.isfinite(score) and score < self.best_score)
@@ -108,6 +120,7 @@ class Validator:
         self.tb.add_scalar("val/score", score, total_iters)
         self.tb.add_scalar("val/best_score", self.best_score, total_iters)
         line = (f"val epoch {int(epoch)} | score {score:.3f}{' *best*' if is_best else ''} | ry_rms {ry:.1f} HU | "
+                + (("spec a " + "/".join(f"{v:.3f}" for v in spec_a) + " γ² " + "/".join(f"{v:.2f}" for v in spec_g) + " | ") if spec_a else "")
                 + " ".join(f"{k} {gen[k]['median']:.2f} (eid {self.ref[k]['median']:.2f}, d {dist[k]:.2f})" for k in KEYS) + f" | {time.time() - t0:.1f}s")
         with open(self.run_dir / VAL_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
