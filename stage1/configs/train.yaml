@@ -23,6 +23,7 @@ loss:
   lp_fid_sigma: 3.0          # 低域 fidelity のぼかし σ [px@512]。< 約 0.08 cycles/px だけを 1 枚ずつ縛る（重みは lambda_fid）
   spec_edges: "0.03,0.08,0.15,0.25,0.71"        # 帯域の境界 cycles/px。上端は斜めの最高周波数 √2/2 ≈ 0.707 まで覆う（0.5 で切ると 21.6 % の成分が無拘束になり、G がそこにゴミを溜めて崩壊した。PC3 2026_1104_1956 epoch 16）
   mu_hi_max: 0.01           # gen_mode: mean_noise の最上帯域の μ のパワー / s̃ のパワーの上限（片側）。粒は色付きノイズに持たせる（2026-11-05）
+  mu_pow_margin: 1.5        # mean_noise の帯域 1〜3 の μ のパワー上限 = 1.5 · a_target²（s̃ と無関係な模様を μ に描かせない。2026-11-05）
   lambda_hi: 1.0            # 上の上限の重み（mean_noise のときだけ効く）
   spec_window: mirror        # mirror（鏡で折り返して窓なし、patch の端も縛る）| hann（端が無拘束で 512 の外周に枠が出た）。目標値は window ごとに o_targets_mirror.py で実測
   spec_a_target: "0.8780,0.4953,0.0473,0.0"     # 伝達の目標 a_target = h_E·S_s/S_x（mirror）

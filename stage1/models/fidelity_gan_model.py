@@ -121,6 +121,7 @@ class FidelityGANModel(BaseModel):
         parser.add_argument("--precision", type=str, default=None, help="fp32 | bf16（CUDA autocast。G / D の forward だけ。損失は FP32。stage1_v3 から移植、2026-11-02）")
         parser.add_argument("--fidelity", type=str, default=None, help="pixel | spectral（2026-11-04）")
         parser.add_argument("--mu_hi_max", type=float, default=None, help="mean_noise: 最上帯域の μ のパワー / s̃ のパワーの上限（片側、train.yaml loss.mu_hi_max）")
+        parser.add_argument("--mu_pow_margin", type=float, default=None, help="mean_noise: 伝達を縛る帯域の μ のパワー上限 = margin · a_target²（train.yaml loss.mu_pow_margin）")
         parser.add_argument("--lambda_hi", type=float, default=None, help="mean_noise: 上の上限の重み（train.yaml loss.lambda_hi）")
         parser.add_argument("--gen_mode", type=str, default="direct", help="direct（G(z) をそのまま）| mean_noise（G の入力は data.dn_dir の BM3D(x)、出力 = μ_θ + 実 EID の NPS の色付きノイズ。2026-11-05、EXP-20261105-01）")
         parser.add_argument("--identity", action="store_true", help="恒等項: 実 EID y も G に通し λ_id · mean((G(y) − y)²) を G の損失に足す（2026-11-02）")
@@ -340,7 +341,11 @@ class FidelityGANModel(BaseModel):
             a_v, g_v, p_v = band_transfer(self.real_A, out, sp["edges"], window=sp["window"])
             wv = torch.tensor(sp["w"], device=out.device); at = torch.tensor(sp["a"], device=out.device)
             l_t = (wv * (a_v - at) ** 2).sum()
-            l_hi = torch.relu(torch.log(p_v[-1] + 1e-12) - float(np.log(self.opt.mu_hi_max))) ** 2
+            # μ のパワーの上限（片側）: 最上帯域は mu_hi_max、伝達を縛る帯域（重み > 0）は margin · a_target²（決定的な μ が s̃ を a 倍で写すときの強さ）。
+            # L_T は s̃ と相関する成分しか見ないので、これが無いと μ が s̃ と無関係な模様を描いて GAN を満たした（パイロット 2026_1105_1423: μ の局所 SD 230 HU、帯域 2 のパワー比 15〜24、γ² 0.03）
+            caps = [max(self.opt.mu_pow_margin * float(a) ** 2, 1e-4) if wi > 0 else None for a, wi in zip(sp["a"], sp["w"])]
+            caps[-1] = self.opt.mu_hi_max
+            l_hi = sum(torch.relu(torch.log(p_v[i] + 1e-12) - float(np.log(c))) ** 2 for i, c in enumerate(caps) if c is not None)
             l_perp = l_n = torch.zeros((), device=out.device)
             av, gv, pv = [float(v) for v in a_v.detach()], [float(v) for v in g_v.detach()], [float(v) for v in p_v.detach()]
             self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid + sp["lam_T"] * l_t + self.opt.lambda_hi * l_hi
