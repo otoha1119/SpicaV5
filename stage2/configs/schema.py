@@ -46,6 +46,13 @@ TRAIN = {
     "optim.precision":    Key(str,   "--precision",    "演算精度 fp32 | bf16。bf16 は CUDA の autocast を学習の forward だけに掛ける（重み・optimizer・損失・val・推論は FP32）。Stage 1 と同じ（2026-11-03）"),
     "optim.compile":      Key(bool,  "--compile",      "CUDA で学習の forward を torch.compile(mode='max-autotune')（CPU では無効）。val・監視・推論は compile しない FP32 の同じ重みで通す。初回 step はコンパイルで遅い"),
     "optim.seed":         Key(int,   "--seed",         "python / numpy / torch の乱数 seed（再現条件）。cudnn.benchmark は Stage 1 と同じく有効なので完全決定ではない"),
+    # loss（mode.yaml loss: band のときだけ使う。2026-11-05、models/band_loss.py）
+    "loss.band_lo_sigma":  Key(float, "--band_lo_sigma",  "band: 低〜中域を 1 枚ずつ合わせる Gaussian σ [px@1024]（両方をぼかしてから MSE）"),
+    "loss.band_edges":     Key(str,   "--band_edges",     "band: 帯域パワーを合わせる帯域の境界 cycles/px@1024（昇順、上端は斜めまで覆う 0.71）"),
+    "loss.lambda_lo":      Key(float, "--lambda_lo",      "band: 低域 MSE の重み"),
+    "loss.lambda_grad":    Key(float, "--lambda_grad",    "band: Sobel 勾配の L1 の重み（縁の位置と強さ）"),
+    "loss.lambda_nps":     Key(float, "--lambda_nps",     "band: 帯域パワーの log 比の二乗和の重み（高域の質感。1 枚ずつは当てない）"),
+    "loss.lambda_pix":     Key(float, "--lambda_pix",     "band: 全帯域の画素 L1 の重み（弱い錨）"),
     # data
     "data.patch_size":        Key(int,  "--patch_size",        '論文 "Patches of size 128 × 128 pixels"（1024 グリッド上）。ユーザー決定 128。4 の倍数（pool 2 回）'),
     "data.samples_per_epoch": Key(int,  "--samples_per_epoch", "1 epoch のサンプル数（random sampling: 症例一様 → スライス一様 → 位置一様、入力と教師は同じ位置）。論文の 1 epoch ≈ 61,101 組に合わせて 64,000"),
@@ -82,7 +89,7 @@ MODE = {
     "base_ch":        Key(int,  "--base_ch",        "最初の段のチャネル数。論文 128（段ごとに 2 倍: 128 / 256 / 512）"),
     "n_pool":         Key(int,  "--n_pool",         "max pool の回数。論文 2"),
     "init_type":      Key(str,  "--init_type",      "重み初期化: xavier_uniform（Keras 既定 Glorot uniform + bias 0 に合わせる）| torch（PyTorch 既定のまま）"),
-    "loss":           Key(str,  "--loss",           "mse（論文 Eq. 1）| l1（ablation）。正規化空間 [−1,1] で計算"),
+    "loss":           Key(str,  "--loss",           "mse（論文 Eq. 1）| l1（ablation）| band（低域 MSE + 勾配 L1 + 高域の帯域パワー一致 + 弱い画素 L1。値は train.yaml loss.*、2026-11-05）。正規化空間 [−1,1] で計算"),
     "final_act":      Key(str,  "--final_act",      "最終層の活性化: linear（論文、回帰）| tanh（出力を [−1,1] に縛る変種）"),
     "residual":       Key(bool, "--residual",       "true で 出力 = 入力 + net(入力)（変種。論文は false）"),
     "serial_batches": Key(bool, "--serial_batches", "true で sampler を index 決定的に（再現用）"),
@@ -130,7 +137,7 @@ BEST_METRICS = ("rmse", "ssim", "psnr")   # log.best_metric。rmse は小さい�
 GPU_GENS = (0, 30, 40, 50)
 ARCHS = ("unet_ilumenate",)
 INIT_TYPES = ("xavier_uniform", "torch")
-LOSSES = ("mse", "l1")
+LOSSES = ("mse", "l1", "band")
 FINAL_ACTS = ("linear", "tanh")
 
 
@@ -337,7 +344,7 @@ def check_infer_values(infer, machine):
 
 PRECISIONS = ("fp32", "bf16")
 # 導入前の run を resume するときだけ使う移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値（2026-11-03）
-LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False}
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.band_lo_sigma": 1.5, "loss.band_edges": "0.02,0.06,0.12,0.25,0.71", "loss.lambda_lo": 1.0, "loss.lambda_grad": 0.02, "loss.lambda_nps": 0.0001, "loss.lambda_pix": 0.01}  # loss の 6 キーは導入前の run（mse / l1）では使わない
 
 
 def check_train_values(train, mode, machine):
@@ -386,6 +393,14 @@ def check_train_values(train, mode, machine):
     if mode["n_pool"] < 1: P.append("n_pool ≥ 1")
     if mode["init_type"] not in INIT_TYPES: P.append(f"init_type は {INIT_TYPES}")
     if mode["loss"] not in LOSSES: P.append(f"loss は {LOSSES}")
+    if mode["loss"] == "band":
+        if train["loss.band_lo_sigma"] <= 0: P.append("loss.band_lo_sigma > 0")
+        if min(train["loss.lambda_lo"], train["loss.lambda_grad"], train["loss.lambda_nps"], train["loss.lambda_pix"]) < 0: P.append("loss.lambda_* ≥ 0")
+        try:
+            _e = [float(t) for t in train["loss.band_edges"].split(",")]
+            if len(_e) < 2 or _e != sorted(_e) or _e[0] < 0: P.append("loss.band_edges は 2 つ以上の昇順の非負の数値")
+        except ValueError:
+            P.append("loss.band_edges はカンマ区切りの数値")
     if mode["final_act"] not in FINAL_ACTS: P.append(f"final_act は {FINAL_ACTS}")
     _check_machine(machine, P)
     _problems_to_error("train values", P)

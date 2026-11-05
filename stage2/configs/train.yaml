@@ -13,6 +13,13 @@ optim:
   precision: bf16       # 学習の forward だけ CUDA autocast（Stage 1 と同じ高速化、2026-11-03）。損失・val・推論は FP32。fp32 で従来どおり
   compile: true         # 学習の forward を torch.compile(max-autotune)。初回だけコンパイルで遅い。val・推論は compile しない
 
+loss:                   # mode.yaml loss: band のときだけ使う（2026-11-05、models/band_loss.py）。重みは e026 データの Stage 2（MSE）の出力で各項の大きさを測って決めた
+  band_lo_sigma: 1.5      # 低〜中域を 1 枚ずつ合わせる Gaussian σ [px@1024]（MTF 0.5 ≈ 0.13 cycles/px）
+  band_edges: "0.02,0.06,0.12,0.25,0.71"   # 帯域パワーを合わせる境界 cycles/px@1024。MSE の出力は上 2 帯域のパワーが教師の 9.5 % / 8 % しかなかった
+  lambda_lo: 1.0          # MSE の出力で 0.00037
+  lambda_grad: 0.02       # 勾配 L1 は 0.0275 → ×0.02 ≈ 0.00055
+  lambda_nps: 0.0001      # 帯域パワーの log 比の二乗和は 12.0 → ×1e-4 ≈ 0.0012（質感が合えば 0 に近づく）
+  lambda_pix: 0.01        # 画素 L1 は 0.027 → ×0.01 ≈ 0.00027
 data:
   patch_size: 128       # 論文 "Patches of size 128 × 128 pixels"（1024 グリッド上）。ユーザー決定 128
   samples_per_epoch: 64000   # 1 epoch のサンプル数（random sampling）。論文の 1 epoch ≈ 61,101 組に合わせる。batch 16 → 4,000 step/epoch

@@ -80,6 +80,11 @@ class RegressionModel:
             self.criterion = nn.MSELoss()
         elif mode["loss"] == "l1":
             self.criterion = nn.L1Loss()
+        elif mode["loss"] == "band":  # 低域 MSE + 勾配 L1 + 高域の帯域パワー一致 + 弱い画素 L1（2026-11-05、models/band_loss.py）
+            from models.band_loss import band_loss, parse_floats
+            edges = parse_floats(train["loss.band_edges"], "loss.band_edges")
+            w = (train["loss.band_lo_sigma"], edges, train["loss.lambda_lo"], train["loss.lambda_grad"], train["loss.lambda_nps"], train["loss.lambda_pix"])
+            self.criterion = lambda pred, t: band_loss(pred, t, *w)[0]
         else:
             raise ValueError(mode["loss"])
         self.loss_name = mode["loss"]
