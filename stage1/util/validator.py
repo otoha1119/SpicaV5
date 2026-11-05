@@ -122,8 +122,11 @@ class Validator:
             w_ = parse_floats(o.spec_weights, "spec_weights"); at_ = parse_floats(o.spec_a_target, "spec_a_target"); gt_ = parse_floats(o.spec_g2_target, "spec_g2_target")
             on = [i for i, wi in enumerate(w_) if wi > 0]
             dist["spec_a"] = float(np.mean([abs(spec_a[i] - at_[i]) for i in on])) / 0.05
-            dist["spec_g"] = float(np.mean([abs(spec_g[i] - gt_[i]) for i in on])) / 0.10
-            self.tb.add_scalar("val/spec_a_dist", dist["spec_a"], total_iters); self.tb.add_scalar("val/spec_g_dist", dist["spec_g"], total_iters)
+            if not hasattr(net, "noise_like"):  # mean_noise の μ は s̃ の決定的な関数なので γ² は 1 に近く、目標との比較に意味がない（伝達 a だけで選ぶ）
+                dist["spec_g"] = float(np.mean([abs(spec_g[i] - gt_[i]) for i in on])) / 0.10
+            self.tb.add_scalar("val/spec_a_dist", dist["spec_a"], total_iters)
+            if "spec_g" in dist:
+                self.tb.add_scalar("val/spec_g_dist", dist["spec_g"], total_iters)
         score = float(sum(dist.values()))
         is_best = bool(np.isfinite(score) and score < self.best_score)
         if is_best:
@@ -138,7 +141,7 @@ class Validator:
         line = (f"val epoch {int(epoch)} | score {score:.3f}{' *best*' if is_best else ''} | ry_rms {ry:.1f} HU | "
                 + (("spec a " + "/".join(f"{v:.3f}" for v in spec_a) + " γ² " + "/".join(f"{v:.2f}" for v in spec_g) + " P " + "/".join(f"{v:.3f}" for v in spec_p) + " | ") if spec_a else "")
                 + " ".join(f"{k} {gen[k]['median']:.2f} (eid {self.ref[k]['median']:.2f}, d {dist[k]:.2f})" for k in KEYS)
-                + (f" spec_a_d {dist['spec_a']:.2f} spec_g_d {dist['spec_g']:.2f}" if "spec_a" in dist else "") + f" | {time.time() - t0:.1f}s")
+                + (f" spec_a_d {dist['spec_a']:.2f}" if "spec_a" in dist else "") + (f" spec_g_d {dist['spec_g']:.2f}" if "spec_g" in dist else "") + f" | {time.time() - t0:.1f}s")
         with open(self.run_dir / VAL_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
         print(line, flush=True)

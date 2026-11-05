@@ -224,6 +224,8 @@ class TrainMonitor:
             hwc = lambda p3: p3.permute(1, 2, 0).numpy()  # (3,H,W) → (H,W,3)  # noqa: E731
             cols = ([hwc(E)] if E is not None else []) + [hwc(lin(G[i])), hwc(lin(A[i])), hwc(col(R[i]))]
             labels = full_labels(epoch, self.task) if E is not None else full_labels(epoch, self.task)[1:]
+            if hasattr(net, "noise_like"):  # mean_noise: A は BM3D(PCD)、R は 出力 − BM3D(PCD)（元 PCD との差ではない。Codex レビュー 4）
+                labels = [l.replace("PCD", "BM3D(PCD)") for l in labels]
             panel01 = build_panel(cols, labels, o.diff_range_hu)  # [B の代表 | G(z) | A | R + ゲージ]（degrade: EID | EID-like | PCD | R）、(Hp,Wp,3) [0,1]
             tag = "fixed" if kind == "fixed" else ("random" if full["kinds"].count("random") == 1 else f"random{i}")  # TB のタグは固定（スライダーで epoch を追える）
             self.tb.add_image(f"images/full/{tag}", to_u8(panel01), total_iters, dataformats="HWC")
