@@ -367,3 +367,4 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 損失: fidelity / spectral（L_T・L_N 等）は μ（ノイズ前）に、D は出力に。identity / residual は不可（schema で止める）。compile は μ_θ だけ
 - 推論: `inference_dir.build_generator` が `amp` を見て自動で包む。入力は BM3D(x) のフォルダを渡す。patch モードは不可（継ぎ目）
 - 導入前の run は gen_mode direct、data.dn_dir ""（LEGACY）
+- Codex レビュー 3（実装）の No-Go 6 点を修正（2026-11-05）: (1) mean_noise は μ に L_HU + L_T（BM3D 基準の a_target）+ 最上帯域の μ のパワー上限 `loss.mu_hi_max` / `loss.lambda_hi` だけ（L_N・L_⊥ は使わない） (2) chain の推論入力を launch の data.dn_dir に、run_infer は入力が dn_dir でなければ止める (3) 学習のノイズは専用 generator（state.pth の noise_gen で resume）、監視・採点・推論はスライス名の crc32 で決まる seed（同じスライスは毎回同じノイズ） (4) validator は伝達・コヒーレンスを μ、見た目の統計をノイズ付きで。恒等の診断は出さない (5) フィルタは中心対称だけで平均、返す amp を 64 枚で検証して report（verify_64） (6) resume ではフィルタを作り直さない、gen_mode は resume で変更不可、direct で dn_dir を指定したら止める。フルスライスの書き出しに `<slice>_mu.png`

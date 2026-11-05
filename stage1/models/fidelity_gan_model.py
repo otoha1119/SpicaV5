@@ -120,6 +120,8 @@ class FidelityGANModel(BaseModel):
         parser.add_argument("--residual", action="store_true", help="G を residual 化: fake_B = real_A + F(real_A)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変（段階 5-1、2026-09-11）")
         parser.add_argument("--precision", type=str, default=None, help="fp32 | bf16（CUDA autocast。G / D の forward だけ。損失は FP32。stage1_v3 から移植、2026-11-02）")
         parser.add_argument("--fidelity", type=str, default=None, help="pixel | spectral（2026-11-04）")
+        parser.add_argument("--mu_hi_max", type=float, default=None, help="mean_noise: 最上帯域の μ のパワー / s̃ のパワーの上限（片側、train.yaml loss.mu_hi_max）")
+        parser.add_argument("--lambda_hi", type=float, default=None, help="mean_noise: 上の上限の重み（train.yaml loss.lambda_hi）")
         parser.add_argument("--gen_mode", type=str, default="direct", help="direct（G(z) をそのまま）| mean_noise（G の入力は data.dn_dir の BM3D(x)、出力 = μ_θ + 実 EID の NPS の色付きノイズ。2026-11-05、EXP-20261105-01）")
         parser.add_argument("--identity", action="store_true", help="恒等項: 実 EID y も G に通し λ_id · mean((G(y) − y)²) を G の損失に足す（2026-11-02）")
         parser.add_argument("--compile", action="store_true", help="CUDA で G / D を torch.compile(mode='max-autotune')（CPU では無効）")
@@ -204,14 +206,19 @@ class FidelityGANModel(BaseModel):
         self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain, final_norm_act=opt.final_norm_act, residual=opt.residual,
                                       packet_ch=opt.packet_ch, packet_depth=opt.packet_depth, packet_n_conv=opt.packet_n_conv)
         self.mean_noise = getattr(opt, "gen_mode", "direct") == "mean_noise"
+        if self.mean_noise and self.isTrain:
+            self.loss_names = list(self.loss_names) + ["G_hi"]
+            self.loss_G_hi = 0.0
         if self.mean_noise:  # ỹ = μ_θ(s̃) + c(ξ)（models/eid_noise.py）。損失（fidelity / spectral）は μ に、D は ỹ に
             from .eid_noise import MeanNoiseG, build_filter, save_report
             self.netG = MeanNoiseG(self.netG).to(self.device)
-            if self.isTrain:  # 実 EID（B 側）の一様部の NPS から色付けフィルタを作る（resume では checkpoint の buffer で上書きされる）
+            self.noise_gen = torch.Generator(device=self.device).manual_seed(20261105)  # 学習のノイズ専用の乱数（state.pth に入れて resume で戻す。監視・採点は seed で別に引く）
+            if self.isTrain and not opt.continue_train:  # 新規の run だけ: 実 EID（B 側）の一様部の NPS から色付けフィルタを作る。resume は checkpoint の amp と既存の report をそのまま使う
                 amp, rep = build_filter(opt.dir_B, opt.hu_offset, opt.hu_min, opt.hu_max)
                 self.netG.amp.copy_(torch.from_numpy(amp).to(self.device))
                 save_report(self.save_dir, rep)
-                print(f"[mean_noise] EID ノイズのフィルタ: 一様 patch {rep['n_uniform_patches']} 個、校正後の帯域パワー比 {[round(r, 3) for r in rep['calibration'][-1]['ratio']]}、SD {rep['noise_sd_HU']:.1f} HU", flush=True)
+                print(f"[mean_noise] EID ノイズのフィルタ: 一様 patch {rep['n_uniform_patches']} 個、検証の帯域パワー比 {[round(r, 3) for r in rep['verify_64']['band_ratio']]}、"
+                      f"局所 SD {rep['verify_64']['local_sd_HU']:.1f} HU（実 EID {rep['verify_64']['eid_uniform_local_sd_HU']:.1f}）、極低域 SD {rep['verify_64']['lowpass_sigma16_sd_HU']:.2f} HU", flush=True)
         # 高速化（stage1_v3 / 008 と同じ、2026-11-02 移植）: bf16 autocast は G / D の forward だけ（損失・重み・optimizer は FP32、fgan_kl の exp も FP32）。
         # compile は nn.Module.compile（state_dict のキーを保つ）。compiled module の CUDA Graph は出力 buffer を再利用するので、保持する出力は _run_net で clone する
         self.use_bf16 = opt.precision == "bf16" and self.device.type == "cuda"
@@ -270,7 +277,7 @@ class FidelityGANModel(BaseModel):
         identity のときは実 EID real_B も同じ forward で G に通す（連結して 1 回。BN の統計を PCD と EID で分けない。stage1_v3 と同じ）→ idt_B = G(real_B)。"""
         if self.mean_noise:  # μ = μ_θ(s̃)、fake_B = μ + c(ξ)（real_A は data.dn_dir の BM3D(x)）
             self.mu = self._run_net(self.netG.net, self.real_A)
-            self.fake_B = self.mu + self.netG.noise_like(self.mu)
+            self.fake_B = self.mu + self.netG.noise_like(self.mu, generator=self.noise_gen)
         elif self.identity and self.isTrain:
             n = self.real_A.shape[0]
             out = self._run_net(self.netG, torch.cat([self.real_A, self.real_B], dim=0))
@@ -326,7 +333,19 @@ class FidelityGANModel(BaseModel):
         from .spectral_loss import gaussian_blur, spectral_losses
         sp = self.spec
         out = self.mu if self.mean_noise else self.fake_B  # mean_noise: fidelity・伝達は μ（ノイズを足す前）に掛ける。ノイズは c(ξ) が実 EID の NPS で決まっている
-        if self.fidelity == "spectral":  # 低域だけの 1 枚ずつの錨 + 帯域の伝達一致 + 情報の上限（2026-11-04）
+        if self.mean_noise:  # μ 専用（Codex レビュー 3 の 1）: 低域の HU の錨 + BM3D 出力基準の伝達一致（L_T）+ 最上帯域の μ のパワーの上限（片側）。
+            # 従来の L_N（S_EID/S_PCD の等式）と L_⊥ は使わない（ノイズ込みの総パワーを μ に課すと μ が決定的な粒を描く。粒は r が持つ）
+            from .spectral_loss import band_transfer
+            self.loss_G_fid = torch.mean((gaussian_blur(out, sp["lp_sigma"]) - gaussian_blur(self.real_A, sp["lp_sigma"])) ** 2)
+            a_v, g_v, p_v = band_transfer(self.real_A, out, sp["edges"], window=sp["window"])
+            wv = torch.tensor(sp["w"], device=out.device); at = torch.tensor(sp["a"], device=out.device)
+            l_t = (wv * (a_v - at) ** 2).sum()
+            l_hi = torch.relu(torch.log(p_v[-1] + 1e-12) - float(np.log(self.opt.mu_hi_max))) ** 2
+            l_perp = l_n = torch.zeros((), device=out.device)
+            av, gv, pv = [float(v) for v in a_v.detach()], [float(v) for v in g_v.detach()], [float(v) for v in p_v.detach()]
+            self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid + sp["lam_T"] * l_t + self.opt.lambda_hi * l_hi
+            self.loss_G_hi = float(l_hi.detach())
+        elif self.fidelity == "spectral":  # 低域だけの 1 枚ずつの錨 + 帯域の伝達一致 + 情報の上限（2026-11-04）
             self.loss_G_fid = torch.mean((gaussian_blur(out, sp["lp_sigma"]) - gaussian_blur(self.real_A, sp["lp_sigma"])) ** 2)
             l_t, l_perp, l_n, av, gv, pv = spectral_losses(self.real_A, out, sp["edges"], sp["a"], sp["g2"], sp["w"], sp["delta"], sp["p"], sp["window"], sp["two_sided"])
             self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid + sp["lam_T"] * l_t + sp["lam_perp"] * l_perp + sp["lam_N"] * l_n
@@ -393,6 +412,7 @@ class FidelityGANModel(BaseModel):
             # 復元すると二重計上になる（lr が 0 や負になる）。再開時は optimizer state を読んだ後に scheduler を作り直す
             "lr": float(self.optimizers[0].param_groups[0]["lr"]),
             "config": self._launch_config(),  # 保存時の実効設定（train / mode / machine）。resume はこれを基準にする（失敗した起動の launch を引き継がない。2026-09-09）
+            "noise_gen": self.noise_gen.get_state() if getattr(self, "mean_noise", False) else None,  # mean_noise の学習のノイズの乱数（resume で戻す）
             "rng": {
                 "python": random.getstate(),
                 "torch": torch.get_rng_state(),
@@ -428,6 +448,8 @@ class FidelityGANModel(BaseModel):
         torch.set_rng_state(rng["torch"].cpu())
         kind, keys, pos, has_gauss, cached = rng["numpy"]
         np.random.set_state((kind, keys.cpu().numpy().astype(np.uint32), pos, has_gauss, cached))
+        if getattr(self, "mean_noise", False) and state.get("noise_gen") is not None:
+            self.noise_gen.set_state(state["noise_gen"])
         self.resume_total_iters = state["total_iters"]
         print(f"[resume] {opt.resume_state}: epoch {state['epoch']} (done={state['epoch_done']}), total_iters {state['total_iters']}, lr {self.optimizers[0].param_groups[0]['lr']:.7f}")
 

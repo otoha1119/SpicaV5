@@ -35,7 +35,7 @@ RUN="$(basename "${RUN_DIR}")"
 say "Stage 1 の run: ${RUN_DIR}"
 
 # ---- 2. 推論（full、PCD512 全部） ----
-LAUNCH_INFO="$(cd "${ROOT}/stage1" && python -c "import sys, yaml; from util.run_paths import latest_launch; y = yaml.safe_load(open(latest_launch(sys.argv[1]), encoding='utf-8')); print(y['machine']['pcd_dir']); print(y['mode']['task'])" "${RUN_DIR}")"
+LAUNCH_INFO="$(cd "${ROOT}/stage1" && python -c "import sys, yaml; from util.run_paths import latest_launch; y = yaml.safe_load(open(latest_launch(sys.argv[1]), encoding='utf-8')); mn = y['mode'].get('gen_mode', 'direct') == 'mean_noise'; print(y['train']['data.dn_dir'] if mn else y['machine']['pcd_dir']); print(y['mode']['task'])" "${RUN_DIR}")"   # gen_mode: mean_noise は G の入力が BM3D(x) の前計算（data.dn_dir）
 PCD_DIR="$(echo "${LAUNCH_INFO}" | sed -n 1p)"; TASK="$(echo "${LAUNCH_INFO}" | sed -n 2p)"
 [ "${TASK}" = "degrade" ] || { echo "[chain] task: ${TASK} の run は対象外（degrade のみ）" >&2; exit 2; }
 WEIGHT_DIR="$(cd "${ROOT}/stage1" && python -c "import sys; from util.run_paths import ckpt_dir; print(ckpt_dir(sys.argv[1], sys.argv[2]))" "${RUN_DIR}" "${CHAIN_WEIGHT}")"

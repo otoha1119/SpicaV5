@@ -168,7 +168,12 @@ def main():
         device = "cpu" if machine["gpu_gen"] == 0 else "cuda"
         launch_path = latest_launch(run_dir)  # 最新の実効設定（F-10）
         current_train = validate("train", load_yaml(a.train), TRAIN)
-        g_argv, g_cfg = generator_argv(load_yaml(launch_path), current_train)
+        launch_y = load_yaml(launch_path)
+        g_argv, g_cfg = generator_argv(launch_y, current_train)
+        if launch_y.get("mode", {}).get("gen_mode", "direct") == "mean_noise":  # 入力は学習と同じ BM3D(x) の前計算でなければならない（Codex レビュー 3 の 2）
+            dn = launch_y.get("train", {}).get("data.dn_dir", "")
+            if not dn or Path(input_dir).resolve() != Path(dn).resolve():
+                raise ConfigError(f"この重みは gen_mode: mean_noise（入力 = BM3D(x)）です。--input_dir に学習と同じ data.dn_dir を渡すこと: launch は {dn!r}、指定は {str(input_dir)!r}")
         d_argv, d_cfg = display_argv(current_train, DISPLAY_TRAIN_KEYS)
     except ConfigError as e:
         print(f"[run_infer] 設定エラー: {e}", file=sys.stderr)

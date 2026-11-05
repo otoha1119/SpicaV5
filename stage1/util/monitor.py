@@ -144,7 +144,11 @@ class TrainMonitor:
             with torch.no_grad():
                 a = self.fixed["A"].to(model.device)
                 b = self.fixed["B"].to(model.device)
+                if hasattr(net, "noise_like"):  # mean_noise: 監視のノイズは固定の seed（学習の乱数を消費しない。毎回同じ並びで比べられる）
+                    net.seeds = list(range(9000, 9000 + a.shape[0]))
                 g = net(a).clone()  # compile 時の CUDA Graph 出力 buffer は次の呼び出しで上書きされるので clone（2026-11-02）
+                if hasattr(net, "noise_like"):
+                    net.seeds = None
             net.train(was_training)
             sets.append(("fixed", a, g, b))
         for tag, a, g, b in sets:
@@ -190,7 +194,15 @@ class TrainMonitor:
         net.eval()
         with torch.no_grad():
             a = full["A"].to(model.device)
-            g = torch.cat([net(a[i : i + 1]).clone() for i in range(a.shape[0])])  # 1 枚ずつ（512 なのでメモリを抑える）。clone は compile 時の CUDA Graph 出力の上書き対策（PC1 2026-11-02 で epoch 末に落ちた）
+            if hasattr(net, "noise_like"):  # mean_noise: スライスで決まる seed（推論と同じノイズ）。μ も別に書き出す（ノイズ前の解剖。Codex レビュー 3 の 7）
+                from models.eid_noise import slice_seed
+                seeds = [slice_seed(Path(pp).relative_to(o.dir_A)) for pp in full["paths"]]
+                mus = [net.net(a[i : i + 1]).clone() for i in range(a.shape[0])]
+                g = torch.cat([m + net.noise_like(m, seeds=[sd]) for m, sd in zip(mus, seeds)])
+                for pp, m in zip(full["paths"], mus):
+                    write_png(out_dir / f"{Path(pp).stem}_mu.png", denormalize(m[0, 0].float().cpu().numpy(), o.hu_offset, o.hu_min, o.hu_max))
+            else:
+                g = torch.cat([net(a[i : i + 1]).clone() for i in range(a.shape[0])])  # 1 枚ずつ（512 なのでメモリを抑える）。clone は compile 時の CUDA Graph 出力の上書き対策（PC1 2026-11-02 で epoch 末に落ちた）
         net.train(was_training)
         to_hu = lambda t: (t.detach().float().cpu() + 1.0) / 2.0 * (o.hu_max - o.hu_min) + o.hu_min
         A, G = to_hu(a), to_hu(g)
@@ -228,7 +240,7 @@ class TrainMonitor:
                 write_png(d / f"{ep}_panel.png", rgb_png(panel01))
             else:
                 write_png(preview_dir(self.run_dir, "random") / f"{ep}_{stem}.png", rgb_png(panel01))  # preview_random/epoch_NNN_<slice>.png（パネルだけ）
-        if self.eid_ref is not None:  # 恒等の確認: 代表 EID を G に通した G(EID) と差 G(EID) − EID（2026-11-02。identity のオン・オフに関係なく毎回）
+        if self.eid_ref is not None and not hasattr(net, "noise_like"):  # 恒等の確認（mean_noise では意味を持たないので出さない）: 代表 EID を G に通した G(EID) と差 G(EID) − EID（2026-11-02。identity のオン・オフに関係なく毎回）
             net.eval()
             with torch.no_grad():
                 b = self.eid_ref["B"].to(model.device)

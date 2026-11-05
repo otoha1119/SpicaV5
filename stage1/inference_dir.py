@@ -352,10 +352,21 @@ def main():
                 xs = [torch.from_numpy(x_np).unsqueeze(0).unsqueeze(0) for _, _, x_np, _ in items]
                 t = time.time()
                 with torch.inference_mode():
+                    if hasattr(net, "noise_like"):  # mean_noise: スライスごとに決まる seed のノイズ（同じスライスは何度推論しても同じ。Codex レビュー 3 の 3）
+                        from models.eid_noise import slice_seed
+                        seeds = [slice_seed(Path(p).relative_to(a.input_dir)) for p, _, _, _ in items]
                     if all(x.shape == xs[0].shape for x in xs):
+                        if hasattr(net, "noise_like"):
+                            net.seeds = seeds
                         outs_full = list(infer_full(net, torch.cat(xs).to(device)).split(1))  # まとめて 1 回（形が同じときだけ）
                     else:
-                        outs_full = [infer_full(net, x.to(device)) for x in xs]
+                        outs_full = []
+                        for i, x in enumerate(xs):
+                            if hasattr(net, "noise_like"):
+                                net.seeds = [seeds[i]]
+                            outs_full.append(infer_full(net, x.to(device)))
+                    if hasattr(net, "noise_like"):
+                        net.seeds = None
                 tm["full"] += time.time() - t
             outs_patch = None
             if "patch" in modes:

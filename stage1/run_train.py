@@ -249,7 +249,7 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, sr_yaml, overrides, n
         diff = {k: (sv.get(k), v) for k, v in cur.items() if sv.get(k) != v and k not in ("log.continue_train", "log.epoch_count")}
         if diff:
             print(f"[run_train] 注意: 今の {section} 設定は checkpoint の実効設定と異なる（checkpoint の値を使う。変えるなら --flag で上書き）: {diff}")
-    saved_residual, saved_task = mode["residual"], mode["task"]
+    saved_residual, saved_task, saved_gen = mode["residual"], mode["task"], mode.get("gen_mode", "direct")
     applied = apply_overrides(overrides, sections(train, mode, machine, sr))
     if sr is None:
         used = [k.flag for k in SR.values() if k.flag in applied]
@@ -257,6 +257,8 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, sr_yaml, overrides, n
             raise ConfigError(f"sr.yaml のフラグ {used} は task: sr の run にだけ使えます（この checkpoint は task: {saved_task}）")
     if any(f in applied for f in RESUME_ONLY_FLAGS):
         raise ConfigError(f"{' / '.join(RESUME_ONLY_FLAGS)} は再開の内部フラグです（run_train が決めます）")
+    if mode.get("gen_mode", "direct") != saved_gen:
+        raise ConfigError(f"再開時に gen_mode を変えることはできません（G の形と入力が変わる）: checkpoint は gen_mode={saved_gen}")
     if mode["residual"] != saved_residual:
         raise ConfigError(f"再開時に residual を変えることはできません（重みの意味が変わる）: checkpoint は residual={saved_residual}")
     if mode["task"] != saved_task:

@@ -82,16 +82,23 @@ class Validator:
         for p in self.pcd_paths:
             src = dn / Path(p).relative_to(o.dir_A) if dn is not None else p
             x = torch.from_numpy(normalize(read_stored(src), o.hu_offset, o.hu_min, o.hu_max))[None, None].to(model.device)
-            y = net(x).clone().float().cpu().numpy()[0, 0]  # clone: compile 時の CUDA Graph 出力の上書き対策
+            if hasattr(net, "noise_like"):  # mean_noise（Codex レビュー 3 の 4）: 伝達・コヒーレンスは μ、見た目の統計（local SD・NPS・縁）はノイズ付きの出力。ノイズはスライスで決まる seed
+                from models.eid_noise import slice_seed
+                mu_t = net.net(x).clone().float()
+                y = (mu_t + net.noise_like(mu_t, seeds=[slice_seed(Path(p).relative_to(o.dir_A))])).cpu().numpy()[0, 0]
+                y_tr = mu_t.cpu().numpy()[0, 0]
+            else:
+                y = net(x).clone().float().cpu().numpy()[0, 0]  # clone: compile 時の CUDA Graph 出力の上書き対策
+                y_tr = y
             xn = x.float().cpu().numpy()[0, 0]
             for ty in range(0, xn.shape[0] - 127, 128):  # 帯域の伝達・コヒーレンス用の 128 タイル（学習の patch と同じ大きさ）
                 for tx in range(0, xn.shape[1] - 127, 128):
-                    tiles_x.append(xn[ty:ty + 128, tx:tx + 128]); tiles_y.append(y[ty:ty + 128, tx:tx + 128])
+                    tiles_x.append(xn[ty:ty + 128, tx:tx + 128]); tiles_y.append(y_tr[ty:ty + 128, tx:tx + 128])
             hu = (y + 1.0) / 2.0 * (o.hu_max - o.hu_min) + o.hu_min
             rows.append(analyze_slice(hu, self.thr, rng))
         # EID 側: 実 EID を G に通したときの体内の差 RMS(G(y) − y)（恒等項の効き。identity のオン・オフどちらでも測る。score には入れない = オン・オフで比較できる）
         sq = []
-        for p in self.eid_paths[:32]:
+        for p in ([] if hasattr(net, "noise_like") else self.eid_paths[:32]):  # mean_noise では実 EID を G に通す恒等の診断は意味を持たない（入力は BM3D(PCD) だけ）
             hu_y = self._hu(p)
             yn = torch.from_numpy(normalize(read_stored(p), o.hu_offset, o.hu_min, o.hu_max))[None, None].to(model.device)
             gy = net(yn).clone().float().cpu().numpy()[0, 0]
