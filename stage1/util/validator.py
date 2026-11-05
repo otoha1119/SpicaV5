@@ -135,7 +135,8 @@ class Validator:
             self.tb.add_scalar(f"val/{k}_gen", gen[k]["median"], total_iters)
             self.tb.add_scalar(f"val/{k}_eid", self.ref[k]["median"], total_iters)
             self.tb.add_scalar(f"val/{k}_dist", dist[k], total_iters)
-        self.tb.add_scalar("val/ry_rms_HU", ry, total_iters)  # 実 EID の体内 RMS(G(y) − y)
+        if np.isfinite(ry):  # mean_noise では計算しない（NaN を書くと監視が崩壊と判断して止める。2026-11-05）
+            self.tb.add_scalar("val/ry_rms_HU", ry, total_iters)  # 実 EID の体内 RMS(G(y) − y)
         self.tb.add_scalar("val/score", score, total_iters)
         self.tb.add_scalar("val/best_score", self.best_score, total_iters)
         line = (f"val epoch {int(epoch)} | score {score:.3f}{' *best*' if is_best else ''} | ry_rms {ry:.1f} HU | "
