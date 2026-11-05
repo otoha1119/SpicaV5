@@ -359,3 +359,11 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 背景: best_e020（015、spectral fidelity）は研究者の目視で「縁も全体もぼけすぎ、GAN のテクスチャ」。実測も体内の伝達 a 0.573 / 0.397 / 0.027（目標 0.878 / 0.495 / 0.047）、縁の帯域 γ² 0.05（目標 0.13）、肺境界 ESF 4.81 px（ImageCAS 4.16–4.68、病院 EID 3.72–4.23）。L_⊥ は上限だけなので「消しすぎ」が無罰、score（6 指標）はこのぼけを見落として e020 を best に選んだ
 - `loss.spec_perp_two_sided`（`--spec_perp_two_sided`）: true で L_⊥ に下限 `relu(γ²_EID − δ − γ²)` を足す。false が従来（導入前の run も false）
 - `val.score_spec`（`--score_spec`）: true で score に `mean|a − a_target| / 0.05 + mean|γ² − γ²_EID| / 0.10`（spec_weights > 0 の帯域）を足す。TB `val/spec_a_dist` / `val/spec_g_dist`。false が従来
+
+## 2026-11-05 gen_mode: mean_noise（ブランチ 020-f_017-stage1_mean_noise、EXP-20261105-01）
+- 研究者の指示: PCD のノイズは消し、内腔のむら（大動脈・心房の中）は残し、EID のノイズを付ける。設計は docs/plans/20261105_stage1-gate-noise-loss.md（Codex レビュー 2 回）
+- `mode.yaml gen_mode: mean_noise`: G の入力は `train.yaml data.dn_dir`（BM3D(x) の前計算、dir_A と同じ並び。CTDataset が A を差し替え、validator も同じ）、出力 = μ_θ(s̃) + c(ξ)
+- c(ξ): `models/eid_noise.py`。実 EID（dir_B）の一様部 128 patch の 2D NPS から振幅フィルタを作り、spectral 損失と同じ測り方で帯域ごとに校正（学習開始時、`<run>/eid_noise_report.json`）。512² で一度に作って切り出す。`MeanNoiseG` が G を包み、フィルタは buffer（net_G.pth に入る、キーは `net.*` と `amp`）
+- 損失: fidelity / spectral（L_T・L_N 等）は μ（ノイズ前）に、D は出力に。identity / residual は不可（schema で止める）。compile は μ_θ だけ
+- 推論: `inference_dir.build_generator` が `amp` を見て自動で包む。入力は BM3D(x) のフォルダを渡す。patch モードは不可（継ぎ目）
+- 導入前の run は gen_mode direct、data.dn_dir ""（LEGACY）

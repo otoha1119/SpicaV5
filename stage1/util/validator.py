@@ -78,8 +78,10 @@ class Validator:
         was_training = net.training
         net.eval()  # 採点は BN の running 統計で（monitor と同じ）
         rows = []; tiles_x, tiles_y = [], []
+        dn = Path(o.dn_dir) if getattr(o, "dn_dir", None) else None  # gen_mode: mean_noise は G の入力が BM3D(x)（2026-11-05）
         for p in self.pcd_paths:
-            x = torch.from_numpy(normalize(read_stored(p), o.hu_offset, o.hu_min, o.hu_max))[None, None].to(model.device)
+            src = dn / Path(p).relative_to(o.dir_A) if dn is not None else p
+            x = torch.from_numpy(normalize(read_stored(src), o.hu_offset, o.hu_min, o.hu_max))[None, None].to(model.device)
             y = net(x).clone().float().cpu().numpy()[0, 0]  # clone: compile 時の CUDA Graph 出力の上書き対策
             xn = x.float().cpu().numpy()[0, 0]
             for ty in range(0, xn.shape[0] - 127, 128):  # 帯域の伝達・コヒーレンス用の 128 タイル（学習の patch と同じ大きさ）

@@ -120,6 +120,7 @@ class FidelityGANModel(BaseModel):
         parser.add_argument("--residual", action="store_true", help="G を residual 化: fake_B = real_A + F(real_A)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変（段階 5-1、2026-09-11）")
         parser.add_argument("--precision", type=str, default=None, help="fp32 | bf16（CUDA autocast。G / D の forward だけ。損失は FP32。stage1_v3 から移植、2026-11-02）")
         parser.add_argument("--fidelity", type=str, default=None, help="pixel | spectral（2026-11-04）")
+        parser.add_argument("--gen_mode", type=str, default="direct", help="direct（G(z) をそのまま）| mean_noise（G の入力は data.dn_dir の BM3D(x)、出力 = μ_θ + 実 EID の NPS の色付きノイズ。2026-11-05、EXP-20261105-01）")
         parser.add_argument("--identity", action="store_true", help="恒等項: 実 EID y も G に通し λ_id · mean((G(y) − y)²) を G の損失に足す（2026-11-02）")
         parser.add_argument("--compile", action="store_true", help="CUDA で G / D を torch.compile(mode='max-autotune')（CPU では無効）")
         # netG=wavelet_packet の構造（train.yaml network.packet_*）。他の netG では読まないが、既定値は無いので run_train.py が常に渡す
@@ -202,6 +203,15 @@ class FidelityGANModel(BaseModel):
         # G: A→B (論文 G: z → G(z))
         self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain, final_norm_act=opt.final_norm_act, residual=opt.residual,
                                       packet_ch=opt.packet_ch, packet_depth=opt.packet_depth, packet_n_conv=opt.packet_n_conv)
+        self.mean_noise = getattr(opt, "gen_mode", "direct") == "mean_noise"
+        if self.mean_noise:  # ỹ = μ_θ(s̃) + c(ξ)（models/eid_noise.py）。損失（fidelity / spectral）は μ に、D は ỹ に
+            from .eid_noise import MeanNoiseG, build_filter, save_report
+            self.netG = MeanNoiseG(self.netG).to(self.device)
+            if self.isTrain:  # 実 EID（B 側）の一様部の NPS から色付けフィルタを作る（resume では checkpoint の buffer で上書きされる）
+                amp, rep = build_filter(opt.dir_B, opt.hu_offset, opt.hu_min, opt.hu_max)
+                self.netG.amp.copy_(torch.from_numpy(amp).to(self.device))
+                save_report(self.save_dir, rep)
+                print(f"[mean_noise] EID ノイズのフィルタ: 一様 patch {rep['n_uniform_patches']} 個、校正後の帯域パワー比 {[round(r, 3) for r in rep['calibration'][-1]['ratio']]}、SD {rep['noise_sd_HU']:.1f} HU", flush=True)
         # 高速化（stage1_v3 / 008 と同じ、2026-11-02 移植）: bf16 autocast は G / D の forward だけ（損失・重み・optimizer は FP32、fgan_kl の exp も FP32）。
         # compile は nn.Module.compile（state_dict のキーを保つ）。compiled module の CUDA Graph は出力 buffer を再利用するので、保持する出力は _run_net で clone する
         self.use_bf16 = opt.precision == "bf16" and self.device.type == "cuda"
@@ -222,7 +232,7 @@ class FidelityGANModel(BaseModel):
             self.optimizers = [self.optimizer_G, self.optimizer_D]
             if self.compile_enabled:
                 _quiet_inductor_autotune_success_logs()
-                self.netG.compile(mode="max-autotune")
+                (self.netG.net if self.mean_noise else self.netG).compile(mode="max-autotune")  # mean_noise は μ_θ だけ（ノイズの生成は compile しない）
                 self.netD.compile(mode="max-autotune")
 
     def _autocast(self):
@@ -258,7 +268,10 @@ class FidelityGANModel(BaseModel):
     def forward(self):
         """fake_B = G(real_A)。論文 Fig. 3 の generator G の順伝播。--residual のときは G = z + F(z)（networks.ResidualGenerator）なので fake_B − real_A が F の生出力 R。
         identity のときは実 EID real_B も同じ forward で G に通す（連結して 1 回。BN の統計を PCD と EID で分けない。stage1_v3 と同じ）→ idt_B = G(real_B)。"""
-        if self.identity and self.isTrain:
+        if self.mean_noise:  # μ = μ_θ(s̃)、fake_B = μ + c(ξ)（real_A は data.dn_dir の BM3D(x)）
+            self.mu = self._run_net(self.netG.net, self.real_A)
+            self.fake_B = self.mu + self.netG.noise_like(self.mu)
+        elif self.identity and self.isTrain:
             n = self.real_A.shape[0]
             out = self._run_net(self.netG, torch.cat([self.real_A, self.real_B], dim=0))
             self.fake_B, self.idt_B = out[:n], out[n:]
@@ -312,15 +325,16 @@ class FidelityGANModel(BaseModel):
             self.loss_G_GAN = self.criterionGAN(v_fake, True)
         from .spectral_loss import gaussian_blur, spectral_losses
         sp = self.spec
+        out = self.mu if self.mean_noise else self.fake_B  # mean_noise: fidelity・伝達は μ（ノイズを足す前）に掛ける。ノイズは c(ξ) が実 EID の NPS で決まっている
         if self.fidelity == "spectral":  # 低域だけの 1 枚ずつの錨 + 帯域の伝達一致 + 情報の上限（2026-11-04）
-            self.loss_G_fid = torch.mean((gaussian_blur(self.fake_B, sp["lp_sigma"]) - gaussian_blur(self.real_A, sp["lp_sigma"])) ** 2)
-            l_t, l_perp, l_n, av, gv, pv = spectral_losses(self.real_A, self.fake_B, sp["edges"], sp["a"], sp["g2"], sp["w"], sp["delta"], sp["p"], sp["window"], sp["two_sided"])
+            self.loss_G_fid = torch.mean((gaussian_blur(out, sp["lp_sigma"]) - gaussian_blur(self.real_A, sp["lp_sigma"])) ** 2)
+            l_t, l_perp, l_n, av, gv, pv = spectral_losses(self.real_A, out, sp["edges"], sp["a"], sp["g2"], sp["w"], sp["delta"], sp["p"], sp["window"], sp["two_sided"])
             self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid + sp["lam_T"] * l_t + sp["lam_perp"] * l_perp + sp["lam_N"] * l_n
         else:
-            self.loss_G_fid = torch.mean((self.fake_B - self.real_A) ** 2)  # ‖G(z) − z‖² の画素平均
+            self.loss_G_fid = torch.mean((out - self.real_A) ** 2)  # ‖G(z) − z‖² の画素平均
             self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid
             with torch.no_grad():  # 監視用（pixel でも帯域の伝達とコヒーレンスを記録して、spectral の run と同じ物差しで比べる）
-                l_t, l_perp, l_n, av, gv, pv = spectral_losses(self.real_A, self.fake_B.detach(), sp["edges"], sp["a"], sp["g2"], sp["w"], sp["delta"], sp["p"], sp["window"], sp["two_sided"])
+                l_t, l_perp, l_n, av, gv, pv = spectral_losses(self.real_A, out.detach(), sp["edges"], sp["a"], sp["g2"], sp["w"], sp["delta"], sp["p"], sp["window"], sp["two_sided"])
         self.loss_G_T, self.loss_G_perp, self.loss_G_N = float(l_t.detach()), float(l_perp.detach()), float(l_n.detach())
         for i, (va, vg, vp) in enumerate(zip(av, gv, pv)):
             setattr(self, f"loss_spec_a{i + 1}", va); setattr(self, f"loss_spec_g{i + 1}", vg); setattr(self, f"loss_spec_p{i + 1}", vp)

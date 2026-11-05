@@ -357,6 +357,7 @@ class CTDataset(BaseDataset):
         parser.add_argument("--sampling", type=str, default=None, choices=["random", "paper", "aligned"], help="random=ケース1 完全ランダム | paper=論文の固定 40 patch/画像 | aligned=ケース2 (未実装)")
         parser.add_argument("--samples_per_epoch", type=int, default=None, help="sampling=random のときの 1 epoch のサンプル数")
         parser.add_argument("--patches_per_slice", type=int, default=None, help="sampling=random で 1 回読んだスライスから連続して切る patch 数（1 = 従来）")
+        parser.add_argument("--dn_dir", type=str, default=None, help="gen_mode: mean_noise のとき A 側を読む先（BM3D(x) の前計算、dir_A と同じ <症例>/<slice>.png）。空文字 = dir_A をそのまま読む")
         parser.add_argument("--use_eval_only_cases", action="store_true", help="configs/eval_only.yaml の評価専用症例も学習に使う（通常は除外。DataSet_new を学習に使う実験用）")
         parser.add_argument("--patch_size", type=int, default=None, help="patch の一辺。0 でフル画像 (テスト・推論用)")
         parser.add_argument("--patch_stride", type=int, default=None, help="patch 左上座標の刻み。1=任意位置、8=論文のグリッド")
@@ -434,6 +435,13 @@ class CTDataset(BaseDataset):
             if tuple(b_hw) != tuple(self.img_hw):
                 raise ValueError(f"A と B の画像サイズが違います（同解像度の G なので揃える）: A {self.img_hw} vs B {b_hw}（{self.idx_b.all_paths[0]}）")
 
+        # gen_mode: mean_noise（2026-11-05）: A 側は dn_dir の BM3D(x) を読む（列挙・症例分けは dir_A のまま、読む先だけ同じ相対パスで差し替え）
+        self.dn_dir = Path(opt.dn_dir) if getattr(opt, "dn_dir", None) else None
+        if self.dn_dir is not None:
+            missing = [p for p in self.idx_a.all_paths if not self._a(p).is_file()]
+            if missing:
+                raise RuntimeError(f"data.dn_dir に無い A のスライスが {len(missing)} 枚あります（例: {[str(self._a(p)) for p in missing[:3]]}）。dir_A と同じ並びの BM3D 前計算を指定すること")
+            print(f"[CTDataset] A 側は BM3D 前計算を読む: {self.dn_dir}（{self.idx_a.n_slices} 枚、全部あり）", flush=True)
         if self.full_image:
             self.sampler = None
         elif opt.sampling == "random":
@@ -495,6 +503,12 @@ class CTDataset(BaseDataset):
             return random.Random(self.opt.patch_seed * 1_000_003 + index)
         return random
 
+    def _a(self, path):
+        """A のスライスの読む先（dn_dir があれば同じ相対パスの BM3D(x)）。"""
+        if getattr(self, "dn_dir", None) is None:
+            return Path(path)
+        return self.dn_dir / Path(path).relative_to(self.opt.dir_A)
+
     # --- 切り出し ---
     def _patch(self, path, pos):
         img = _load_normalized(path, *self.hu)
@@ -506,11 +520,11 @@ class CTDataset(BaseDataset):
     def __getitem__(self, index):
         if self.full_image:
             path = self.idx_a.all_paths[index % self.idx_a.n_slices]
-            img = torch.from_numpy(_load_normalized(path, *self.hu)).unsqueeze(0)
+            img = torch.from_numpy(_load_normalized(str(self._a(path)), *self.hu)).unsqueeze(0)
             return {"A": img, "B": img, "A_paths": path, "B_paths": path}
         group = (index // self.opt.patches_per_slice) if (self.opt.serial_batches and self.opt.patches_per_slice > 1) else None  # 決定的モードだけ index でグループ化
         a_path, a_pos, b_path, b_pos = self.sampler.sample(self._rng(index), index, group)
-        return {"A": self._patch(a_path, a_pos), "B": self._patch(b_path, b_pos), "A_paths": a_path, "B_paths": b_path}
+        return {"A": self._patch(str(self._a(a_path)), a_pos), "B": self._patch(b_path, b_pos), "A_paths": a_path, "B_paths": b_path}
 
     def fixed_batch(self, n):
         """監視用の固定サンプル。patch_seed から決まる決定的な乱数で index 0..n-1 を引く（学習の乱数列は消費しない、resume 後も同じ）。
@@ -519,7 +533,7 @@ class CTDataset(BaseDataset):
             return None
         items = [self.sampler.sample(random.Random(self.opt.patch_seed * 1_000_003 + i), i, group=-1 - i) for i in range(n)]  # 固定サンプルは worker のカウンタを使わず i ごとに決定的（負のグループ番号で学習側と衝突させない）
         return {
-            "A": torch.stack([self._patch(a_path, a_pos) for a_path, a_pos, _, _ in items]),
+            "A": torch.stack([self._patch(str(self._a(a_path)), a_pos) for a_path, a_pos, _, _ in items]),
             "B": torch.stack([self._patch(b_path, b_pos) for _, _, b_path, b_pos in items]),
         }
 
@@ -541,7 +555,7 @@ class CTDataset(BaseDataset):
         randoms = rng.sample(pool, min(self.opt.n_full_random, len(pool)))
         paths = [str(fixed)] + randoms
         kinds = ["fixed"] + ["random"] * len(randoms)
-        return {"paths": paths, "kinds": kinds, "A": torch.stack([torch.from_numpy(_load_normalized(p, *self.hu)).unsqueeze(0) for p in paths])}
+        return {"paths": paths, "kinds": kinds, "A": torch.stack([torch.from_numpy(_load_normalized(str(self._a(p)), *self.hu)).unsqueeze(0) for p in paths])}
 
     def eid_reference(self):
         """パネルの右端に並べる EID の代表スライス（--eid_slice、dir_B からの相対パス。固定）。戻り値: {"path": str, "B": (1,1,H,W)}"""

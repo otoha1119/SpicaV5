@@ -11,3 +11,4 @@ identity: true          # 恒等項のオン・オフ（実 EID y を G に通�
 residual: false         # false: 論文どおり G(z) を直接出力（packet G でも final conv の出力がそのまま画像。2026-11-02 ユーザー決定、ブランチ 015）| true: G(z) = z + F(z)（F の生出力が R。段階 5-1、2026-09-11。bash start.sh --residual true）。resume で変更不可
 serial_batches: false   # true で sampler を index 決定的に（再現用）
 task: degrade           # degrade（論文どおり PCD512 → EID-like512。pcd_dir / eid_dir、分割なし）| sr（一発超解像 EID1024 → PCD-like1024。eid1024_dir / pcd1024_dir、configs/sr.yaml を読む。2026-10-12）。resume で変更不可
+gen_mode: direct        # direct（従来）| mean_noise（G の入力 = BM3D(x)、出力 = μ + 実 EID の NPS の色付きノイズ。train.yaml data.dn_dir が要る。2026-11-05）

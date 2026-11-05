@@ -130,6 +130,10 @@ def build_generator(a, device):
     state = torch.load(path, map_location="cpu", weights_only=True)
     if hasattr(state, "_metadata"):
         del state._metadata
+    if "amp" in state and any(k.startswith("net.") for k in state):  # gen_mode: mean_noise の重み（μ_θ + 実 EID の色付きノイズ、2026-11-05）。入力は BM3D(x) のフォルダを渡すこと
+        from models.eid_noise import MeanNoiseG
+        net = MeanNoiseG(net)
+        print("[infer] mean_noise の G: 出力 = μ_θ(入力) + 実 EID の NPS の色付きノイズ（入力は BM3D(x) の前計算を渡すこと。patch モード不可）", flush=True)
     net.load_state_dict(state)
     net.to(device).eval()
     return net, path
@@ -175,6 +179,8 @@ def infer_patch(net, x, patch, stride, window, batch_size):
     旧実装は 1 枚ずつ、patch ごとに 2 回の小さな GPU 演算（2,401 patch で約 5,000 回/枚）を 1 本の Python スレッドで発行していて、
     GPU も CPU も遊んだまま 0.5 s/枚かかっていた（PC3、patch.batch_size 256 でも変わらず）。
     index_add_ の重なりの加算順は CUDA では不定なので float の下位桁が変わりうる（uint16 化後に 1 違うことがある程度）。"""
+    if hasattr(net, "noise_like"):
+        raise ValueError("mean_noise の G は patch モードに使えません（patch ごとに独立なノイズが乗り継ぎ目が出る）。--mode full で")
     k, _, h, w = x.shape
     dev = x.device
     ys, xs = grid_positions(h, patch, stride), grid_positions(w, patch, stride)

@@ -68,6 +68,7 @@ TRAIN = {
     "data.samples_per_epoch": Key(int, "--samples_per_epoch", "sampling=random の 1 epoch のサンプル数。論文の patch 集合 24,000 に合わせる"),
     "data.patches_per_slice": Key(int, "--patches_per_slice", "sampling=random で 1 回読んだスライス（A / B それぞれ）から連続して切る patch 数。1 = patch ごとに別スライス（2026-10-12 以前）。大きいほど読み出し・デコードが 1/k（既定 8。PC1 の sr で大幅高速化、degrade も同じ。2026-10-12）。位置は patch ごとに独立"),
     "data.use_eval_only_cases": Key(bool, "--use_eval_only_cases", "true で configs/eval_only.yaml の評価専用症例も学習に使う（通常 false = 除外）。評価専用症例そのものを学習データにした実験（DataSet_new、2026-10-28）だけ true。--use_eval_only_cases で上書き"),
+    "data.dn_dir":          Key(str,   "--dn_dir",         "gen_mode: mean_noise のときの G の入力 = BM3D で PCD のノイズを除いた画像の前計算（stage1_v3 の dnfixed 出力の full/、dir_A と同じ <症例>/<slice>.png）。direct では空文字"),
     "data.hu_offset":       Key(int,   "--hu_offset",      "stored = HU + hu_offset（1400）"),
     # val（epoch ごとの自動採点と best_eNNN/ の自動更新。util/validator.py、2026-11-02）
     "val.n_pcd_slices":     Key(int,   "--val_pcd_slices", "採点用の固定 PCD スライス数（学習症例から乱択、G に通して EID-like にする）。0 で採点しない（task: sr では 0 にする）"),
@@ -104,6 +105,7 @@ MODE = {
     "netD":           Key(str,  "--netD",           "paper（論文 Fig.3、受容野 22）| wavelet_paper（固定 Haar 1 段 → [LL|LH,HL,HH] 4ch → paper D。2026-11-02）| wavelet_paper_hf（同上、高周波 3 帯だけ）| basic（70×70 PatchGAN）| n_layers | pixel"),
     "final_norm_act": Key(bool, "--final_norm_act", "G 最終 conv に bnorm+LReLU を付ける（確定: false。ablation 用）"),
     "fidelity":       Key(str,  "--fidelity",       "pixel（Park の ‖G(z) − z‖²、λ_fid）| spectral（低域 fidelity σ lp_fid_sigma + 帯域の伝達一致 L_T + 情報の上限 L_⊥。models/spectral_loss.py、2026-11-04）。resume で切り替え可"),
+    "gen_mode":       Key(str,  "--gen_mode",       "direct（G(z) をそのまま出力）| mean_noise（G の入力を data.dn_dir の BM3D(x) にし、出力 = μ_θ(s̃) + 実 EID の NPS を持つ色付きノイズ。fidelity / 伝達は μ に、D は出力に。identity は false。2026-11-05、EXP-20261105-01）。resume で変更不可"),
     "identity":       Key(bool, "--identity",       "true で恒等項を入れる: 実 EID y も G に通し（PCD と連結して 1 回の forward）、λ_id · mean((G(y) − y)²) を G の損失に足す（stage1_v3 の L_id の移植、2026-11-02）。false で従来どおり。resume で切り替え可（重みの形は不変）"),
     "residual":       Key(bool, "--residual",       "true で G を residual 化: G(z) = z + F(z)（F = 生の generator、その出力が R。networks.ResidualGenerator）。損失は不変。false = 論文どおり G(z) を直接出力（段階 5-1、2026-09-11）"),
     "serial_batches": Key(bool, "--serial_batches", "true で sampler を index 決定的に（再現用）"),
@@ -111,9 +113,9 @@ MODE = {
 }
 # 導入前の run の launch.yaml / state.pth に無い mode のキーと、そのとき仮定する値。無い = その機構なしで学習された重みなので、推論・crop・resume では「導入前の意味」で扱う
 # （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の値で補うと旧 run の重みの意味が変わる。2026-09-11 residual、2026-10-12 task）
-LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade", "identity": False, "fidelity": "pixel"}
+LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade", "identity": False, "fidelity": "pixel", "gen_mode": "direct"}
 # 導入前の run を resume するときだけ使う train の移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値。設定欠落の暗黙補完には使わない（2026-11-02）
-LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.lambda_id": 0.0, "loss.lambda_id_final": 0.0, "loss.lambda_id_decay_epochs": 0, "loss.lp_fid_sigma": 3.0, "loss.spec_edges": "0.03,0.08,0.15,0.25,0.71", "loss.spec_a_target": "0.875,0.487,0.047,0.0", "loss.spec_g2_target": "0.979,0.839,0.131,0.0", "loss.spec_weights": "0,1,1,1", "loss.spec_delta": 0.05, "loss.lambda_T": 0.0, "loss.lambda_perp": 0.0, "loss.spec_power_target": "0.5336,0.2477,0.0472,0.0048", "loss.lambda_N": 0.0, "loss.spec_window": "hann", "loss.spec_perp_two_sided": False, "val.score_spec": False}
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.lambda_id": 0.0, "loss.lambda_id_final": 0.0, "loss.lambda_id_decay_epochs": 0, "loss.lp_fid_sigma": 3.0, "loss.spec_edges": "0.03,0.08,0.15,0.25,0.71", "loss.spec_a_target": "0.875,0.487,0.047,0.0", "loss.spec_g2_target": "0.979,0.839,0.131,0.0", "loss.spec_weights": "0,1,1,1", "loss.spec_delta": 0.05, "loss.lambda_T": 0.0, "loss.lambda_perp": 0.0, "loss.spec_power_target": "0.5336,0.2477,0.0472,0.0048", "loss.lambda_N": 0.0, "loss.spec_window": "hann", "loss.spec_perp_two_sided": False, "val.score_spec": False, "data.dn_dir": ""}
 
 # ---------------------------------------------------------------------------
 # stage1/configs/sr.yaml — task: sr（一発超解像）のときだけ読む。degrade では一切読まない（既存の挙動は不変）
@@ -440,6 +442,12 @@ def check_values(train, mode, machine):
     if train["data.patches_per_slice"] < 1: P.append("data.patches_per_slice ≥ 1")
     if mode["sampling"] == "paper" and train["data.patches_per_slice"] != 1: P.append("sampling=paper のときは data.patches_per_slice を 1 にする（paper は固定集合を index で走査するので適用しない）")
     if train["data.hu_min"] >= train["data.hu_max"]: P.append("data.hu_min < data.hu_max")
+    if mode["gen_mode"] not in ("direct", "mean_noise"): P.append("gen_mode は direct | mean_noise")
+    if mode["gen_mode"] == "mean_noise":
+        if not train["data.dn_dir"]: P.append("gen_mode: mean_noise には data.dn_dir（BM3D の前計算）が要る")
+        if mode["identity"]: P.append("gen_mode: mean_noise では identity: false（実 EID にノイズを足し直す恒等項は意味を持たない。Codex レビュー 2）")
+        if mode["residual"]: P.append("gen_mode: mean_noise では residual: false")
+        if mode["task"] != "degrade": P.append("gen_mode: mean_noise は task: degrade のみ")
     if train["val.n_pcd_slices"] < 0 or train["val.n_eid_slices"] < 0: P.append("val.n_pcd_slices / n_eid_slices ≥ 0")
     if train["val.n_pcd_slices"] > 0 and train["val.n_eid_slices"] < 8: P.append("採点するなら val.n_eid_slices ≥ 8（四分位を取るため）")
     if mode["task"] == "sr" and train["val.n_pcd_slices"] > 0: P.append("task: sr では採点しない（val.n_pcd_slices を 0 にする。sr.yaml の train: で差し替え可）")
