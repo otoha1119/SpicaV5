@@ -93,10 +93,24 @@ def init_weights(net, init_type):
                 nn.init.zeros_(m.bias)
 
 
+class NoiseInput(nn.Module):
+    """入力に乱数の画像 1ch（N(0, std²)）を連結してから U-Net に通す（2026-11-05、ブランチ 019）。
+    入力の EID-like に無い帯域（大きな内腔の粒）は決定的な U-Net では作れないので、粒の源を与える。粒の強さは band 損失の帯域パワーで合わせる。
+    呼び出し側（学習・監視・val・推論）は 1ch のまま渡せばよい。乱数は毎回引き直す（推論ごとに粒の並びは変わる）"""
+
+    def __init__(self, net, std):
+        super().__init__()
+        self.net, self.std = net, float(std)
+
+    def forward(self, x):
+        return self.net(torch.cat([x, torch.randn_like(x) * self.std], 1))
+
+
 def build_net(mode, in_nc=1, out_nc=1):
-    """mode.yaml の実効値からネットワークを組む。"""
+    """mode.yaml の実効値からネットワークを組む。mode.noise_std > 0 なら乱数 1ch を足す NoiseInput で包む（state_dict のキーは net. 付き）。"""
     if mode["arch"] != "unet_ilumenate":
         raise ValueError(mode["arch"])
-    net = UNetILUMENATE(in_nc, out_nc, mode["base_ch"], mode["n_pool"], mode["final_act"])
+    noise = float(mode.get("noise_std", 0.0))  # 導入前の run（キー無し）は 0 = 乱数なし
+    net = UNetILUMENATE(in_nc + (1 if noise > 0 else 0), out_nc, mode["base_ch"], mode["n_pool"], mode["final_act"])
     init_weights(net, mode["init_type"])
-    return net
+    return NoiseInput(net, noise) if noise > 0 else net

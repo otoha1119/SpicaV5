@@ -9,3 +9,4 @@ loss: mse               # 論文 Eq. 1（MSE）| l1（ablation）。正規化空
 final_act: linear       # 最終層の活性化。論文の図には 1ch への最終層が描かれておらず記載も無い → 回帰なので「無し」と読んだ（読み。docs/plans §4.3）| tanh（出力を [−1,1] に縛る変種）
 residual: false         # true で 出力 = 入力 + net(入力)（変種。論文は false）
 serial_batches: false   # true で sampler を index 決定的に（再現用）
+noise_std: 0.0          # U-Net の入力に乱数 1ch（N(0, std²)）を連結する。0 = なし（論文どおり）。> 0 で質感の源（band 損失と組む。2026-11-05、ブランチ 019）

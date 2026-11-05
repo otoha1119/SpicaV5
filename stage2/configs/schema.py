@@ -94,6 +94,7 @@ MODE = {
     "final_act":      Key(str,  "--final_act",      "最終層の活性化: linear（論文、回帰）| tanh（出力を [−1,1] に縛る変種）"),
     "residual":       Key(bool, "--residual",       "true で 出力 = 入力 + net(入力)（変種。論文は false）"),
     "serial_batches": Key(bool, "--serial_batches", "true で sampler を index 決定的に（再現用）"),
+    "noise_std":      Key(float, "--noise_std",     "U-Net の入力に連結する乱数 1ch の標準偏差（正規化空間）。0 で乱数なし（論文・導入前の run）。> 0 で大きな内腔の粒の源にする（band 損失と組む。2026-11-05）"),
 }
 
 # ---------------------------------------------------------------------------
@@ -394,6 +395,7 @@ def check_train_values(train, mode, machine):
     if mode["n_pool"] < 1: P.append("n_pool ≥ 1")
     if mode["init_type"] not in INIT_TYPES: P.append(f"init_type は {INIT_TYPES}")
     if mode["loss"] not in LOSSES: P.append(f"loss は {LOSSES}")
+    if mode["noise_std"] < 0: P.append("noise_std ≥ 0（0 = 乱数なし）")
     if mode["loss"] == "band":
         if train["loss.band_lo_sigma"] <= 0: P.append("loss.band_lo_sigma > 0")
         if min(train["loss.lambda_lo"], train["loss.lambda_grad"], train["loss.lambda_nps"], train["loss.lambda_pix"]) < 0: P.append("loss.lambda_* ≥ 0")
