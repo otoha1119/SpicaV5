@@ -20,6 +20,7 @@ loss:                   # mode.yaml loss: band のときだけ使う（2026-11-0
   lambda_grad: 0.02       # 勾配 L1 は 0.0275 → ×0.02 ≈ 0.00055
   lambda_nps: 0.0001      # 帯域パワーの log 比の二乗和は 12.0 → ×1e-4 ≈ 0.0012（質感が合えば 0 に近づく）
   lambda_pix: 0.01        # 画素 L1 は 0.027 → ×0.01 ≈ 0.00027
+  band_per_patch: false   # true で帯域パワーを patch ごとに合わせる（バッチ合計だと縁を強めるだけで合い、一様な内腔が平らなまま。2026-11-05）
 data:
   patch_size: 128       # 論文 "Patches of size 128 × 128 pixels"（1024 グリッド上）。ユーザー決定 128
   samples_per_epoch: 64000   # 1 epoch のサンプル数（random sampling）。論文の 1 epoch ≈ 61,101 組に合わせる。batch 16 → 4,000 step/epoch

@@ -52,6 +52,7 @@ TRAIN = {
     "loss.lambda_lo":      Key(float, "--lambda_lo",      "band: 低域 MSE の重み"),
     "loss.lambda_grad":    Key(float, "--lambda_grad",    "band: Sobel 勾配の L1 の重み（縁の位置と強さ）"),
     "loss.lambda_nps":     Key(float, "--lambda_nps",     "band: 帯域パワーの log 比の二乗和の重み（高域の質感。1 枚ずつは当てない）"),
+    "loss.band_per_patch": Key(bool,  "--band_per_patch", "band: true で帯域パワーを patch ごとに同じ場所の教師と合わせる（一様な内腔にも質感を要求）。false はバッチ合計（導入時の形）"),
     "loss.lambda_pix":     Key(float, "--lambda_pix",     "band: 全帯域の画素 L1 の重み（弱い錨）"),
     # data
     "data.patch_size":        Key(int,  "--patch_size",        '論文 "Patches of size 128 × 128 pixels"（1024 グリッド上）。ユーザー決定 128。4 の倍数（pool 2 回）'),
@@ -344,7 +345,7 @@ def check_infer_values(infer, machine):
 
 PRECISIONS = ("fp32", "bf16")
 # 導入前の run を resume するときだけ使う移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値（2026-11-03）
-LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.band_lo_sigma": 1.5, "loss.band_edges": "0.02,0.06,0.12,0.25,0.71", "loss.lambda_lo": 1.0, "loss.lambda_grad": 0.02, "loss.lambda_nps": 0.0001, "loss.lambda_pix": 0.01}  # loss の 6 キーは導入前の run（mse / l1）では使わない
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.band_lo_sigma": 1.5, "loss.band_edges": "0.02,0.06,0.12,0.25,0.71", "loss.lambda_lo": 1.0, "loss.lambda_grad": 0.02, "loss.lambda_nps": 0.0001, "loss.lambda_pix": 0.01, "loss.band_per_patch": False}  # loss の 6 キーは導入前の run（mse / l1）では使わない
 
 
 def check_train_values(train, mode, machine):

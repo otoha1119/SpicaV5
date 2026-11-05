@@ -29,23 +29,30 @@ def sobel(x):
     return F.conv2d(xp, kx.view(1, 1, 3, 3)), F.conv2d(xp, kx.t().contiguous().view(1, 1, 3, 3))
 
 
-def band_power(z, edges, detrend_sigma=6.0):
-    """(N,1,H,W) → 帯域ごとのバッチ平均パワー（微分可能）。鏡の折り返しで窓なし。"""
+def band_power(z, edges, detrend_sigma=6.0, per_patch=False):
+    """(N,1,H,W) → 帯域ごとのパワー（微分可能）。鏡の折り返しで窓なし。per_patch なら (N, B)、でなければバッチ平均 (B,)。"""
     a = (z - gaussian_blur(z, detrend_sigma)).float()
     a = torch.cat([a, a.flip(-1)], -1); a = torch.cat([a, a.flip(-2)], -2)
     h, w = a.shape[-2:]
     fy = torch.fft.fftfreq(h, device=z.device).abs()[:, None]; fx = torch.fft.fftfreq(w, device=z.device).abs()[None, :]
     fr = torch.sqrt(fy ** 2 + fx ** 2)
-    s = (torch.fft.fft2(a).abs() ** 2).mean(0)[0]
+    s = torch.fft.fft2(a).abs() ** 2
+    if per_patch:
+        s = s[:, 0]
+        return torch.stack([s[:, (fr >= lo) & (fr < hi)].sum(-1) for lo, hi in zip(edges[:-1], edges[1:])], -1)
+    s = s.mean(0)[0]
     return torch.stack([s[(fr >= lo) & (fr < hi)].sum() for lo, hi in zip(edges[:-1], edges[1:])])
 
 
-def band_loss(pred, target, lo_sigma, edges, lam_lo, lam_grad, lam_nps, lam_pix):
+def band_loss(pred, target, lo_sigma, edges, lam_lo, lam_grad, lam_nps, lam_pix, per_patch=False):
     """合計と、項ごとの値（float）を返す。"""
     l_lo = torch.mean((gaussian_blur(pred, lo_sigma) - gaussian_blur(target, lo_sigma)) ** 2)
     px, py = sobel(pred); tx, ty = sobel(target)
     l_grad = (px - tx).abs().mean() + (py - ty).abs().mean()
-    l_nps = ((torch.log(band_power(pred, edges) + 1e-12) - torch.log(band_power(target, edges) + 1e-12)) ** 2).sum()
+    # per_patch: patch ごとに同じ場所の教師 patch と帯域パワーを合わせる（バッチ合計だと強い縁・空気の境界がパワーを占め、
+    # 縁を強めるだけで合ってしまい、一様な内腔の粒が平らなまま残った。2026-11-05）。画素の位置は合わせない
+    l_nps = ((torch.log(band_power(pred, edges, per_patch=per_patch) + 1e-12) - torch.log(band_power(target, edges, per_patch=per_patch) + 1e-12)) ** 2)
+    l_nps = l_nps.sum(-1).mean() if per_patch else l_nps.sum()
     l_pix = (pred - target).abs().mean()
     total = lam_lo * l_lo + lam_grad * l_grad + lam_nps * l_nps + lam_pix * l_pix
     return total, {"lo": float(l_lo.detach()), "grad": float(l_grad.detach()), "nps": float(l_nps.detach()), "pix": float(l_pix.detach())}
