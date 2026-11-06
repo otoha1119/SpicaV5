@@ -306,3 +306,11 @@ Park et al. 2019 (IEEE Access, DOI 10.1109/access.2019.2934178, arXiv:1903.06257
 - 原因（stage1_v3 で 2026-10-30 に HU の水準が epoch ごとに揺れた原因と同じ）: `backward_D` / `backward_G` が D を本物 40 枚・偽物 40 枚の**別 forward** で呼ぶ。D の BN（paper は BN 固定）はそのバッチの統計で正規化するので、偽物群に共通する差（高周波エネルギー、HU の水準）が正規化で消え、D は局所の模様でしか判定できない
 - 修正: `_D_real_fake(fake)` = 本物と偽物を batch 次元で連結して 1 回で D に通し、前半・後半に分ける（`stage1_v3/models/projection_model.py` の同名メソッドを移植）。D の backward と G の backward の両方で使う。損失の式・λ・batch 40・非ペアの性質は不変。optimizer から見た batch も不変（統計の範囲だけ 40 → 80）
 - 診断値: `loss_names` に `D_sep`（mean(v_fake) − mean(v_real)。0 = 見分けていない）と `D_acc`（patch 単位で v_fake > v_real の割合。0.5 = 当てずっぽう）。TB の diag/ に出る（`util/monitor.py DIAG_KEYS`）。resume は可（D の重みは同じ構造）
+
+### fidelity の目標をぼかした入力に `loss.fid_target_sigma`（2026-11-07、ブランチ 021-f_main-stage1_loss、EXP-20261107-02）
+
+- 経緯: 11-02〜11-05 の積み増し（wavelet packet G / wavelet D / 恒等項 / spectral fidelity / mean_noise）を研究者の判断で全部外し、main（Park 2019 + bf16 + D 連結バッチ）から 1 回に 1 変更だけ足す。調査 `docs/surveys/20261107_stage1-loss-resurvey.md` の推薦 1 位
+- 変更: G の損失の fidelity を ‖G(z) − z‖² → ‖G(z) − g_σ ∗ z‖²（g_σ = 固定の分離型 Gaussian、半径 ceil(3σ)、端は reflect、FP32、勾配なし）。GAN 項・λ 100・G / D・residual は不変。`fidelity_gan_model._gaussian_kernel` / `_fid_target`
+- σ = 1.43 px: 肺境界 ESF の実測（10–90 % 幅、ImageCAS 4.49 px、PCD 2.59 px）を Gaussian の σ（幅 / 2.563）にして √(1.75² − 1.01²)。実 EID の平均的なぼけを fidelity が罰さず、PCD の高域（ノイズ・鋭い縁）を残すことを全帯域で罰する。似た形の先行例: Bulat 2018 / DASR（arXiv:2004.01178）の劣化版入力を目標にする content 損失
+- 設定: `train.yaml loss.fid_target_sigma`（0 = 論文どおり）、schema TRAIN に 1 キー（≥ 0）、`LEGACY_TRAIN_DEFAULTS` に 0.0（導入前の run の resume は従来の ‖G(z) − z‖²）。G_fid の意味は σ > 0 のとき ‖G(z) − g_σ ∗ z‖²
+- 検証（scratch venv、CPU、合成データ 6 症例 × 3 枚）: 2 epoch 学習・val・best_e001 保存・launch.yaml に σ が残ることを確認

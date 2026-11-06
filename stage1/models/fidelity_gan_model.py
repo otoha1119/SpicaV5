@@ -96,6 +96,14 @@ def _to_tuple(x):
     return tuple(_to_tuple(v) for v in x) if isinstance(x, (list, tuple)) else x
 
 
+def _gaussian_kernel(sigma):
+    """1 次元 Gaussian（半径 ceil(3σ)、和 1）。fidelity の目標 g_σ ∗ z に使う。"""
+    r = max(1, int(np.ceil(3 * sigma)))
+    x = torch.arange(-r, r + 1, dtype=torch.float32)
+    k = torch.exp(-x ** 2 / (2 * sigma ** 2))
+    return k / k.sum()
+
+
 class FidelityGANModel(BaseModel):
     """一方向 GAN (A→B) + fidelity。cycle_gan_model.CycleGANModel から片側だけを残し、損失を Park 2019 に置き換えたもの。"""
 
@@ -138,6 +146,7 @@ class FidelityGANModel(BaseModel):
             parser.add_argument("--diff_range_hu", type=int, default=None, help="差分パネル（R）のカラー表示の ±範囲 HU（白 = 0、純青 = −、純赤 = +）")
             parser.add_argument("--preview_bits", type=int, default=None, help="output_images/preview_<slice>/ のビット深度（8 | 16）")
             parser.add_argument("--lambda_fid", type=float, default=None, help="weight λ of the fidelity term ‖G(z) − z‖² (paper: λ = 10)")
+            parser.add_argument("--fid_target_sigma", type=float, default=None, help="fidelity の目標を g_σ ∗ z（固定 Gaussian でぼかした入力）にする σ（画素）。0 = 論文どおり")
             parser.add_argument("--seed", type=int, default=None, help="乱数 seed（F-15。train.py が起動直後に python / numpy / torch に適用）")
             # 採点（util/validator.py）。値は configs/train.yaml の val: から
             parser.add_argument("--val_pcd_slices", type=int, default=None, help="採点用の固定 PCD スライス数（0 で採点しない）")
@@ -183,6 +192,7 @@ class FidelityGANModel(BaseModel):
             if self.gan_mode != "fgan_kl":
                 self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)  # ablation 用 (論文の式ではない)
             self.lambda_fid = opt.lambda_fid
+            self.fid_blur = _gaussian_kernel(opt.fid_target_sigma).to(self.device) if opt.fid_target_sigma > 0 else None
             # optimizer。scheduler は <BaseModel.setup> が opt.lr_policy から自動生成
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
@@ -255,6 +265,17 @@ class FidelityGANModel(BaseModel):
             self.loss_D = self.loss_D_real + self.loss_D_fake
         self.loss_D.backward()
 
+    def _fid_target(self, z):
+        """fidelity の目標 g_σ ∗ z（2026-11-07）。固定の分離型 Gaussian、端は reflect、FP32。勾配は通さない（z は入力）。
+        実 EID のぼけ（肺境界 ESF）を平均として許し、PCD の高域（ノイズ・鋭い縁）を残すことを罰する。σ = 0 なら使わない（論文どおり）。"""
+        k = self.fid_blur
+        r = k.shape[-1] // 2
+        with torch.no_grad():
+            y = torch.nn.functional.pad(z.float(), (r, r, 0, 0), mode="reflect")
+            y = torch.nn.functional.conv2d(y, k.view(1, 1, 1, -1))
+            y = torch.nn.functional.pad(y, (0, 0, r, r), mode="reflect")
+            return torch.nn.functional.conv2d(y, k.view(1, 1, -1, 1))
+
     def backward_G(self):
         """G の損失と勾配。論文 Eq.(12) の G:  min_G  E_z[log(1 − D(G(z)))] + λ E_z[‖G(z) − z‖²]"""
         _, v_fake = self._D_real_fake(self.fake_B)  # G の更新でも本物と連結（偽物だけだと BN が群の差を消し、G に「粒を減らせ」「水準を戻せ」の勾配が届かない）
@@ -262,7 +283,8 @@ class FidelityGANModel(BaseModel):
             self.loss_G_GAN = self._log1mD_from_v(v_fake).mean()   # E[log(1 − D(G(z)))] = E[v]
         else:  # ablation: 本家 GANLoss
             self.loss_G_GAN = self.criterionGAN(v_fake, True)
-        self.loss_G_fid = torch.mean((self.fake_B - self.real_A) ** 2)  # ‖G(z) − z‖² の画素平均
+        target = self.real_A if self.fid_blur is None else self._fid_target(self.real_A)
+        self.loss_G_fid = torch.mean((self.fake_B - target) ** 2)  # ‖G(z) − z‖²（fid_target_sigma > 0 なら ‖G(z) − g_σ ∗ z‖²）の画素平均
         self.loss_G = self.loss_G_GAN + self.lambda_fid * self.loss_G_fid
         self.loss_G.backward()
 

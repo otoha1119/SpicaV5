@@ -17,6 +17,7 @@ optim:
 
 loss:
   lambda_fid:  100.0      # 論文 "We empirically choose λ = 10"。範囲 [−1,1] では再整対象
+  fid_target_sigma: 1.43  # fidelity の目標 = g_σ ∗ z（固定 Gaussian でぼかした PCD）。0 で論文どおり ‖G(z) − z‖²。1.43 = 肺境界 ESF ImageCAS 4.49 / PCD 2.59 px から（2026-11-07）
 
 network:
   ngf: 32               # Fig. 3 G 最初の段

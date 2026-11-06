@@ -34,6 +34,7 @@ TRAIN = {
     "optim.compile":        Key(bool,  "--compile",        "CUDA で G / D を torch.compile(mode='max-autotune') する（CPU では無効）。初回 iteration と 512 フル推論の初回はコンパイルで遅い。Docker image に build-essential が要る（docker/Dockerfile.gen30/gen50）"),
     # loss
     "loss.lambda_fid":      Key(float, "--lambda_fid",     '論文 "We empirically choose λ = 10"。fidelity ‖G(z)−z‖² の重み'),
+    "loss.fid_target_sigma": Key(float, "--fid_target_sigma", "fidelity の目標を PCD そのものでなく固定 Gaussian でぼかした g_σ ∗ z にする σ（画素）。0 = 論文どおり ‖G(z) − z‖²。1.43 = 肺境界 ESF の実測（ImageCAS 4.49 px / PCD 2.59 px）から √(1.75² − 1.01²)（2026-11-07、EXP-20261107-02）"),
     # network
     "network.ngf":          Key(int,   "--ngf",            "G 最初の段のチャネル数。Fig. 3 = 32"),
     "network.ndf":          Key(int,   "--ndf",            "D 1 層目のチャネル数。Fig. 3 = 32"),
@@ -92,7 +93,7 @@ MODE = {
 # （「run 作成後に追加されたキーは今の yaml の値で補う」規則の例外。今の yaml の値で補うと旧 run の重みの意味が変わる。2026-09-11 residual、2026-10-12 task）
 LEGACY_MODE_DEFAULTS = {"residual": False, "task": "degrade"}
 # 導入前の run を resume するときだけ使う train の移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値。設定欠落の暗黙補完には使わない（2026-11-02）
-LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False}
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False, "loss.fid_target_sigma": 0.0}
 
 # ---------------------------------------------------------------------------
 # stage1/configs/sr.yaml — task: sr（一発超解像）のときだけ読む。degrade では一切読まない（既存の挙動は不変）
@@ -387,6 +388,7 @@ def check_values(train, mode, machine):
     if train["optim.seed"] < 0: P.append("optim.seed ≥ 0")
     if train["optim.precision"] not in PRECISIONS: P.append(f"optim.precision は {PRECISIONS}")
     if train["loss.lambda_fid"] < 0: P.append("loss.lambda_fid ≥ 0")
+    if train["loss.fid_target_sigma"] < 0: P.append("loss.fid_target_sigma ≥ 0")
     if train["network.ngf"] < 1 or train["network.ndf"] < 1: P.append("network.ngf / ndf ≥ 1")
     if train["network.norm"] not in NORMS: P.append(f"network.norm は {NORMS}")
     if train["network.init_type"] not in INIT_TYPES: P.append(f"network.init_type は {INIT_TYPES}")
