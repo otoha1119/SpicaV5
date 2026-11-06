@@ -198,7 +198,7 @@ def launch(cfg, command):
         shell = need(cfg, "launch_shell", str(PC_CONFIG))
         # 正常終了なら 30 秒後に閉じる（ウィンドウが溜まらないように）。失敗したときだけ残して原因を読めるようにする
         tail = (f"{line}; rc=$?; echo; echo '[watch] 終了コード' $rc; "
-                f"if [ $rc -ne 0 ]; then echo '[watch] 失敗したのでウィンドウを残します'; exec bash; fi; "
+                f"case $rc in 0|130|137|143) ;; *) echo '[watch] 失敗したのでウィンドウを残します'; exec bash;; esac; "   # 130/137/143 = 止められた（監視の stop・Ctrl-C）は閉じる
                 f"echo '[watch] 30 秒後に閉じます'; sleep 30")
         if shell == "wsl":
             wsl = shutil.which("wsl")
@@ -314,7 +314,7 @@ def open_job_window(cfg, rid, summary):
             f"tail -n +1 -F {log} 2>/dev/null & t=$!; "
             f"while [ ! -f {JOBS_DIR}/{rid}/_out/exit_code ] && [ -d {JOBS_DIR}/{rid} ]; do sleep 5; done; "
             f"rc=$(cat {JOBS_DIR}/{rid}/_out/exit_code 2>/dev/null); sleep 2; kill $t 2>/dev/null; echo; echo \"[watch] job 終了（終了コード ${{rc:-不明}}）\"; "
-            f"if [ -n \"$rc\" ] && [ \"$rc\" != 0 ]; then echo '[watch] 失敗したのでウィンドウを残します'; exec bash; fi; "
+            f"case \"$rc\" in ''|0|130|137|143) ;; *) echo '[watch] 失敗したのでウィンドウを残します'; exec bash;; esac; "
             f"echo '[watch] 30 秒後に閉じます'; sleep 30")
     try:
         subprocess.Popen([shutil.which("wsl"), "--cd", str(Path(cfg["repo_dir"])), "--", "bash", "-c", tail],
