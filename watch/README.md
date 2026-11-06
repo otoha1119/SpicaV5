@@ -4,7 +4,7 @@
 やり取りは Discord（otoham サーバーのカテゴリ `spica-watch`）に短く残す。2026-11-04 新設。
 
 ```
-学習 PC                                   origin（watch-data ブランチ）           Mac
+学習 PC                                   otoha1119/SpicaV5-watch-data（watch-data ブランチ）           Mac
 pc_agent.py loop ── status/<PC>/<run>.json ──▶                  ──▶ mac.py wait / sync（Claude）
   ・exporter.py をコンテナに流し込み TB scalar を要約                       判断 → 止める / work_dir で直して push
   ・NaN / Inf は即停止（autostop）                                      → mac.py request
@@ -14,7 +14,7 @@ Discord: #watch-log（やり取りの履歴・改良内容の md）、#watch-cal
 ```
 
 - コード: このディレクトリ（ブランチ `016-f_main-train_watch`）。学習ブランチとは独立に、別の checkout から動かす
-- データ: orphan ブランチ `watch-data`（コードは置かない。書き手ごとにディレクトリが分かれているので衝突しない）
+- データ: 別の private リポジトリ `otoha1119/SpicaV5-watch-data` のブランチ `watch-data`（2026-11-07 に SpicaV5 から移した。SpicaV5 の git グラフが自動 commit で見にくくなるため。コードは置かない。書き手ごとにディレクトリが分かれているので衝突しない）
 - 送るのは数値と Markdown だけ。**医用画像とその派生画像は送らない**
 - **job**（kind job、2026-11-04 追加）: 学習と並べて解析・推論を走らせる。pc_agent が依頼の commit（省略時は HEAD）を学習リポジトリ内の別 worktree `.watch_jobs/<id>/`（`.git/info/exclude` 済み）に展開し、添付スクリプトを `_job/` に置き、コンテナ内で `cd /workspace/.watch_jobs/<id> && <command>` を裏で実行（`$SPICA_JOB_OUT` = `_out/`）。終了で `_out/` のテキストだけを `results/<id>/` に push して応答を書く。画像などは PC の `data_dir/.local/jobs/<id>/` に残す。`_out/blobs/` のファイル（重みなど。画像・ボリュームの拡張子は拒否、95 MB まで）は使い捨てブランチ `watch-blob/<id>` に 1 commit で push し、Mac の `mac.py fetch-blobs <id> --to <dir>` が取り出してブランチを消す。Codex は通さない
 - **#watch-chat**（2026-11-04 追加）: 外出先から Discord でホストの Claude と会話する（Remote Control / 公式 channels は使わない）。`mac.py wait` は git の更新（status/ だけの更新を除く）に加え、#watch-chat に `call_user_id` 本人が書いた bot 以外のメッセージが来ても終わる。`mac.py chat-inbox` で読んで既読に（既読位置は data_dir/.local/chat.json）、`mac.py chat "..." [--file x.md]` で返事（.md / .txt だけ添付）。初回は `mac.py setup-chat`。bot の **Message Content Intent**（Developer Portal → Bot → Privileged Gateway Intents）を有効にしておくこと（無効だと本文が空で届き、chat-inbox がエラーで止まる）
@@ -27,7 +27,7 @@ Discord: #watch-log（やり取りの履歴・改良内容の md）、#watch-cal
    ```bash
    cd ~/Documents
    git clone -b 016-f_main-train_watch https://github.com/otoha1119/SpicaV5.git SpicaV5-watch
-   git clone -b watch-data --single-branch https://github.com/otoha1119/SpicaV5.git SpicaV5-watch-data
+   git clone -b watch-data https://github.com/otoha1119/SpicaV5-watch-data.git SpicaV5-watch-data
    ```
 3. `SpicaV5-watch/watch/pc_config.example.json` を `pc_config.json` にコピーして書き換える（`machine` / `repo_dir` = 学習に使う SpicaV5 の checkout / `data_dir` / `launch_shell`（`wsl` = ふだん VS Code のターミナルで `bash start.sh` を打つのと同じ WSL、`git_bash`）/ `git_bash`）
 4. Discord に直接書くなら（推奨）、Windows のユーザー環境変数 `DISCORD_BOT_TOKEN` に auto-study の bot トークンを入れる（Mac の `~/.config/autostudy/secrets.env` と同じ値）。
@@ -42,7 +42,7 @@ Discord: #watch-log（やり取りの履歴・改良内容の md）、#watch-cal
 
 ```bash
 git worktree add ../SpicaV5-watch -b 016-f_main-train_watch main      # コード
-git worktree add --orphan -b watch-data ../SpicaV5-watch-data          # データ
+git clone -b watch-data https://github.com/otoha1119/SpicaV5-watch-data.git ../SpicaV5-watch-data   # データ（別リポジトリ）
 cp watch/mac_config.example.json watch/mac_config.json
 python3 watch/mac.py setup            # Discord のカテゴリ・チャンネルを作り config.json に id を書く
 python3 watch/mac.py install-skill    # ~/.claude/skills/watch-training
