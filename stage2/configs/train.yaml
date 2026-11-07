@@ -27,6 +27,10 @@ data:
   val_cases: [PCD-017, PCD-018]          # epoch 末の指標だけに使う（学習には使わない）
   test_cases: [PCD-001, PCD-002, PCD-019, PCD-020]   # 最終評価用。学習・検証で一切読まない（ディスクに無くてもよい）。例外は log.full_slice の 1 枚（目視用。ユーザー決定 2026-09-09）
 
+aug:                      # 学習入力（EID-like1024 patch）だけの augmentation。教師・val・固定 patch・フル画像には掛けない（data/augment.py、2026-11-08 ブランチ 022）。両方 0.0 = main と同じ
+  blur_sigma_max: 0.0     # σ ~ U[0, 値] px の Gaussian ぼかし（1024 グリッド）。入力のぼけ量を族にする（機構分析 §5.4 D2、R-S26）。例 1.0
+  hf_phase_cutoff: 0.0    # この周波数 [cycles/px、1024 グリッド] 以上の位相を毎回乱数に（振幅 = ノイズ量は保つ）。教師の実現値の読み戻し（§5.4 D1）を断つ。512 換算は 2 倍。例 0.1（= 512 の 0.2）
+
 log:
   print_freq: 100                # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）
   image_freq: 500                # TensorBoard に学習中の 128 patch グリッドを出す間隔（step。batch 16 なら 1 epoch = 4,000 step → 8 回/epoch）。Stage 1 と同じ仕組み（2026-09-09）

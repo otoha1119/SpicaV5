@@ -57,6 +57,9 @@ TRAIN = {
     "data.train_cases":       Key(list, "--train_cases",       "学習に使う症例名のリスト（ユーザー決定 2026-09-08: PCD-001〜014）。eidlike1024_dir と pcd1024_dir の両方に存在すること"),
     "data.val_cases":         Key(list, "--val_cases",         "検証（epoch 末の指標）に使う症例名（PCD-015, 016）。学習には使わない。両方に存在すること"),
     "data.test_cases":        Key(list, "--test_cases",        "最終評価用に**最初から避けておく**症例名（PCD-017〜020）。学習・検証で一切読まない。ディスクに無くてもよい"),
+    # aug（学習入力 = EID-like1024 patch だけに掛ける。教師・val・固定 patch・フル画像には掛けない。data/augment.py。2026-11-08 ブランチ 022、機構分析 §7 (A′) と D2）
+    "aug.blur_sigma_max":     Key(float, "--aug_blur_sigma_max",  "入力 patch に σ ~ U[0, この値] px（1024 グリッド）の Gaussian ぼかしを毎回掛ける（入力のぼけ量を族にする = D2 対策）。0.0 で無し（main と同じ）"),
+    "aug.hf_phase_cutoff":    Key(float, "--aug_hf_phase_cutoff", "入力 patch のこの周波数 [cycles/px、1024 グリッド] 以上の成分の位相を毎回一様乱数にする（振幅スペクトル = ノイズ量は保ち、教師の実現値との位置の対応だけ壊す = D1 対策）。0.0 で無し。512 換算は 2 倍（例 0.075 → 512 グリッドの 0.15）"),
     # log
     "log.print_freq":              Key(int, "--print_freq",              "バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）"),
     "log.image_freq":              Key(int, "--image_freq",              "TensorBoard に学習中の 128 patch グリッド（images/current, images/fixed）を出す間隔（step）。Stage 1 と同じ仕組み（2026-09-09）"),
@@ -337,7 +340,8 @@ def check_infer_values(infer, machine):
 
 PRECISIONS = ("fp32", "bf16")
 # 導入前の run を resume するときだけ使う移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値（2026-11-03）
-LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False}
+LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False,
+                         "aug.blur_sigma_max": 0.0, "aug.hf_phase_cutoff": 0.0}   # 導入前の run（2026-11-08 以前）は augmentation なしで続ける
 
 
 def check_train_values(train, mode, machine):
@@ -357,6 +361,8 @@ def check_train_values(train, mode, machine):
     if train["data.patch_seed"] < 0: P.append("data.patch_seed ≥ 0")
     if train["data.patches_per_slice"] < 1: P.append("data.patches_per_slice ≥ 1")
     if train["data.hu_min"] >= train["data.hu_max"]: P.append("data.hu_min < data.hu_max")
+    if not (0.0 <= train["aug.blur_sigma_max"] <= 8.0): P.append("aug.blur_sigma_max は 0.0（無し）〜 8.0 px")
+    if not (0.0 <= train["aug.hf_phase_cutoff"] < 0.5): P.append("aug.hf_phase_cutoff は 0.0（無し）〜 0.5 cycles/px 未満（1024 グリッドの Nyquist）")
     for k in ("data.train_cases", "data.val_cases"):
         if not train[k]: P.append(f"{k} は 1 症例以上")
     lists = {k: train[k] for k in ("data.train_cases", "data.val_cases", "data.test_cases")}

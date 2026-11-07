@@ -25,6 +25,7 @@ import torch
 import yaml
 from torch.utils.data import Dataset
 
+from data.augment import augment_input, context_box
 from data.ct_io import INTERP_FLAGS, CaseIndex, list_case_names, load_normalized, normalize, read_stored, upsample
 
 MANIFEST = "manifest.yaml"  # bash start2.sh dataset が eidlike1024_dir に書く（補間の方式）
@@ -108,6 +109,9 @@ class PairDataset(Dataset):
         self.samples_per_epoch = train["data.samples_per_epoch"]
         self.patch_seed = train["data.patch_seed"]
         self.k = train["data.patches_per_slice"]  # 1 回読んだペアから連続して切る patch 数（Stage 1 の RandomSampler と同じ仕組み。2026-10-12）
+        # 学習入力だけの augmentation（data/augment.py、2026-11-08 ブランチ 022）。両方 0.0 なら main と同じ。val・固定 patch・フル画像には掛けない（運用の実 EID と同じ「素の入力」で測る）
+        self.aug_blur, self.aug_hf = float(train["aug.blur_sigma_max"]), float(train["aug.hf_phase_cutoff"])
+        self.aug_on = self.aug_blur > 0.0 or self.aug_hf > 0.0
         self._left, self._cur, self._cur_group = 0, None, None  # worker ごとの状態（DataLoader の worker は fork されるので各 worker で独立に進む）
         self.serial = mode["serial_batches"]
         self.val_max = train["log.val_max_slices_per_case"]
@@ -185,7 +189,18 @@ class PairDataset(Dataset):
             in_path, pcd_path = self._cur
         h, w = self.img_hw
         pos = (rng.randrange(h - self.patch + 1), rng.randrange(w - self.patch + 1))
-        return {"input": self._patch(in_path, pos), "target": self._patch(pcd_path, pos), "path": pcd_path, "y": pos[0], "x": pos[1]}
+        inp = self._patch_aug(in_path, pos, rng) if self.aug_on else self._patch(in_path, pos)
+        return {"input": inp, "target": self._patch(pcd_path, pos), "path": pcd_path, "y": pos[0], "x": pos[1]}
+
+    def _patch_aug(self, path, pos, rng):
+        """学習入力の patch を、2 倍の文脈に augmentation（ぼかし → 高域の位相ランダム化）を掛けてから切り出す。教師（target）は _patch のまま同じ位置。"""
+        img = load_normalized(path, *self.hu)
+        if img.shape != self.img_hw:
+            raise ValueError(f"画像サイズが揃っていません: {img.shape} != {self.img_hw}: {path}")
+        y0, x0, size, dy, dx = context_box(pos, self.patch, self.img_hw)
+        ctx = np.ascontiguousarray(img[y0 : y0 + size, x0 : x0 + size])
+        ctx = augment_input(ctx, np.random.default_rng(rng.getrandbits(64)), self.aug_blur, self.aug_hf)
+        return torch.from_numpy(np.ascontiguousarray(ctx[dy : dy + self.patch, dx : dx + self.patch])).unsqueeze(0)
 
     def __len__(self):
         return self.samples_per_epoch
