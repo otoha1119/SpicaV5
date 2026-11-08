@@ -63,6 +63,7 @@ class TrainMonitor:
 
     def _reset_window(self):
         self.win = {"loss": 0.0, "mse": 0.0, "ssim": 0.0, "t_comp": 0.0, "t_data": 0.0, "n": 0}
+        self.extra = {}   # 出力側 D などの追加の損失（キーごとの和。TB には adv/<key> で出す。2026-11-09）
 
     def epoch_bar(self, loader, epoch, total_epochs):
         self.bar = tqdm(loader, total=len(loader), unit="img", unit_scale=self.batch_size, dynamic_ncols=True, mininterval=0.5,
@@ -78,6 +79,9 @@ class TrainMonitor:
         w = self.win
         w["loss"] += losses["loss"]; w["mse"] += losses["mse"]; w["ssim"] += losses["ssim"]
         w["t_comp"] += t_comp; w["t_data"] += t_data; w["n"] += 1
+        for k, v in losses.items():
+            if k not in ("loss", "mse", "ssim"):
+                self.extra[k] = self.extra.get(k, 0.0) + float(v)
 
     def step(self, epoch, total_iters):
         """print_freq step ごと: 直近区間の平均を TB / バー / loss_log に出す。"""
@@ -91,6 +95,11 @@ class TrainMonitor:
         self.tb.add_scalar("train/ssim", sim, total_iters)
         self.tb.add_scalar("time/sec_per_step", w["t_comp"] / n, total_iters)
         self.tb.add_scalar("time/data_sec_per_step", w["t_data"] / n, total_iters)
+        extra = {k: v / n for k, v in self.extra.items()}
+        for k, v in extra.items():
+            self.tb.add_scalar(f"adv/{k}", v, total_iters)
+        if extra:
+            self.log.write("    adv: " + " ".join(f"{k} {v:.5f}" for k, v in extra.items()) + "\n")
         if self.bar is not None:
             self.bar.set_postfix_str(f"{self.loss_name} {loss:.5f} | rmse {rmse:.4f} | ssim {sim:.4f} | data {w['t_data'] / n * 1000:.0f} ms", refresh=False)
         self.log.write(f"(epoch: {epoch}, iters: {total_iters}, time: {w['t_comp'] / n:.3f}, data: {w['t_data'] / n:.3f}) {self.loss_name}: {loss:.6f} rmse: {rmse:.5f} ssim: {sim:.4f}\n")

@@ -85,6 +85,15 @@ class RegressionModel:
         self.loss_name = mode["loss"]
         self.lr, self.betas = train["optim.lr"], (train["optim.beta1"], train["optim.beta2"])
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=self.lr, betas=self.betas)
+        # 出力側 D（2026-11-09 ブランチ 023。研究者の設計 2026-10-12「MSE + 実 EID 出力側 D」）。adv.lambda 0 なら無し（main と同じ）
+        self.adv_lambda, self.adv_source = float(train["adv.lambda"]), train["adv.source"]
+        self.net_D, self.optimizer_D, self.gan = None, None, None
+        if self.adv_lambda > 0.0:
+            from models.discriminator import GANLoss, PatchDiscriminator
+            self.net_D = PatchDiscriminator(1, int(train["adv.ndf"])).to(device)
+            self.gan = GANLoss(train["adv.gan_mode"])
+            self.gan_thresh = 0.5 if train["adv.gan_mode"] == "lsgan" else 0.0   # D_acc の判定の境界（lsgan は 0.5、vanilla は logit 0）
+            self.optimizer_D = torch.optim.Adam(self.net_D.parameters(), lr=float(train["adv.lr_d"]), betas=(0.5, 0.999))
         self.cur_epoch, self.epoch_done, self.total_iters = 0, False, 0
         self.best = None  # best/ の記録 {"metric", "value", "epoch", "total_iters"}。state.pth に入れて resume で引き継ぐ（無ければ None = 次の val が必ず best）
         self.last = None  # 直近の学習バッチ (input, pred, target)。optimize が更新
@@ -107,13 +116,47 @@ class RegressionModel:
         if self.compile_enabled:
             y = y.clone()
         pred = x + y if self.residual else y
-        loss = self.criterion(pred, t)
+        loss_mse = self.criterion(pred, t)
+        loss, extra, fake = loss_mse, {}, None
+        if self.net_D is not None:
+            # 偽物 = 実 EID patch の出力（adv.source eid）、ペアの出力（eidlike）、両方（both）。本物 = 教師 PCD1024 patch
+            fakes = []
+            if self.adv_source in ("eid", "both"):
+                e = batch["eid"].to(self.device, non_blocking=True)
+                with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16):
+                    ye = self.net_train(e)
+                ye = ye.float()
+                if self.compile_enabled:
+                    ye = ye.clone()
+                fakes.append(e + ye if self.residual else ye)
+            if self.adv_source in ("eidlike", "both"):
+                fakes.append(pred)
+            fake = torch.cat(fakes, 0)
+            self.net_D.train()
+            with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16):
+                d_fake_g = self.net_D(fake)
+            loss_adv = self.gan(d_fake_g.float(), True)
+            loss = loss_mse + self.adv_lambda * loss_adv
+            extra["adv_G"] = float(loss_adv.detach())
+            extra["mse_only"] = float(loss_mse.detach())
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
         self.optimizer.step()
+        if self.net_D is not None:
+            self.optimizer_D.zero_grad(set_to_none=True)
+            with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16):
+                d_real = self.net_D(t)
+                d_fake = self.net_D(fake.detach())
+            d_real, d_fake = d_real.float(), d_fake.float()
+            loss_D = 0.5 * (self.gan(d_real, True) + self.gan(d_fake, False))
+            loss_D.backward()
+            self.optimizer_D.step()
+            with torch.no_grad():
+                extra["D_loss"] = float(loss_D); extra["D_real"] = float(d_real.mean()); extra["D_fake"] = float(d_fake.mean())
+                extra["D_acc"] = 0.5 * (float((d_real > self.gan_thresh).float().mean()) + float((d_fake <= self.gan_thresh).float().mean()))
         with torch.no_grad():
             self.last = (x.detach(), pred.detach(), t.detach())  # TB の images/current 用（util/monitor.py log_images）
-            return {"loss": float(loss), "mse": mse(pred, t), "ssim": ssim(pred, t)}
+            return {"loss": float(loss), "mse": mse(pred, t), "ssim": ssim(pred, t), **extra}
 
     @torch.no_grad()
     def predict(self, x):
@@ -158,6 +201,7 @@ class RegressionModel:
             "epoch": int(self.cur_epoch), "epoch_done": bool(self.epoch_done), "total_iters": int(self.total_iters),
             "best": self.best,  # best/ の記録（自動更新の比較対象。resume で引き継ぐ）
             "optimizer": self.optimizer.state_dict(),
+            "optimizer_D": self.optimizer_D.state_dict() if self.optimizer_D is not None else None,   # 出力側 D（無ければ None）
             "lr": float(self.optimizer.param_groups[0]["lr"]),
             "config": self.config,  # 保存時の実効設定（train / mode / machine、平坦キー）。resume はこれを基準にする（失敗した起動の launch を引き継がない。レビュー指摘 2026-09-09）
             "rng": {
@@ -175,11 +219,19 @@ class RegressionModel:
             shutil.rmtree(tmp)
         tmp.mkdir(parents=True)
         torch.save(self.net.state_dict(), tmp / "net_G.pth")
+        if self.net_D is not None:
+            torch.save(self.net_D.state_dict(), tmp / "net_D.pth")
         torch.save(self._state(), tmp / "state.pth")
         _swap_dirs(tmp, final, old)  # Windows バインドマウントの PermissionError 対策
 
     def load_weights(self, weight_dir):
         self.net.load_state_dict(torch.load(Path(weight_dir) / "net_G.pth", map_location=self.device, weights_only=True))
+        if self.net_D is not None:
+            p = Path(weight_dir) / "net_D.pth"
+            if p.is_file():
+                self.net_D.load_state_dict(torch.load(p, map_location=self.device, weights_only=True))
+            else:
+                print(f"[resume] 注意: {p} が無いので D は初期化のまま（D なしの run から D 付きで再開）")
 
     def resume(self, state_path):
         """state.pth から optimizer / RNG / 進捗を復元する。state は CPU に読む（RNG 用 Tensor を CUDA に載せない）。lr / betas は今の実効値を再適用。"""
@@ -188,6 +240,8 @@ class RegressionModel:
         for g in self.optimizer.param_groups:
             g["lr"] = self.lr
             g["betas"] = self.betas
+        if self.optimizer_D is not None and state.get("optimizer_D"):
+            self.optimizer_D.load_state_dict(state["optimizer_D"])
         rng = state["rng"]
         random.setstate(_to_tuple(rng["python"]))
         torch.set_rng_state(rng["torch"].cpu())

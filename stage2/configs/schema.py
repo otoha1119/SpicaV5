@@ -60,6 +60,12 @@ TRAIN = {
     # aug（学習入力 = EID-like1024 patch だけに掛ける。教師・val・固定 patch・フル画像には掛けない。data/augment.py。2026-11-08 ブランチ 022、機構分析 §7 (A′) と D2）
     "aug.blur_sigma_max":     Key(float, "--aug_blur_sigma_max",  "入力 patch に σ ~ U[0, この値] px（1024 グリッド）の Gaussian ぼかしを毎回掛ける（入力のぼけ量を族にする = D2 対策）。0.0 で無し（main と同じ）"),
     "aug.hf_phase_cutoff":    Key(float, "--aug_hf_phase_cutoff", "入力 patch のこの周波数 [cycles/px、1024 グリッド] 以上の成分の位相を毎回一様乱数にする（振幅スペクトル = ノイズ量は保ち、教師の実現値との位置の対応だけ壊す = D1 対策）。0.0 で無し。512 換算は 2 倍（例 0.075 → 512 グリッドの 0.15）"),
+    # adv（出力側 D。2026-11-09 ブランチ 023。研究者の決定 2026-10-12「Stage 2 は MSE + 実 EID 出力側 D」。models/discriminator.py）
+    "adv.lambda":   Key(float, "--adv_lambda",   "GAN 項の重み（損失 = MSE + λ · L_adv）。0.0 で D なし（main と同じ）。正規化空間の MSE は 1e-3 前後、L_adv は 0.1〜1 なので 1e-3 前後から"),
+    "adv.source":   Key(str,   "--adv_source",   "D に偽物として見せる出力: eid（実 EID1024 = machines.yaml eid1024_dir の patch を G に通した出力。研究者の設計）| eidlike（ペアの EID-like の出力 = SRGAN 型）| both。本物は常にペアの教師 PCD1024 patch"),
+    "adv.gan_mode": Key(str,   "--adv_gan_mode", "GAN 損失: lsgan | vanilla"),
+    "adv.lr_d":     Key(float, "--adv_lr_d",     "D の Adam lr（β 0.5, 0.999）。G と同じ step 数で 1 回ずつ更新"),
+    "adv.ndf":      Key(int,   "--adv_ndf",      "D（70×70 PatchGAN）の基本チャネル数。junyanz 既定 64"),
     # log
     "log.print_freq":              Key(int, "--print_freq",              "バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）"),
     "log.image_freq":              Key(int, "--image_freq",              "TensorBoard に学習中の 128 patch グリッド（images/current, images/fixed）を出す間隔（step）。Stage 1 と同じ仕組み（2026-09-09）"),
@@ -341,7 +347,10 @@ def check_infer_values(infer, machine):
 PRECISIONS = ("fp32", "bf16")
 # 導入前の run を resume するときだけ使う移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値（2026-11-03）
 LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False,
-                         "aug.blur_sigma_max": 0.0, "aug.hf_phase_cutoff": 0.0}   # 導入前の run（2026-11-08 以前）は augmentation なしで続ける
+                         "aug.blur_sigma_max": 0.0, "aug.hf_phase_cutoff": 0.0,   # 導入前の run（2026-11-08 以前）は augmentation なしで続ける
+                         "adv.lambda": 0.0, "adv.source": "eid", "adv.gan_mode": "lsgan", "adv.lr_d": 1e-4, "adv.ndf": 64}   # 導入前の run（2026-11-09 以前）は D なしで続ける
+ADV_SOURCES = ("eid", "eidlike", "both")
+ADV_GAN_MODES = ("lsgan", "vanilla")
 
 
 def check_train_values(train, mode, machine):
@@ -363,6 +372,11 @@ def check_train_values(train, mode, machine):
     if train["data.hu_min"] >= train["data.hu_max"]: P.append("data.hu_min < data.hu_max")
     if not (0.0 <= train["aug.blur_sigma_max"] <= 8.0): P.append("aug.blur_sigma_max は 0.0（無し）〜 8.0 px")
     if not (0.0 <= train["aug.hf_phase_cutoff"] < 0.5): P.append("aug.hf_phase_cutoff は 0.0（無し）〜 0.5 cycles/px 未満（1024 グリッドの Nyquist）")
+    if train["adv.lambda"] < 0.0: P.append("adv.lambda ≥ 0.0（0.0 で D なし）")
+    if train["adv.source"] not in ADV_SOURCES: P.append(f"adv.source は {ADV_SOURCES}")
+    if train["adv.gan_mode"] not in ADV_GAN_MODES: P.append(f"adv.gan_mode は {ADV_GAN_MODES}")
+    if train["adv.lr_d"] <= 0.0: P.append("adv.lr_d は正")
+    if train["adv.ndf"] < 1: P.append("adv.ndf ≥ 1")
     for k in ("data.train_cases", "data.val_cases"):
         if not train[k]: P.append(f"{k} は 1 症例以上")
     lists = {k: train[k] for k in ("data.train_cases", "data.val_cases", "data.test_cases")}

@@ -112,6 +112,10 @@ class PairDataset(Dataset):
         # 学習入力だけの augmentation（data/augment.py、2026-11-08 ブランチ 022）。両方 0.0 なら main と同じ。val・固定 patch・フル画像には掛けない（運用の実 EID と同じ「素の入力」で測る）
         self.aug_blur, self.aug_hf = float(train["aug.blur_sigma_max"]), float(train["aug.hf_phase_cutoff"])
         self.aug_on = self.aug_blur > 0.0 or self.aug_hf > 0.0
+        # 出力側 D 用の実 EID1024 patch（2026-11-09 ブランチ 023）。adv.lambda > 0 かつ source が eid | both のとき、machines.yaml の eid1024_dir（EID_v5 を ×2 補間したもの、評価専用は除外）から
+        # ペアとは独立にランダムな症例・スライス・位置の patch を 1 枚ずつ付ける（batch の "eid"）。ラベルは無い（D の偽物側の入力にするだけ）
+        self.eid_on = float(train["adv.lambda"]) > 0.0 and train["adv.source"] in ("eid", "both")
+        self.eid_paths, self._eid_cur, self._eid_left = [], None, 0
         self._left, self._cur, self._cur_group = 0, None, None  # worker ごとの状態（DataLoader の worker は fork されるので各 worker で独立に進む）
         self.serial = mode["serial_batches"]
         self.val_max = train["log.val_max_slices_per_case"]
@@ -137,6 +141,19 @@ class PairDataset(Dataset):
         self.pairs_train, info_train = build_pairs(idx_in, idx_pcd, self.train_cases)
         self.pairs_val, info_val = build_pairs(idx_in, idx_pcd, self.val_cases)
         self.info = {"train": info_train, "val": info_val}
+        if self.eid_on:
+            root = Path(machine["eid1024_dir"])
+            if not root.is_dir():
+                raise RuntimeError(f"adv.source={train['adv.source']} には machines.yaml の eid1024_dir（実 EID の 1024）が要ります: {root} がありません")
+            idx_eid = CaseIndex(str(root), cache_dir, drop_eval_only=True)
+            self.eid_paths = [p for c in sorted(idx_eid.slices) for p in idx_eid.slices[c]]
+            if not self.eid_paths:
+                raise RuntimeError(f"eid1024_dir に PNG がありません: {root}")
+            e = read_stored(self.eid_paths[0])
+            if tuple(e.shape) != tuple(read_stored(self.pairs_train[self.train_cases[0]][0][0]).shape):
+                raise ValueError(f"eid1024_dir の画像サイズ {e.shape} が学習画像と合いません: {self.eid_paths[0]}")
+            self.info["eid"] = {"cases": len(idx_eid.slices), "slices": len(self.eid_paths), "dir": str(root)}
+            print(f"[PairDataset] 出力側 D 用の実 EID1024: {len(idx_eid.slices)} cases / {len(self.eid_paths)} slices（{root}）")
 
         first_in, first_pcd = self.pairs_train[self.train_cases[0]][0]
         a, b = read_stored(first_in), read_stored(first_pcd)
@@ -190,7 +207,24 @@ class PairDataset(Dataset):
         h, w = self.img_hw
         pos = (rng.randrange(h - self.patch + 1), rng.randrange(w - self.patch + 1))
         inp = self._patch_aug(in_path, pos, rng) if self.aug_on else self._patch(in_path, pos)
-        return {"input": inp, "target": self._patch(pcd_path, pos), "path": pcd_path, "y": pos[0], "x": pos[1]}
+        out = {"input": inp, "target": self._patch(pcd_path, pos), "path": pcd_path, "y": pos[0], "x": pos[1]}
+        if self.eid_on:
+            out["eid"] = self._eid_patch(rng)
+        return out
+
+    def _eid_patch(self, rng, min_norm=-0.745, tries=4):
+        """実 EID1024 のランダム patch（出力側 D の偽物側の入力）。ペアと同じ k 回ごとにスライスを引き直す。
+        平均が min_norm（≈ −700 HU）以下の空気ばかりの patch は tries 回まで引き直す（D に空気だけを見せない）。"""
+        if self._eid_left <= 0:
+            self._eid_cur, self._eid_left = rng.choice(self.eid_paths), self.k
+        self._eid_left -= 1
+        h, w = self.img_hw
+        for _ in range(tries):
+            pos = (rng.randrange(h - self.patch + 1), rng.randrange(w - self.patch + 1))
+            p = self._patch(self._eid_cur, pos)
+            if float(p.mean()) > min_norm:
+                break
+        return p
 
     def _patch_aug(self, path, pos, rng):
         """学習入力の patch を、2 倍の文脈に augmentation（ぼかし → 高域の位相ランダム化）を掛けてから切り出す。教師（target）は _patch のまま同じ位置。"""

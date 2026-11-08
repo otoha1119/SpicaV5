@@ -31,8 +31,15 @@ aug:                      # 学習入力（EID-like1024 patch）だけの augmen
   blur_sigma_max: 0.0     # σ ~ U[0, 値] px の Gaussian ぼかし（1024 グリッド）。入力のぼけ量を族にする（機構分析 §5.4 D2、R-S26）。例 1.0
   hf_phase_cutoff: 0.0    # この周波数 [cycles/px、1024 グリッド] 以上の位相を毎回乱数に（振幅 = ノイズ量は保つ）。教師の実現値の読み戻し（§5.4 D1）を断つ。512 換算は 2 倍。例 0.1（= 512 の 0.2）
 
+adv:                      # 出力側 D（2026-11-09 ブランチ 023、研究者の設計 2026-10-12「MSE + 実 EID 出力側 D」）。lambda 0.0 = D なし（main と同じ）
+  lambda: 0.0             # 損失 = MSE + λ · L_adv。例 0.001（MSE ≈ 5e-4、L_adv ≈ 0.25 の桁合わせ）
+  source: eid             # 偽物 = eid（実 EID1024 = eid1024_dir の patch を G に通した出力）| eidlike（ペアの出力、SRGAN 型）| both。本物 = ペアの教師 PCD1024 patch
+  gan_mode: lsgan         # lsgan | vanilla
+  lr_d: 0.0001            # D の Adam lr（β 0.5, 0.999）
+  ndf: 64                 # 70×70 PatchGAN の基本チャネル数
+
 log:
-  print_freq: 100                # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）
+  print_freq: 100               # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）
   image_freq: 500                # TensorBoard に学習中の 128 patch グリッドを出す間隔（step。batch 16 なら 1 epoch = 4,000 step → 8 回/epoch）。Stage 1 と同じ仕組み（2026-09-09）
   n_images: 2                    # そのグリッドの行数（ユーザー指示 2026-09-09: 4 → 2）。images/current = いまのバッチ先頭 n 枚、images/fixed = log.full_slice から切った固定 n 枚（patch_seed で位置を決める）。列は [EID-like(入力) | PCD-like(出力) | PCD1024(教師)]
   save_epoch_freq: 1             # 毎 epoch 重み（weights/epoch_NNN/）を保存し、後から最良 epoch を選べるようにする（net_G.pth 約 39 MB + state.pth 約 78 MB → 100 epoch で約 12 GB）
