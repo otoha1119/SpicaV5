@@ -89,6 +89,12 @@ class RegressionModel:
         # 出力側 D（2026-11-09 ブランチ 023。研究者の設計 2026-10-12「MSE + 実 EID 出力側 D」）。adv.lambda 0 なら無し（main と同じ）
         self.adv_lambda, self.adv_source = float(train["adv.lambda"]), train["adv.source"]
         self.net_D, self.optimizer_D, self.gan = None, None, None
+        # 実 EID の経路の低周波整合項（2026-11-09 ブランチ 025）: 出力側 D が構造・HU 水準まで動かす（構造の崩れ・偽の血管・内腔 HU のずれ）のを抑える
+        self.lf_lambda, self.lf_sigma, self.lf_kernel = float(train["adv.lf_lambda"]), float(train["adv.lf_sigma"]), None
+        if self.lf_lambda > 0.0:
+            r = int(3 * self.lf_sigma + 0.5); ax = torch.arange(-r, r + 1, dtype=torch.float32)
+            k1 = torch.exp(-ax ** 2 / (2 * self.lf_sigma ** 2)); k1 = k1 / k1.sum()
+            self.lf_kernel = (k1[:, None] * k1[None, :])[None, None].to(device)   # (1,1,K,K)、1ch 用
         if self.adv_lambda > 0.0:
             from models.discriminator import GANLoss, PatchDiscriminator
             self.net_D = PatchDiscriminator(1, int(train["adv.ndf"])).to(device)
@@ -117,6 +123,10 @@ class RegressionModel:
     def net_eval(self):
         """val / 監視 / 推論に使う G。EMA があれば EMA、無ければ学習中の重み。"""
         return self.net_ema if self.net_ema is not None else self.net
+
+    def _lowpass(self, x):
+        k = self.lf_kernel; r = k.shape[-1] // 2
+        return torch.nn.functional.conv2d(torch.nn.functional.pad(x, (r, r, r, r), mode="reflect"), k)
 
     @torch.no_grad()
     def _ema_update(self):
@@ -150,7 +160,11 @@ class RegressionModel:
                 ye = ye.float()
                 if self.compile_enabled:
                     ye = ye.clone()
-                fakes.append(e + ye if self.residual else ye)
+                fe = e + ye if self.residual else ye
+                fakes.append(fe)
+                if self.lf_kernel is not None:   # 低周波整合: g_σ ∗ S2(e) ≈ g_σ ∗ e（GAN 項を足した後に加える）
+                    loss_lf = self.criterion(self._lowpass(fe), self._lowpass(e))
+                    extra["lf"] = float(loss_lf.detach())
             if self.adv_source in ("eidlike", "both"):
                 fakes.append(pred)
             fake = torch.cat(fakes, 0)
@@ -159,6 +173,8 @@ class RegressionModel:
                 d_fake_g = self.net_D(fake)
             loss_adv = self.gan(d_fake_g.float(), True)
             loss = loss_mse + self.adv_lambda * loss_adv
+            if "lf" in extra:
+                loss = loss + self.lf_lambda * loss_lf
             extra["adv_G"] = float(loss_adv.detach())
             extra["mse_only"] = float(loss_mse.detach())
         self.optimizer.zero_grad(set_to_none=True)

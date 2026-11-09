@@ -37,6 +37,8 @@ adv:                      # 出力側 D（2026-11-09 ブランチ 023、研究�
   gan_mode: lsgan         # lsgan | vanilla
   lr_d: 0.0001            # D の Adam lr（β 0.5, 0.999）
   ndf: 64                 # 70×70 PatchGAN の基本チャネル数
+  lf_lambda: 0.0          # 実 EID の経路の低周波整合項 λ_lf · ‖g_σ ∗ S2(e) − g_σ ∗ e‖²（2026-11-09 ブランチ 025。D が構造・HU 水準を動かすのを抑え、テクスチャだけを変えさせる）。0.0 で無し。正規化空間の MSE（例 1.0 = ペアの MSE と同じ重み）
+  lf_sigma: 4.0           # その Gaussian の σ（1024 の画素）
 
 ema:                      # G の重みの指数移動平均（2026-11-09 ブランチ 024。GAN 項で epoch ごとに出力が振れる対策。学習は変えず、評価・保存に平均した重みを使う）
   decay: 0.0              # 0.0 = 無し。例 0.999（直近 ≈ 1,000 step の平均、1 epoch は 4,000 step）。val / best / net_G.pth は EMA、学習中の重みは net_G_raw.pth に別保存
