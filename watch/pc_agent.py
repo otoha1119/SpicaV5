@@ -28,6 +28,9 @@ from common import (HERE, DataRepo, WatchError, discord_post, discord_token, git
 
 PC_CONFIG = HERE / "pc_config.json"
 REQUEST_POLL_S = 60   # 依頼の確認間隔（git の pull だけなので軽い）。数値の書き出しは pc_config の interval_s ごと
+FAIL_WINDOW_KEEP_S = 1800   # 失敗した起動 / job の表示ウィンドウを残す時間（原因を読む猶予）。過ぎたら閉じる（研究者の指示 2026-11-09: 仕事が終われば必ず閉じる）
+WINDOW_AUDIT_S = 1800       # pc_agent が自分の開いたウィンドウを監査する間隔。何もしていない残骸（子プロセス無し）を閉じる
+WINDOW_MARK = "SPICA_WATCH_WIN=1"   # pc_agent が開いた bash の環境変数の印（監査はこの印のある bash だけを対象にする。研究者の端末は触らない）
 KEYS = ["machine", "repo_dir", "data_dir", "container", "interval_s", "active_min", "codex_cmd", "codex_timeout_s",
         "discord", "launch_shell", "git_bash"]
 RESULT_RE = re.compile(r"^RESULT:\s*(ok|failed|needs_user)\s*$", re.M)
@@ -198,13 +201,13 @@ def launch(cfg, command):
         shell = need(cfg, "launch_shell", str(PC_CONFIG))
         # 正常終了なら 30 秒後に閉じる（ウィンドウが溜まらないように）。失敗したときだけ残して原因を読めるようにする
         tail = (f"{line}; rc=$?; echo; echo '[watch] 終了コード' $rc; "
-                f"case $rc in 0|130|137|143) ;; *) echo '[watch] 失敗したのでウィンドウを残します'; exec bash;; esac; "   # 130/137/143 = 止められた（監視の stop・Ctrl-C）は閉じる
+                f"case $rc in 0|130|137|143) ;; *) echo '[watch] 失敗したので {FAIL_WINDOW_KEEP_S // 60} 分だけウィンドウを残します'; sleep {FAIL_WINDOW_KEEP_S};; esac; "   # 130/137/143 = 止められた（監視の stop・Ctrl-C）は閉じる
                 f"echo '[watch] 30 秒後に閉じます'; sleep 30")
         if shell == "wsl":
             wsl = shutil.which("wsl")
             if wsl is None:
                 raise WatchError("wsl.exe が PATH にありません（launch_shell: wsl）")
-            subprocess.Popen([wsl, "--cd", str(repo), "--", "bash", "-c", tail], creationflags=subprocess.CREATE_NEW_CONSOLE)
+            subprocess.Popen([wsl, "--cd", str(repo), "--", "env", WINDOW_MARK, "bash", "-c", tail], creationflags=subprocess.CREATE_NEW_CONSOLE)
         elif shell == "git_bash":
             gb = Path(need(cfg, "git_bash", str(PC_CONFIG)))
             if not gb.is_file():
@@ -314,10 +317,10 @@ def open_job_window(cfg, rid, summary):
             f"tail -n +1 -F {log} 2>/dev/null & t=$!; "
             f"while [ ! -f {JOBS_DIR}/{rid}/_out/exit_code ] && [ -d {JOBS_DIR}/{rid} ]; do sleep 5; done; "
             f"rc=$(cat {JOBS_DIR}/{rid}/_out/exit_code 2>/dev/null); sleep 2; kill $t 2>/dev/null; echo; echo \"[watch] job 終了（終了コード ${{rc:-不明}}）\"; "
-            f"case \"$rc\" in ''|0|130|137|143) ;; *) echo '[watch] 失敗したのでウィンドウを残します'; exec bash;; esac; "
+            f"case \"$rc\" in ''|0|130|137|143) ;; *) echo '[watch] 失敗したので {FAIL_WINDOW_KEEP_S // 60} 分だけウィンドウを残します（ログは {log}）'; sleep {FAIL_WINDOW_KEEP_S};; esac; "
             f"echo '[watch] 30 秒後に閉じます'; sleep 30")
     try:
-        subprocess.Popen([shutil.which("wsl"), "--cd", str(Path(cfg["repo_dir"])), "--", "bash", "-c", tail],
+        subprocess.Popen([shutil.which("wsl"), "--cd", str(Path(cfg["repo_dir"])), "--", "env", WINDOW_MARK, "bash", "-c", tail],
                          creationflags=subprocess.CREATE_NEW_CONSOLE)
     except OSError as e:
         print(f"[watch] job のログ表示ウィンドウを開けませんでした（job は続行）: {e}", flush=True)
@@ -490,14 +493,67 @@ def hard_stops(repo, cfg, data):
         repo.write_state("hard_stopped", done)
 
 
+
+# ---------------------------------------------------------------- ウィンドウの監査・自己再読み込み
+
+AUDIT_SNIPPET = r"""
+k=0; n=0
+for p in $(pgrep -x bash); do
+  tr '\0' '\n' < /proc/$p/environ 2>/dev/null | grep -qx 'SPICA_WATCH_WIN=1' || continue
+  n=$((n+1))
+  [ -z "$(pgrep -P $p)" ] || continue
+  echo "close idle window bash pid=$p etimes=$(ps -o etimes= -p $p | tr -d ' ')"
+  kill -HUP $p 2>/dev/null && k=$((k+1))
+done
+echo "marked=$n closed=$k"
+"""
+
+
+def audit_windows(cfg):
+    """pc_agent が開いた表示ウィンドウ（印 SPICA_WATCH_WIN=1 の bash）のうち、子プロセスを持たない = 何もしていない残骸を閉じる。
+    Windows + launch_shell wsl のときだけ。研究者の端末（印なし）は触らない。研究者の指示 2026-11-09「たまに監査して使ってないなら消す」。"""
+    if platform.system() != "Windows" or cfg.get("launch_shell") != "wsl" or shutil.which("wsl") is None:
+        return
+    try:
+        p = subprocess.run([shutil.which("wsl"), "--", "bash", "-c", AUDIT_SNIPPET], capture_output=True, text=True, timeout=60)
+        out = (p.stdout or "").strip()
+        if out and not out.endswith("closed=0"):
+            print(f"[watch] ウィンドウの監査:\n{out}", flush=True)
+    except (subprocess.SubprocessError, OSError) as e:
+        print(f"[watch] ウィンドウの監査に失敗（続行）: {e}", flush=True)
+
+
+def self_reload_if_updated(started_mtime):
+    """watch/pc_agent.py が更新されていたら、文法を確かめてから自分を同じ引数で再実行する（研究者が agent を立ち上げ直さなくてよいように）。
+    job の状態は data リポジトリの state に入っているので失われない。"""
+    me = Path(__file__).resolve()
+    try:
+        mtime = me.stat().st_mtime
+    except OSError:
+        return
+    if mtime == started_mtime:
+        return
+    import py_compile
+    try:
+        py_compile.compile(str(me), doraise=True)
+    except py_compile.PyCompileError as e:
+        print(f"[watch] pc_agent.py が更新されたが文法エラーなので再読み込みしない: {e}", flush=True)
+        return
+    print(f"[watch] pc_agent.py が更新されたので再読み込みします（{now_iso()}）", flush=True)
+    sys.stdout.flush()
+    os.execv(sys.executable, [sys.executable, str(me)] + sys.argv[1:])
+
 def loop(cfg):
     repo = DataRepo(cfg["data_dir"], need(shared_config(), "data_branch", "watch/config.json"))
     if cfg["discord"]:
         discord_token()   # 投稿する設定ならトークンが無いと始めない
     print(f"[watch] {cfg['machine']} のエージェントを開始（依頼の確認 {REQUEST_POLL_S} 秒ごと、数値の送信 {cfg['interval_s']} 秒ごと）", flush=True)
     last_export = 0.0
+    last_audit = time.time()
+    started_mtime = Path(__file__).resolve().stat().st_mtime
     while True:
         try:
+            self_reload_if_updated(started_mtime)
             repo.pull()
             if time.time() - last_export >= cfg["interval_s"]:
                 last_export = time.time()   # 書き出しが失敗しても毎分やり直さない
@@ -509,6 +565,9 @@ def loop(cfg):
                 repo.commit_push(f"watch: {cfg['machine']} autostop")
             handle_requests(repo, cfg)
             check_jobs(repo, cfg)
+            if time.time() - last_audit >= WINDOW_AUDIT_S:
+                last_audit = time.time()
+                audit_windows(cfg)
         except Exception:
             print(f"[watch] {now_iso()} ループでエラー（続行）:\n{traceback.format_exc()}", flush=True)
         time.sleep(REQUEST_POLL_S)
