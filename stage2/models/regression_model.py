@@ -6,6 +6,7 @@
   checkpoint: 重みディレクトリ（util/run_paths.py）に net_G.pth と state.pth（optimizer / RNG / epoch / total_iters / **保存時の実効設定 config**）を**原子的に**保存
               （<dir>.tmp に書く → 既存 <dir> を .old に → .tmp を <dir> に → .old を消す。Stage 1 の save_networks と同じ手順）
   resume    : state.pth から optimizer と RNG（python / torch / numpy）を復元し、lr / betas は今の実効値を再適用（上書きが最優先）
+  adv       : 出力側 D（adv.*）。実 EID の経路の整合は lf（σ1）/ lf2（σ2）/ grad（平滑化勾配差）、D には d_highpass_sigma で高周波だけ、本物は real_source、正規化は d_norm（2026-11-09 ブランチ 023〜026）
 """
 
 import copy
@@ -90,14 +91,18 @@ class RegressionModel:
         self.adv_lambda, self.adv_source = float(train["adv.lambda"]), train["adv.source"]
         self.net_D, self.optimizer_D, self.gan = None, None, None
         # 実 EID の経路の低周波整合項（2026-11-09 ブランチ 025）: 出力側 D が構造・HU 水準まで動かす（構造の崩れ・偽の血管・内腔 HU のずれ）のを抑える
-        self.lf_lambda, self.lf_sigma, self.lf_kernel = float(train["adv.lf_lambda"]), float(train["adv.lf_sigma"]), None
-        if self.lf_lambda > 0.0:
-            r = int(3 * self.lf_sigma + 0.5); ax = torch.arange(-r, r + 1, dtype=torch.float32)
-            k1 = torch.exp(-ax ** 2 / (2 * self.lf_sigma ** 2)); k1 = k1 / k1.sum()
-            self.lf_kernel = (k1[:, None] * k1[None, :])[None, None].to(device)   # (1,1,K,K)、1ch 用
+        self.lf_lambda, self.lf_sigma = float(train["adv.lf_lambda"]), float(train["adv.lf_sigma"])
+        self.lf_kernel = self._gauss_kernel(self.lf_sigma) if self.lf_lambda > 0.0 else None
+        # 構造保存（2026-11-09 ブランチ 026、docs/decisions/20261109_stage2-structure-preserving-D.md）。Gaussian は σ ごとに固定カーネル（_gauss_kernel）
+        self.lf2_lambda = float(train["adv.lf2_lambda"])                      # 低周波整合の尺度 2（粗い帯域）
+        self.lf2_kernel = self._gauss_kernel(float(train["adv.lf2_sigma"])) if self.lf2_lambda > 0.0 else None
+        self.grad_lambda = float(train["adv.grad_lambda"])                    # 平滑化勾配差（中尺度の縁）
+        self.grad_kernel = self._gauss_kernel(float(train["adv.grad_sigma"])) if self.grad_lambda > 0.0 else None
+        self.d_hp_kernel = self._gauss_kernel(float(train["adv.d_highpass_sigma"])) if float(train["adv.d_highpass_sigma"]) > 0.0 else None   # D に見せる高周波 x − g_σ ∗ x
+        self.real_source, self.d_norm = train["adv.real_source"], train["adv.d_norm"]
         if self.adv_lambda > 0.0:
             from models.discriminator import GANLoss, PatchDiscriminator
-            self.net_D = PatchDiscriminator(1, int(train["adv.ndf"])).to(device)
+            self.net_D = PatchDiscriminator(1, int(train["adv.ndf"]), norm=self.d_norm).to(device)
             self.gan = GANLoss(train["adv.gan_mode"])
             self.gan_thresh = 0.5 if train["adv.gan_mode"] == "lsgan" else 0.0   # D_acc の判定の境界（lsgan は 0.5、vanilla は logit 0）
             self.optimizer_D = torch.optim.Adam(self.net_D.parameters(), lr=float(train["adv.lr_d"]), betas=(0.5, 0.999))
@@ -124,9 +129,26 @@ class RegressionModel:
         """val / 監視 / 推論に使う G。EMA があれば EMA、無ければ学習中の重み。"""
         return self.net_ema if self.net_ema is not None else self.net
 
-    def _lowpass(self, x):
-        k = self.lf_kernel; r = k.shape[-1] // 2
+    def _gauss_kernel(self, sigma):
+        """σ 画素の固定 Gaussian カーネル (1,1,K,K)（1ch 用、K = 2·⌈3σ⌉ + 1、和 1）。"""
+        r = int(3 * sigma + 0.5); ax = torch.arange(-r, r + 1, dtype=torch.float32)
+        k1 = torch.exp(-ax ** 2 / (2 * sigma ** 2)); k1 = k1 / k1.sum()
+        return (k1[:, None] * k1[None, :])[None, None].to(self.device)
+
+    def _lowpass(self, x, k=None):
+        """g_σ ∗ x（reflect pad、同じ大きさ）。k 省略時は尺度 1（lf_kernel）。"""
+        k = self.lf_kernel if k is None else k; r = k.shape[-1] // 2
         return torch.nn.functional.conv2d(torch.nn.functional.pad(x, (r, r, r, r), mode="reflect"), k)
+
+    def _smooth_grad(self, x, k):
+        """∇(g_σ ∗ x): 平滑化してから x / y 方向の 1 次差分（右・下を reflect pad して同じ大きさ）。戻り値 (N,2,H,W)。"""
+        s = self._lowpass(x, k)
+        sp = torch.nn.functional.pad(s, (0, 1, 0, 1), mode="reflect")
+        return torch.cat([sp[..., :-1, 1:] - s, sp[..., 1:, :-1] - s], 1)
+
+    def _d_input(self, x):
+        """D に見せる画像: adv.d_highpass_sigma > 0 なら高周波 x − g_σ ∗ x（本物・偽物とも同じ処理）、0 ならそのまま。"""
+        return x if self.d_hp_kernel is None else x - self._lowpass(x, self.d_hp_kernel)
 
     @torch.no_grad()
     def _ema_update(self):
@@ -149,7 +171,7 @@ class RegressionModel:
             y = y.clone()
         pred = x + y if self.residual else y
         loss_mse = self.criterion(pred, t)
-        loss, extra, fake = loss_mse, {}, None
+        loss, extra, fake, reg = loss_mse, {}, None, {}   # reg: 実 EID 経路の整合項 {名前: (λ, 損失)}
         if self.net_D is not None:
             # 偽物 = 実 EID patch の出力（adv.source eid）、ペアの出力（eidlike）、両方（both）。本物 = 教師 PCD1024 patch
             fakes = []
@@ -162,19 +184,25 @@ class RegressionModel:
                     ye = ye.clone()
                 fe = e + ye if self.residual else ye
                 fakes.append(fe)
-                if self.lf_kernel is not None:   # 低周波整合: g_σ ∗ S2(e) ≈ g_σ ∗ e（GAN 項を足した後に加える）
-                    loss_lf = self.criterion(self._lowpass(fe), self._lowpass(e))
-                    extra["lf"] = float(loss_lf.detach())
+                # 実 EID の経路の整合（GAN 項を足した後に加える）: 低周波 g_σ ∗ S2(e) ≈ g_σ ∗ e（尺度 1 / 2）と平滑化勾配 ∇(g_σg ∗ S2(e)) ≈ ∇(g_σg ∗ e)
+                if self.lf_kernel is not None:
+                    reg["lf"] = (self.lf_lambda, self.criterion(self._lowpass(fe), self._lowpass(e)))
+                if self.lf2_kernel is not None:
+                    reg["lf2"] = (self.lf2_lambda, self.criterion(self._lowpass(fe, self.lf2_kernel), self._lowpass(e, self.lf2_kernel)))
+                if self.grad_kernel is not None:
+                    reg["grad"] = (self.grad_lambda, torch.nn.functional.l1_loss(self._smooth_grad(fe, self.grad_kernel), self._smooth_grad(e, self.grad_kernel)))
             if self.adv_source in ("eidlike", "both"):
                 fakes.append(pred)
             fake = torch.cat(fakes, 0)
+            real = batch["pcd_real"].to(self.device, non_blocking=True) if self.real_source == "pcd_reject" else t   # D の本物（pcd_reject = 実 EID と同じ空気除外で切った教師 patch）
             self.net_D.train()
             with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16):
-                d_fake_g = self.net_D(fake)
+                d_fake_g = self.net_D(self._d_input(fake))
             loss_adv = self.gan(d_fake_g.float(), True)
             loss = loss_mse + self.adv_lambda * loss_adv
-            if "lf" in extra:
-                loss = loss + self.lf_lambda * loss_lf
+            for k, (lam, v) in reg.items():
+                loss = loss + lam * v
+                extra[k] = float(v.detach())
             extra["adv_G"] = float(loss_adv.detach())
             extra["mse_only"] = float(loss_mse.detach())
         self.optimizer.zero_grad(set_to_none=True)
@@ -185,8 +213,8 @@ class RegressionModel:
         if self.net_D is not None:
             self.optimizer_D.zero_grad(set_to_none=True)
             with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16):
-                d_real = self.net_D(t)
-                d_fake = self.net_D(fake.detach())
+                d_real = self.net_D(self._d_input(real))
+                d_fake = self.net_D(self._d_input(fake.detach()))
             d_real, d_fake = d_real.float(), d_fake.float()
             loss_D = 0.5 * (self.gan(d_real, True) + self.gan(d_fake, False))
             loss_D.backward()
@@ -283,7 +311,10 @@ class RegressionModel:
         if self.net_D is not None:
             p = Path(weight_dir) / "net_D.pth"
             if p.is_file():
-                self.net_D.load_state_dict(torch.load(p, map_location=self.device, weights_only=True))
+                try:
+                    self.net_D.load_state_dict(torch.load(p, map_location=self.device, weights_only=True))
+                except RuntimeError as e:   # run_train.py が先に止めるはず（check_d_weights_match）。ここは保険
+                    raise RuntimeError(f"{p} の形が実効設定（adv.d_norm {self.d_norm} / adv.ndf）と合いません。d_norm は resume で変えられない: {e}")
             else:
                 print(f"[resume] 注意: {p} が無いので D は初期化のまま（D なしの run から D 付きで再開）")
 

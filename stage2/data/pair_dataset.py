@@ -116,6 +116,9 @@ class PairDataset(Dataset):
         # ペアとは独立にランダムな症例・スライス・位置の patch を 1 枚ずつ付ける（batch の "eid"）。ラベルは無い（D の偽物側の入力にするだけ）
         self.eid_on = float(train["adv.lambda"]) > 0.0 and train["adv.source"] in ("eid", "both")
         self.eid_paths, self._eid_cur, self._eid_left = [], None, 0
+        # D の本物 patch を実 EID と対称に（2026-11-09 ブランチ 026、adv.real_source pcd_reject）: 教師 PCD1024 の同じスライスから、_eid_patch と同じ空気除外規則で
+        # ペアとは別の位置に切った patch を付ける（batch の "pcd_real"）。ペアの MSE の patch（input / target）は変えない
+        self.pcd_real_on = float(train["adv.lambda"]) > 0.0 and train["adv.real_source"] == "pcd_reject"
         self._left, self._cur, self._cur_group = 0, None, None  # worker ごとの状態（DataLoader の worker は fork されるので各 worker で独立に進む）
         self.serial = mode["serial_batches"]
         self.val_max = train["log.val_max_slices_per_case"]
@@ -210,21 +213,27 @@ class PairDataset(Dataset):
         out = {"input": inp, "target": self._patch(pcd_path, pos), "path": pcd_path, "y": pos[0], "x": pos[1]}
         if self.eid_on:
             out["eid"] = self._eid_patch(rng)
+        if self.pcd_real_on:
+            out["pcd_real"] = self._patch_reject(pcd_path, rng)   # D の本物。同じ教師スライス、別の位置、実 EID と同じ空気除外
         return out
 
-    def _eid_patch(self, rng, min_norm=-0.745, tries=4):
-        """実 EID1024 のランダム patch（出力側 D の偽物側の入力）。ペアと同じ k 回ごとにスライスを引き直す。
-        平均が min_norm（≈ −700 HU）以下の空気ばかりの patch は tries 回まで引き直す（D に空気だけを見せない）。"""
-        if self._eid_left <= 0:
-            self._eid_cur, self._eid_left = rng.choice(self.eid_paths), self.k
-        self._eid_left -= 1
+    def _patch_reject(self, path, rng, min_norm=-0.745, tries=4):
+        """path のランダム patch。平均が min_norm（≈ −700 HU）以下の空気ばかりの patch は tries 回まで引き直す（D に空気だけを見せない）。
+        実 EID（偽物側）と教師 PCD（本物側、real_source pcd_reject）で同じ規則を使う。"""
         h, w = self.img_hw
         for _ in range(tries):
             pos = (rng.randrange(h - self.patch + 1), rng.randrange(w - self.patch + 1))
-            p = self._patch(self._eid_cur, pos)
+            p = self._patch(path, pos)
             if float(p.mean()) > min_norm:
                 break
         return p
+
+    def _eid_patch(self, rng):
+        """実 EID1024 のランダム patch（出力側 D の偽物側の入力）。ペアと同じ k 回ごとにスライスを引き直し、位置は _patch_reject（空気除外）。"""
+        if self._eid_left <= 0:
+            self._eid_cur, self._eid_left = rng.choice(self.eid_paths), self.k
+        self._eid_left -= 1
+        return self._patch_reject(self._eid_cur, rng)
 
     def _patch_aug(self, path, pos, rng):
         """学習入力の patch を、2 倍の文脈に augmentation（ぼかし → 高域の位相ランダム化）を掛けてから切り出す。教師（target）は _patch のまま同じ位置。"""

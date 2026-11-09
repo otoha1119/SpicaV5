@@ -104,6 +104,24 @@ def check_weights_match(weight_path, mode):
         raise ConfigError(f"{weight_path} の形が実効設定（arch / base_ch / n_pool）と合いません: " + "; ".join(bad[:3] + [f"余分 {k}" for k in extra[:3]]) + ("" if len(bad) + len(extra) <= 3 else " ..."))
 
 
+def check_d_weights_match(weight_dir, train):
+    """net_D.pth（あれば）の各テンソルのキーと形が、実効 train で組んだ D（adv.d_norm / adv.ndf）と一致するか。
+    d_norm は state_dict のキー自体が変わる（spectral: weight_orig / weight_u / weight_v、BN 無し）ので、違う run からの resume はここで止める（launch を書く前）。"""
+    import torch
+    from models.discriminator import PatchDiscriminator
+
+    p = Path(weight_dir) / "net_D.pth"
+    if not p.is_file() or train["adv.lambda"] <= 0.0:
+        return   # D なしの run から / D なしへの再開は照合するものが無い
+    saved = torch.load(p, map_location="cpu", weights_only=True)
+    expect = PatchDiscriminator(1, int(train["adv.ndf"]), norm=train["adv.d_norm"]).state_dict()
+    bad = [f"{k}: 重み {tuple(saved[k].shape) if k in saved else '無し'} ≠ 設定 {tuple(v.shape)}" for k, v in expect.items() if k not in saved or tuple(saved[k].shape) != tuple(v.shape)]
+    extra = [k for k in saved if k not in expect]
+    if bad or extra:
+        raise ConfigError(f"{p} の形が実効設定（adv.d_norm {train['adv.d_norm']!r} / adv.ndf {train['adv.ndf']}）と合いません。adv.d_norm は resume で変えられない（BatchNorm と spectral norm で D のパラメータが違う）: "
+                          + "; ".join(bad[:3] + [f"余分 {k}" for k in extra[:3]]) + ("" if len(bad) + len(extra) <= 3 else " ..."))
+
+
 def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
     """再開の基準は**選んだ checkpoint の state.pth に入っている実効設定**（その重みを作った設定）。失敗した起動の launch_resume_*.yaml は基準にならない。
     古い run（state に config が無い）だけ最新 launch を基準にする。"""
@@ -162,6 +180,7 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
     if Path(machine["stage2_checkpoints_dir"]) / a.resume != run_dir:
         raise ConfigError(f"再開時に stage2_checkpoints_dir を変えることはできません: {machine['stage2_checkpoints_dir']} != {run_dir.parent}")
     check_weights_match(weight_path, mode)  # launch を書く前に、重みと設定の食い違いを止める
+    check_d_weights_match(weight_path.parent, train)  # 出力側 D も同様（adv.d_norm / adv.ndf。2026-11-09 ブランチ 026）
     epoch_count = st["epoch"] + 1 if st["epoch_done"] else st["epoch"]  # epoch 末保存なら次の epoch から、途中保存ならその epoch を頭から（残り batch だけの厳密な再開ではない）
     if epoch_count > train["optim.n_epochs"]:
         raise ConfigError(f"run は既に epoch {st['epoch']} まで終わっています（n_epochs {train['optim.n_epochs']}）。延ばすなら --n_epochs を上書き")

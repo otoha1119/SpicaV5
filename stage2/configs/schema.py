@@ -68,6 +68,14 @@ TRAIN = {
     "adv.ndf":      Key(int,   "--adv_ndf",      "D（70×70 PatchGAN）の基本チャネル数。junyanz 既定 64"),
     "adv.lf_lambda": Key(float, "--adv_lf_lambda", "実 EID の経路の低周波整合項の重み: λ_lf · ‖g_σ ∗ S2(e) − g_σ ∗ e‖²（e = 実 EID1024 patch。構造・HU 水準は入力に合わせ、D には高周波のテクスチャだけを動かさせる）。0.0 で無し（2026-11-09 ブランチ 025）"),
     "adv.lf_sigma":  Key(float, "--adv_lf_sigma",  "低周波整合項の Gaussian の σ（1024 の画素）。例 4.0"),
+    # 構造保存（2026-11-09 ブランチ 026、docs/decisions/20261109_stage2-structure-preserving-D.md）。すべて既定 = 無し（025 と同じ動作）
+    "adv.lf2_lambda":       Key(float, "--adv_lf2_lambda",       "低周波整合の 2 つ目の尺度（粗い帯域）の重み: λ_lf2 · ‖g_σ2 ∗ S2(e) − g_σ2 ∗ e‖²。lf_lambda（尺度 1）と併用して多尺度にする。0.0 で無し"),
+    "adv.lf2_sigma":        Key(float, "--adv_lf2_sigma",        "その Gaussian の σ（1024 の画素）。lf_sigma より大きくとる。例 6.0"),
+    "adv.grad_lambda":      Key(float, "--adv_grad_lambda",      "平滑化勾配差の重み: λ_grad · L1(∇(g_σg ∗ S2(e)) − ∇(g_σg ∗ e))（∇ = x / y 方向の 1 次差分、反射パディング）。中尺度の縁の位置・向きを入力に合わせる。0.0 で無し"),
+    "adv.grad_sigma":       Key(float, "--adv_grad_sigma",       "勾配を取る前の平滑化 Gaussian の σ（1024 の画素）。例 2.0"),
+    "adv.d_highpass_sigma": Key(float, "--adv_d_highpass_sigma", "D に見せる画像を高周波だけにする: x − g_σ ∗ x を本物・偽物の両方に同じ境界処理で掛けてから D に通す（HU 水準・緩い濃度差で判別させない）。0.0 で無し（生の patch）"),
+    "adv.real_source":      Key(str,   "--adv_real_source",      "D の本物 patch の取り方: target（ペアの教師 patch そのまま）| pcd_reject（同じ教師スライスから、実 EID patch と同じ空気除外規則で別に切った patch。本物・偽物の体内率を揃える。ペアの MSE の patch は変えない）"),
+    "adv.d_norm":           Key(str,   "--adv_d_norm",           "D の正規化: batch（junyanz の BatchNorm）| spectral（BatchNorm 無し、全 Conv に spectral norm。batch 構成に依らない D）。net_D.pth の形が変わるので resume で変更不可"),
     "ema.decay":    Key(float, "--ema_decay",    "G の重みの指数移動平均（EMA）の減衰率。0.0 で無し。例 0.999（1 epoch 4,000 step の 1/4 程度を平均）。val / best / 保存の net_G.pth は EMA の重み、学習そのものは変えない（2026-11-09 ブランチ 024）"),
     # log
     "log.print_freq":              Key(int, "--print_freq",              "バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）"),
@@ -352,9 +360,13 @@ PRECISIONS = ("fp32", "bf16")
 LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False,
                          "aug.blur_sigma_max": 0.0, "aug.hf_phase_cutoff": 0.0,   # 導入前の run（2026-11-08 以前）は augmentation なしで続ける
                          "adv.lambda": 0.0, "adv.source": "eid", "adv.gan_mode": "lsgan", "adv.lr_d": 1e-4, "adv.ndf": 64,   # 導入前の run（2026-11-09 以前）は D なしで続ける
-                         "ema.decay": 0.0, "adv.lf_lambda": 0.0, "adv.lf_sigma": 4.0}   # 導入前の run は EMA なし・低周波整合なしで続ける
+                         "ema.decay": 0.0, "adv.lf_lambda": 0.0, "adv.lf_sigma": 4.0,   # 導入前の run は EMA なし・低周波整合なしで続ける
+                         "adv.lf2_lambda": 0.0, "adv.lf2_sigma": 6.0, "adv.grad_lambda": 0.0, "adv.grad_sigma": 2.0,   # 導入前の run（ブランチ 026 以前）は構造保存の項なし・
+                         "adv.d_highpass_sigma": 0.0, "adv.real_source": "target", "adv.d_norm": "batch"}              # 生の patch・教師 patch・BatchNorm の D で続ける
 ADV_SOURCES = ("eid", "eidlike", "both")
 ADV_GAN_MODES = ("lsgan", "vanilla")
+ADV_REAL_SOURCES = ("target", "pcd_reject")
+ADV_D_NORMS = ("batch", "spectral")
 
 
 def check_train_values(train, mode, machine):
@@ -383,6 +395,13 @@ def check_train_values(train, mode, machine):
     if train["adv.ndf"] < 1: P.append("adv.ndf ≥ 1")
     if train["adv.lf_lambda"] < 0.0: P.append("adv.lf_lambda ≥ 0.0（0.0 で無し）")
     if train["adv.lf_sigma"] <= 0.0: P.append("adv.lf_sigma は正")
+    if train["adv.lf2_lambda"] < 0.0: P.append("adv.lf2_lambda ≥ 0.0（0.0 で無し）")
+    if train["adv.lf2_sigma"] <= 0.0: P.append("adv.lf2_sigma は正")
+    if train["adv.grad_lambda"] < 0.0: P.append("adv.grad_lambda ≥ 0.0（0.0 で無し）")
+    if train["adv.grad_sigma"] <= 0.0: P.append("adv.grad_sigma は正")
+    if train["adv.d_highpass_sigma"] < 0.0: P.append("adv.d_highpass_sigma ≥ 0.0（0.0 で無し）")
+    if train["adv.real_source"] not in ADV_REAL_SOURCES: P.append(f"adv.real_source は {ADV_REAL_SOURCES}")
+    if train["adv.d_norm"] not in ADV_D_NORMS: P.append(f"adv.d_norm は {ADV_D_NORMS}")
     if not (0.0 <= train["ema.decay"] < 1.0): P.append("ema.decay は 0.0 以上 1.0 未満（0.0 で無し）")
     for k in ("data.train_cases", "data.val_cases"):
         if not train[k]: P.append(f"{k} は 1 症例以上")
