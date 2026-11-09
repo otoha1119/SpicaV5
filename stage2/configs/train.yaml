@@ -41,6 +41,10 @@ adv:                      # 出力側 D（2026-11-09 ブランチ 023、研究�
 ema:                      # G の重みの指数移動平均（2026-11-09 ブランチ 024。GAN 項で epoch ごとに出力が振れる対策。学習は変えず、評価・保存に平均した重みを使う）
   decay: 0.0              # 0.0 = 無し。例 0.999（直近 ≈ 1,000 step の平均、1 epoch は 4,000 step）。val / best / net_G.pth は EMA、学習中の重みは net_G_raw.pth に別保存
 
+ns:                       # range / null-space 分離（2026-11-10 ブランチ 027。models/regression_model.py の lowpass / ns_forward）。両方 0.0 = 024 と同一。導入前の run の resume は 0 扱い、resume で変更不可（学習する関数が変わる）
+  input_sigma: 0.0        # 網に見せる入力を g_σ ∗ x に低域化する σ（px @1024。分離 Gaussian・reflect padding・半径 ceil(3σ)。0 = そのまま）。EID-like と教師 PCD1024 が同じ sinogram 由来で共有する高域のノイズ実現値（鍵）を網から隠す。例 2.3（半径 7 px）
+  range_sigma: 0.0        # 出力 y = g_σ ∗ x + (f − g_σ ∗ f)（x = 生の入力、f = 網の推定）。出力の低域は入力の低域で固定し、網は零空間（高域）だけを推定する。損失・D・EMA・val・preview・推論はすべて y。0 = y = f。例 2.3
+
 log:
   print_freq: 100               # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）
   image_freq: 500                # TensorBoard に学習中の 128 patch グリッドを出す間隔（step。batch 16 なら 1 epoch = 4,000 step → 8 回/epoch）。Stage 1 と同じ仕組み（2026-09-09）

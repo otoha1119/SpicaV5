@@ -1,6 +1,8 @@
 """stage2/models/regression_model.py — Stage 2 の教師あり回帰（U-Net + MSE / L1）の司令塔。junyanz の BaseModel は使わない。
 
-  forward   : pred = net(input)（mode.residual=true なら input + net(input)）
+  forward   : ns_forward（range / null-space 分離、2026-11-10 ブランチ 027）: x_in = g_σin ∗ x（train.ns.input_sigma。0 なら x）→ f = net(x_in)（mode.residual=true なら x_in + net(x_in)）
+              → y = g_σR ∗ x + (f − g_σR ∗ f)（train.ns.range_sigma。0 なら f。x は生の入力）。両 σ が 0 なら従来の net(x) / x + net(x) と同一。
+              学習の損失・D の偽物・EMA・val・preview・推論（inference_dir.py が同じ ns_forward を import）はすべて y を使う
   loss      : mse | l1 を正規化空間 [−1,1] で計算。表示用に HU 換算（1.0 = hu_per_unit HU）の RMSE / MAE も返す
   optimizer : Adam(lr, (beta1, beta2))。lr は一定（論文に減衰の記載なし）→ scheduler は持たない
   checkpoint: 重みディレクトリ（util/run_paths.py）に net_G.pth と state.pth（optimizer / RNG / epoch / total_iters / **保存時の実効設定 config**）を**原子的に**保存
@@ -9,6 +11,7 @@
 """
 
 import copy
+import math
 import os
 import random
 import shutil
@@ -18,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from util.metrics import mse, psnr, ssim
 from models.unet import build_net
@@ -64,11 +68,56 @@ def _to_tuple(x):
     return x
 
 
+# --- range / null-space 分離（2026-11-10 ブランチ 027）。inference_dir.py も同じ関数を使う ---
+_GAUSS_1D = {}   # (σ, device, dtype) → (1,1,1,K) の正規化 1 次元 Gaussian。lowpass が使い回す
+
+
+def gaussian_kernel1d(sigma, device, dtype):
+    """半径 ceil(3σ) の正規化 1 次元 Gaussian を (1,1,1,K) で返す（(σ, device, dtype) ごとにキャッシュ。σ 2.3 → K = 15）。"""
+    key = (float(sigma), str(device), dtype)
+    k = _GAUSS_1D.get(key)
+    if k is None:
+        r = math.ceil(3 * sigma)
+        ax = torch.arange(-r, r + 1, dtype=torch.float64)
+        k1 = torch.exp(-ax ** 2 / (2.0 * sigma ** 2))
+        k = (k1 / k1.sum()).to(device=device, dtype=dtype)[None, None, None, :]
+        _GAUSS_1D[key] = k
+    return k
+
+
+def lowpass(x, sigma):
+    """g_σ ∗ x: 1ch (N,1,H,W) に分離 Gaussian（横 → 縦）を reflect padding で掛ける（線形。正規化空間のままでよい）。σ ≤ 0 なら x そのもの（コピーしない）。
+    半径 ceil(3σ)。128 patch でも 1024 フルでも同じ核（reflect は半径 < 一辺 が条件。schema.check_train_values が patch_size と照合）。"""
+    if sigma <= 0.0:
+        return x
+    k = gaussian_kernel1d(sigma, x.device, x.dtype)
+    r = k.shape[-1] // 2
+    x = F.pad(x, (r, r, r, r), mode="reflect")
+    return F.conv2d(F.conv2d(x, k), k.transpose(-1, -2))
+
+
+def ns_combine(x, x_in, out, residual, range_sigma):
+    """網の生出力 out から最終出力 y を作る。f = x_in + out（mode.residual）| out、y = g_σ ∗ x + (f − g_σ ∗ f)（range_sigma > 0）| f。
+    range 項は**生の x**（input_sigma を掛ける前）。出力の低域 = 入力の低域で固定し、網の寄与は零空間（高域）だけになる。"""
+    f = x_in + out if residual else out
+    if range_sigma > 0.0:
+        return lowpass(x, range_sigma) + f - lowpass(f, range_sigma)
+    return f
+
+
+def ns_forward(x, net, residual, input_sigma, range_sigma):
+    """x → y の全体（RegressionModel.forward と inference_dir.py が共用）。両 σ が 0 なら従来の net(x) / x + net(x) とビット一致。"""
+    x_in = lowpass(x, input_sigma)
+    return ns_combine(x, x_in, net(x_in), residual, range_sigma)
+
+
 class RegressionModel:
     def __init__(self, train, mode, machine, device):
         self.device = device
         self.config = {"train": dict(train), "mode": dict(mode), "machine": dict(machine)}  # この重みに対応する実効設定（state.pth に入れる。再開の基準）
         self.residual = mode["residual"]
+        # range / null-space 分離（2026-11-10 ブランチ 027。両方 0.0 で 024 と同一。resume で変更不可 = schema.RESUME_FIXED_TRAIN_KEYS）。lowpass / ns_combine / ns_forward（モジュール関数）
+        self.ns_input_sigma, self.ns_range_sigma = float(train["ns.input_sigma"]), float(train["ns.range_sigma"])
         self.net = build_net(mode).to(device)
         # 高速化（Stage 1 と同じ、2026-11-03）: 学習の forward だけ bf16 autocast + torch.compile。val・監視・推論は compile しない FP32 の self.net（同じ重み）。
         # compile は torch.compile で別の呼び出し口を作る（state_dict のキーは self.net のまま）。CUDA Graph の出力 buffer 再利用に備えて学習の出力は clone する
@@ -110,8 +159,7 @@ class RegressionModel:
     # --- 前向き ---
     def forward(self, x, net=None):
         net = self.net if net is None else net
-        y = net(x)
-        return x + y if self.residual else y
+        return ns_forward(x, net, self.residual, self.ns_input_sigma, self.ns_range_sigma)
 
     @property
     def net_eval(self):
@@ -131,13 +179,14 @@ class RegressionModel:
         forward は bf16 autocast（optim.precision）+ compile（optim.compile）。出力は FP32 に戻してから損失を計算する。"""
         x = batch["input"].to(self.device, non_blocking=True)
         t = batch["target"].to(self.device, non_blocking=True)
+        x_in = lowpass(x, self.ns_input_sigma)   # 網に見せる入力（ns.input_sigma > 0 なら低域化。FP32、autocast の外）。range 項と損失は生の x / 教師 t
         self.net.train()
         with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16):
-            y = self.net_train(x)
+            y = self.net_train(x_in)
         y = y.float()
         if self.compile_enabled:
             y = y.clone()
-        pred = x + y if self.residual else y
+        pred = ns_combine(x, x_in, y, self.residual, self.ns_range_sigma)   # = ns_forward(x) と同じ値（autocast / compile の都合で分けて書く）
         loss_mse = self.criterion(pred, t)
         loss, extra, fake = loss_mse, {}, None
         if self.net_D is not None:
@@ -145,12 +194,13 @@ class RegressionModel:
             fakes = []
             if self.adv_source in ("eid", "both"):
                 e = batch["eid"].to(self.device, non_blocking=True)
+                e_in = lowpass(e, self.ns_input_sigma)
                 with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16):
-                    ye = self.net_train(e)
+                    ye = self.net_train(e_in)
                 ye = ye.float()
                 if self.compile_enabled:
                     ye = ye.clone()
-                fakes.append(e + ye if self.residual else ye)
+                fakes.append(ns_combine(e, e_in, ye, self.residual, self.ns_range_sigma))
             if self.adv_source in ("eidlike", "both"):
                 fakes.append(pred)
             fake = torch.cat(fakes, 0)

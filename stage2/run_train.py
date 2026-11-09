@@ -26,7 +26,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import LEGACY_TRAIN_DEFAULTS, MACHINE, MODE, TRAIN, ConfigError, apply_overrides, check_train_values, validate, validate_shared  # noqa: E402
+from configs.schema import LEGACY_TRAIN_DEFAULTS, MACHINE, MODE, RESUME_FIXED_TRAIN_KEYS, TRAIN, ConfigError, apply_overrides, check_train_values, validate, validate_shared  # noqa: E402
 from data.pair_dataset import check_split_on_disk  # noqa: E402
 from util.run_paths import LAUNCH_FILE, ckpt_path, latest_launch, run_name, saved_tags  # noqa: E402
 
@@ -156,7 +156,12 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
         diff = {k: (sv.get(k), v) for k, v in cur.items() if sv.get(k) != v}
         if diff:
             print(f"[run_train] 注意: 今の {section} 設定は checkpoint の実効設定と異なる（checkpoint の値を使う。変えるなら --flag で上書き）: {diff}")
+    saved_fixed = {k: train[k] for k in RESUME_FIXED_TRAIN_KEYS}   # resume で変えられないキー（ns.*。導入前の run は LEGACY で 0.0 になっている）。上書き後に照合
     applied = apply_overrides(overrides, sections(train, mode, machine))
+    changed = {k: (saved_fixed[k], train[k]) for k in RESUME_FIXED_TRAIN_KEYS if train[k] != saved_fixed[k]}
+    if changed:
+        raise ConfigError("再開時に " + " / ".join(changed) + " を変えることはできません（学習する関数そのものが変わる。mode.residual と同じ扱い）: "
+                          + ", ".join(f"{k}: checkpoint {was!r} → 指定 {now_v!r}" for k, (was, now_v) in changed.items()))
     check_train_values(train, mode, machine)
     _check_split(train, machine)
     if Path(machine["stage2_checkpoints_dir"]) / a.resume != run_dir:

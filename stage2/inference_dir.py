@@ -39,6 +39,7 @@ from tqdm import tqdm
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from data.ct_io import INTERP_FLAGS, CaseIndex, denormalize, normalize, read_stored, upsample, write_png  # noqa: E402
+from models.regression_model import ns_forward  # noqa: E402  range / null-space 分離（学習の RegressionModel.forward と同じ関数）
 from models.unet import build_net  # noqa: E402
 from util.metrics import mse, psnr, ssim  # noqa: E402
 from util.panel import build_panel, full_labels  # noqa: E402
@@ -65,6 +66,8 @@ def parse_args():
     req("--n_pool", type=int)
     req("--final_act")
     p.add_argument("--residual", action="store_true", help="mode.residual（出力 = 入力 + net(入力)）")
+    req("--ns_input_sigma", type=float, help="train.ns.input_sigma（run の launch.yaml。導入前の run は run_infer.py が 0.0 を渡す）: 網に見せる入力を g_σ ∗ x に低域化する σ px。0 = そのまま")
+    req("--ns_range_sigma", type=float, help="train.ns.range_sigma: 出力 y = g_σ ∗ x + (f − g_σ ∗ f) の σ px（x = 生の入力）。0 = y = f")
     req("--hu_offset", type=int)
     req("--hu_min", type=int)
     req("--hu_max", type=int)
@@ -143,8 +146,10 @@ def main():
         raise ValueError(f"--display_hu_min < --display_hu_max にしてください: {a.display_hu_min} >= {a.display_hu_max}")
     small = a.image_size // a.scale
 
+    if a.ns_input_sigma < 0.0 or a.ns_range_sigma < 0.0:
+        raise ValueError(f"--ns_input_sigma / --ns_range_sigma は 0.0 以上: {a.ns_input_sigma} / {a.ns_range_sigma}")
     net, weight_path = build_generator(a, device)
-    forward = (lambda x: x + net(x)) if a.residual else net  # RegressionModel.forward と同じ
+    forward = lambda x: ns_forward(x, net, a.residual, a.ns_input_sigma, a.ns_range_sigma)  # noqa: E731  RegressionModel.forward と同じ関数（range / null-space 分離を含む。両 σ 0 なら net(x) / x + net(x)）
 
     idx = CaseIndex(input_dir, a.index_cache_dir)
     all_paths = [p for c in idx.cases for p in idx.slices[c]]
@@ -157,7 +162,7 @@ def main():
     else:
         raise ValueError(f"入力の大きさ {first} が学習画像 {a.image_size} でも補間元 {small}（= {a.image_size} / scale {a.scale}）でもありません: {paths[0]}")
     in_shape = first
-    print(f"[infer] device={device} net={a.arch} base_ch {a.base_ch} n_pool {a.n_pool} final_act {a.final_act} residual {a.residual} weights={weight_path}")
+    print(f"[infer] device={device} net={a.arch} base_ch {a.base_ch} n_pool {a.n_pool} final_act {a.final_act} residual {a.residual} ns σ_in {a.ns_input_sigma} σ_R {a.ns_range_sigma} weights={weight_path}")
     print(f"[infer] input={input_dir} ({idx.n_cases} cases, {idx.n_slices} slices, 推論 {len(paths)} 枚) size {first[0]}"
           + (f" → x{a.scale} {a.interp} → {a.image_size}" if up else "（そのまま）") + f" input={a.input} teacher={a.teacher} batch_slices={a.batch_slices} -> {out_dir}")
 

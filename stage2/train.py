@@ -70,7 +70,8 @@ def main():
     loader = DataLoader(dataset, batch_size=bs, shuffle=False, num_workers=machine["num_threads"], pin_memory=(device.type == "cuda"), drop_last=False)
 
     model = RegressionModel(train, mode, machine, device)
-    print(f"[train] {mode['arch']} base_ch {mode['base_ch']} n_pool {mode['n_pool']} final_act {mode['final_act']} residual {mode['residual']}: {model.n_params / 1e6:.2f}M params, loss {mode['loss']}, device {device}")
+    print(f"[train] {mode['arch']} base_ch {mode['base_ch']} n_pool {mode['n_pool']} final_act {mode['final_act']} residual {mode['residual']} "
+          f"ns σ_in {train['ns.input_sigma']} σ_R {train['ns.range_sigma']}: {model.n_params / 1e6:.2f}M params, loss {mode['loss']}, device {device}")
     if a.resume_state:
         model.load_weights(Path(a.resume_state).parent)
         model.resume(a.resume_state)

@@ -19,6 +19,7 @@ flag は「sh からの上書き」の名前としてだけ使う（Stage 1 の 
   doc  : 意味と出典（論文 = ILUMENATE, Koons et al., Med Phys 2025;52(7):e17874）
 """
 
+import math
 from collections import namedtuple
 
 Key = namedtuple("Key", "type flag doc")
@@ -67,6 +68,9 @@ TRAIN = {
     "adv.lr_d":     Key(float, "--adv_lr_d",     "D の Adam lr（β 0.5, 0.999）。G と同じ step 数で 1 回ずつ更新"),
     "adv.ndf":      Key(int,   "--adv_ndf",      "D（70×70 PatchGAN）の基本チャネル数。junyanz 既定 64"),
     "ema.decay":    Key(float, "--ema_decay",    "G の重みの指数移動平均（EMA）の減衰率。0.0 で無し。例 0.999（1 epoch 4,000 step の 1/4 程度を平均）。val / best / 保存の net_G.pth は EMA の重み、学習そのものは変えない（2026-11-09 ブランチ 024）"),
+    # ns（range / null-space 分離。2026-11-10 ブランチ 027。models/regression_model.py の lowpass / ns_forward。両方 0.0 で 024 と同一。resume で変更不可 = RESUME_FIXED_TRAIN_KEYS）
+    "ns.input_sigma": Key(float, "--ns_input_sigma", "網に見せる入力を g_σ ∗ x に低域化する σ [px、1024 グリッド]（分離 Gaussian、reflect padding、半径 ceil(3σ)。σ 2.3 → 7 px）。EID-like と教師 PCD1024 が同じ sinogram 由来で共有する高域のノイズ実現値（鍵）を網から隠す。0.0 で無し（x をそのまま見せる）"),
+    "ns.range_sigma": Key(float, "--ns_range_sigma", "出力 y = g_σ ∗ x + (f − g_σ ∗ f) の σ [px、1024 グリッド]。x は**生の入力**（input_sigma を掛ける前）、f は網の推定（mode.residual なら x_in + net(x_in)）。出力の低域を入力の低域で固定し、網は零空間（高域）だけを推定する。損失・D・EMA・val・preview・推論はすべて y。0.0 で無し（y = f）"),
     # log
     "log.print_freq":              Key(int, "--print_freq",              "バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）"),
     "log.image_freq":              Key(int, "--image_freq",              "TensorBoard に学習中の 128 patch グリッド（images/current, images/fixed）を出す間隔（step）。Stage 1 と同じ仕組み（2026-09-09）"),
@@ -350,7 +354,11 @@ PRECISIONS = ("fp32", "bf16")
 LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False,
                          "aug.blur_sigma_max": 0.0, "aug.hf_phase_cutoff": 0.0,   # 導入前の run（2026-11-08 以前）は augmentation なしで続ける
                          "adv.lambda": 0.0, "adv.source": "eid", "adv.gan_mode": "lsgan", "adv.lr_d": 1e-4, "adv.ndf": 64,   # 導入前の run（2026-11-09 以前）は D なしで続ける
-                         "ema.decay": 0.0}   # 導入前の run は EMA なしで続ける
+                         "ema.decay": 0.0,   # 導入前の run は EMA なしで続ける
+                         "ns.input_sigma": 0.0, "ns.range_sigma": 0.0}   # 導入前の run（2026-11-10 以前）は range / null-space 分離なし（= 024 と同じ関数）で続ける
+NS_KEYS = ("ns.input_sigma", "ns.range_sigma")   # range / null-space 分離の σ（run_infer.py も launch.yaml からこのキーを読む）
+# resume で変えられない train のキー（学習する関数そのものが変わる。Stage 1 の mode.residual と同じ扱い）。run_train.py prepare_resume が checkpoint の値と上書き後の値を照合して止める
+RESUME_FIXED_TRAIN_KEYS = NS_KEYS
 ADV_SOURCES = ("eid", "eidlike", "both")
 ADV_GAN_MODES = ("lsgan", "vanilla")
 
@@ -380,6 +388,9 @@ def check_train_values(train, mode, machine):
     if train["adv.lr_d"] <= 0.0: P.append("adv.lr_d は正")
     if train["adv.ndf"] < 1: P.append("adv.ndf ≥ 1")
     if not (0.0 <= train["ema.decay"] < 1.0): P.append("ema.decay は 0.0 以上 1.0 未満（0.0 で無し）")
+    for k in NS_KEYS:
+        if not (0.0 <= train[k] <= 8.0): P.append(f"{k} は 0.0（無し）〜 8.0 px")
+        elif train[k] > 0.0 and math.ceil(3 * train[k]) >= ps: P.append(f"{k} {train[k]} の核の半径 ceil(3σ) = {math.ceil(3 * train[k])} px が data.patch_size {ps} 以上（reflect padding できない）")
     for k in ("data.train_cases", "data.val_cases"):
         if not train[k]: P.append(f"{k} は 1 症例以上")
     lists = {k: train[k] for k in ("data.train_cases", "data.val_cases", "data.test_cases")}
