@@ -8,6 +8,7 @@
 *.md text eol=lf
 *.txt text eol=lf
 Dockerfile* text eol=lf
+*.bat text eol=crlf
 
 # バイナリ
 *.png binary

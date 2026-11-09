@@ -37,6 +37,7 @@ Discord: #watch-log（やり取りの履歴・改良内容の md）、#watch-cal
    cd ~/Documents/SpicaV5-watch && python watch/pc_agent.py loop
    ```
    確認だけなら `python watch/pc_agent.py export`（push しない）、`python watch/pc_agent.py running`
+   Windows では `watch\start_agent.bat` をダブルクリックでもよい（落ちたら 30 秒後に起動し直す。ログイン時に自動で起動するなら、`Win+R` → `shell:startup` にこの bat のショートカットを置く）
 
 ## Mac のセットアップ（初回だけ。済み）
 
