@@ -497,15 +497,31 @@ def hard_stops(repo, cfg, data):
 # ---------------------------------------------------------------- ウィンドウの監査・自己再読み込み
 
 AUDIT_SNIPPET = r"""
+# 1) pc_agent が開いた印付きの bash（SPICA_WATCH_WIN=1）で子プロセスが無いもの
+# 2) wsl が直接起動した `bash -c ...`（親が PID 1 かセッションリーダー、ログインシェルではない）で、
+#    子孫が bash / sleep / tail / printf だけのもの = 仕事が終わった表示ウィンドウ（印の無い旧版の窓も拾う）
+# 研究者の端末（ログインシェル -bash、VS Code の node 配下の bash、子に本物の処理があるもの）は触らない
 k=0; n=0
+desc() { local p=$1 c; for c in $(pgrep -P $p); do echo $c; desc $c; done; }
 for p in $(pgrep -x bash); do
-  tr '\0' '\n' < /proc/$p/environ 2>/dev/null | grep -qx 'SPICA_WATCH_WIN=1' || continue
+  cmd=$(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null)
+  marked=0; tr '\0' '\n' < /proc/$p/environ 2>/dev/null | grep -qx 'SPICA_WATCH_WIN=1' && marked=1
+  ppid=$(ps -o ppid= -p $p | tr -d ' ')
+  case "$cmd" in "bash -c "*) wslspawn=1;; *) wslspawn=0;; esac
+  [ "$ppid" = "1" ] || [ "$ppid" = "$(ps -o sid= -p $p | tr -d ' ')" ] || wslspawn=0
+  [ $marked = 1 ] || [ $wslspawn = 1 ] || continue
   n=$((n+1))
-  [ -z "$(pgrep -P $p)" ] || continue
-  echo "close idle window bash pid=$p etimes=$(ps -o etimes= -p $p | tr -d ' ')"
+  busy=0
+  for c in $(desc $p); do
+    cn=$(ps -o comm= -p $c 2>/dev/null)
+    case "$cn" in bash|sleep|tail|printf|"") ;; *) busy=1;; esac
+  done
+  [ $busy = 0 ] || continue
+  if [ $marked = 0 ] && [ -z "$(pgrep -P $p)" ]; then case "$cmd" in "bash -c "*) ;; *) continue;; esac; fi
+  echo "close idle window bash pid=$p marked=$marked etimes=$(ps -o etimes= -p $p | tr -d ' ') cmd=${cmd:0:80}"
   kill -HUP $p 2>/dev/null && k=$((k+1))
 done
-echo "marked=$n closed=$k"
+echo "candidates=$n closed=$k"
 """
 
 
