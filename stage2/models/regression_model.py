@@ -8,6 +8,7 @@
   resume    : state.pth から optimizer と RNG（python / torch / numpy）を復元し、lr / betas は今の実効値を再適用（上書きが最優先）
 """
 
+import copy
 import os
 import random
 import shutil
@@ -94,15 +95,36 @@ class RegressionModel:
             self.gan = GANLoss(train["adv.gan_mode"])
             self.gan_thresh = 0.5 if train["adv.gan_mode"] == "lsgan" else 0.0   # D_acc の判定の境界（lsgan は 0.5、vanilla は logit 0）
             self.optimizer_D = torch.optim.Adam(self.net_D.parameters(), lr=float(train["adv.lr_d"]), betas=(0.5, 0.999))
+        # G の EMA（2026-11-09 ブランチ 024）: decay > 0 なら学習中の self.net とは別に平均した重み self.net_ema を持ち、val / best / 推論用の net_G.pth はそれを使う
+        self.ema_decay = float(train["ema.decay"])
+        self.net_ema = None
+        if self.ema_decay > 0.0:
+            self.net_ema = copy.deepcopy(self.net).eval()
+            for q in self.net_ema.parameters():
+                q.requires_grad_(False)
         self.cur_epoch, self.epoch_done, self.total_iters = 0, False, 0
         self.best = None  # best/ の記録 {"metric", "value", "epoch", "total_iters"}。state.pth に入れて resume で引き継ぐ（無ければ None = 次の val が必ず best）
         self.last = None  # 直近の学習バッチ (input, pred, target)。optimize が更新
         self.n_params = sum(p.numel() for p in self.net.parameters())
 
     # --- 前向き ---
-    def forward(self, x):
-        y = self.net(x)
+    def forward(self, x, net=None):
+        net = self.net if net is None else net
+        y = net(x)
         return x + y if self.residual else y
+
+    @property
+    def net_eval(self):
+        """val / 監視 / 推論に使う G。EMA があれば EMA、無ければ学習中の重み。"""
+        return self.net_ema if self.net_ema is not None else self.net
+
+    @torch.no_grad()
+    def _ema_update(self):
+        d = self.ema_decay
+        for q_ema, q in zip(self.net_ema.parameters(), self.net.parameters()):
+            q_ema.mul_(d).add_(q.detach(), alpha=1.0 - d)
+        for b_ema, b in zip(self.net_ema.buffers(), self.net.buffers()):
+            b_ema.copy_(b)
 
     def optimize(self, batch):
         """1 step。戻り値は表示用の dict: loss（正規化空間の損失）、mse（出力 vs 教師。monitor が √ を取って train/rmse に。0 へ）、ssim（1 へ）。
@@ -142,6 +164,8 @@ class RegressionModel:
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
         self.optimizer.step()
+        if self.net_ema is not None:
+            self._ema_update()
         if self.net_D is not None:
             self.optimizer_D.zero_grad(set_to_none=True)
             with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16):
@@ -161,19 +185,21 @@ class RegressionModel:
     @torch.no_grad()
     def predict(self, x):
         """監視・検証用の順伝播（eval、勾配なし）。x は (N,1,H,W) 正規化 tensor（CPU 可）。"""
-        self.net.eval()
-        return self.forward(x.to(self.device)).cpu()
+        net = self.net_eval
+        net.eval()
+        return self.forward(x.to(self.device), net).cpu()
 
     @torch.no_grad()
     def evaluate(self, dataset, slices):
         """val のフル画像で rmse（正規化空間。0 へ）/ ssim（1 へ）/ psnr（大きいほど良い）をスライス平均で出す。入力そのまま（何もしない場合）の値も *_input として返す（参照線）。"""
-        self.net.eval()
+        net = self.net_eval
+        net.eval()
         acc = {"mse": 0.0, "ssim": 0.0, "psnr": 0.0, "mse_input": 0.0, "ssim_input": 0.0, "psnr_input": 0.0}
         n = 0
         for _case, in_path, pcd_path in slices:
             x = dataset.load_full(in_path).to(self.device)
             t = dataset.load_full(pcd_path).to(self.device)
-            y = self.forward(x)
+            y = self.forward(x, net)
             for name, pred in (("", y), ("_input", x)):
                 acc["mse" + name] += mse(pred, t); acc["ssim" + name] += ssim(pred, t); acc["psnr" + name] += psnr(pred, t)
             n += 1
@@ -218,14 +244,26 @@ class RegressionModel:
         if tmp.exists():
             shutil.rmtree(tmp)
         tmp.mkdir(parents=True)
-        torch.save(self.net.state_dict(), tmp / "net_G.pth")
+        torch.save(self.net_eval.state_dict(), tmp / "net_G.pth")   # 推論・評価用（EMA があれば EMA）
+        if self.net_ema is not None:
+            torch.save(self.net.state_dict(), tmp / "net_G_raw.pth")   # 学習中の重み（resume 用）
         if self.net_D is not None:
             torch.save(self.net_D.state_dict(), tmp / "net_D.pth")
         torch.save(self._state(), tmp / "state.pth")
         _swap_dirs(tmp, final, old)  # Windows バインドマウントの PermissionError 対策
 
     def load_weights(self, weight_dir):
-        self.net.load_state_dict(torch.load(Path(weight_dir) / "net_G.pth", map_location=self.device, weights_only=True))
+        g = torch.load(Path(weight_dir) / "net_G.pth", map_location=self.device, weights_only=True)
+        raw = Path(weight_dir) / "net_G_raw.pth"
+        if self.net_ema is not None:
+            self.net_ema.load_state_dict(g)
+            if raw.is_file():
+                self.net.load_state_dict(torch.load(raw, map_location=self.device, weights_only=True))
+            else:
+                self.net.load_state_dict(g)   # EMA なしの run から EMA 付きで再開: 学習中の重みも net_G.pth から
+                print("[resume] 注意: net_G_raw.pth が無いので学習中の重みも net_G.pth から読む（EMA なしの run からの再開）")
+        else:
+            self.net.load_state_dict(torch.load(raw, map_location=self.device, weights_only=True) if raw.is_file() else g)   # EMA 付きの run から EMA なしで再開: 学習中の重みを引き継ぐ
         if self.net_D is not None:
             p = Path(weight_dir) / "net_D.pth"
             if p.is_file():

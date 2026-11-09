@@ -66,6 +66,7 @@ TRAIN = {
     "adv.gan_mode": Key(str,   "--adv_gan_mode", "GAN 損失: lsgan | vanilla"),
     "adv.lr_d":     Key(float, "--adv_lr_d",     "D の Adam lr（β 0.5, 0.999）。G と同じ step 数で 1 回ずつ更新"),
     "adv.ndf":      Key(int,   "--adv_ndf",      "D（70×70 PatchGAN）の基本チャネル数。junyanz 既定 64"),
+    "ema.decay":    Key(float, "--ema_decay",    "G の重みの指数移動平均（EMA）の減衰率。0.0 で無し。例 0.999（1 epoch 4,000 step の 1/4 程度を平均）。val / best / 保存の net_G.pth は EMA の重み、学習そのものは変えない（2026-11-09 ブランチ 024）"),
     # log
     "log.print_freq":              Key(int, "--print_freq",              "バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）"),
     "log.image_freq":              Key(int, "--image_freq",              "TensorBoard に学習中の 128 patch グリッド（images/current, images/fixed）を出す間隔（step）。Stage 1 と同じ仕組み（2026-09-09）"),
@@ -348,7 +349,8 @@ PRECISIONS = ("fp32", "bf16")
 # 導入前の run を resume するときだけ使う移行値（従来動作 = FP32、compile なし）。新規 run は train.yaml の値（2026-11-03）
 LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False,
                          "aug.blur_sigma_max": 0.0, "aug.hf_phase_cutoff": 0.0,   # 導入前の run（2026-11-08 以前）は augmentation なしで続ける
-                         "adv.lambda": 0.0, "adv.source": "eid", "adv.gan_mode": "lsgan", "adv.lr_d": 1e-4, "adv.ndf": 64}   # 導入前の run（2026-11-09 以前）は D なしで続ける
+                         "adv.lambda": 0.0, "adv.source": "eid", "adv.gan_mode": "lsgan", "adv.lr_d": 1e-4, "adv.ndf": 64,   # 導入前の run（2026-11-09 以前）は D なしで続ける
+                         "ema.decay": 0.0}   # 導入前の run は EMA なしで続ける
 ADV_SOURCES = ("eid", "eidlike", "both")
 ADV_GAN_MODES = ("lsgan", "vanilla")
 
@@ -377,6 +379,7 @@ def check_train_values(train, mode, machine):
     if train["adv.gan_mode"] not in ADV_GAN_MODES: P.append(f"adv.gan_mode は {ADV_GAN_MODES}")
     if train["adv.lr_d"] <= 0.0: P.append("adv.lr_d は正")
     if train["adv.ndf"] < 1: P.append("adv.ndf ≥ 1")
+    if not (0.0 <= train["ema.decay"] < 1.0): P.append("ema.decay は 0.0 以上 1.0 未満（0.0 で無し）")
     for k in ("data.train_cases", "data.val_cases"):
         if not train[k]: P.append(f"{k} は 1 症例以上")
     lists = {k: train[k] for k in ("data.train_cases", "data.val_cases", "data.test_cases")}

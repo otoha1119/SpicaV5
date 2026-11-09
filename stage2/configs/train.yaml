@@ -38,6 +38,9 @@ adv:                      # 出力側 D（2026-11-09 ブランチ 023、研究�
   lr_d: 0.0001            # D の Adam lr（β 0.5, 0.999）
   ndf: 64                 # 70×70 PatchGAN の基本チャネル数
 
+ema:                      # G の重みの指数移動平均（2026-11-09 ブランチ 024。GAN 項で epoch ごとに出力が振れる対策。学習は変えず、評価・保存に平均した重みを使う）
+  decay: 0.0              # 0.0 = 無し。例 0.999（直近 ≈ 1,000 step の平均、1 epoch は 4,000 step）。val / best / net_G.pth は EMA、学習中の重みは net_G_raw.pth に別保存
+
 log:
   print_freq: 100               # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）
   image_freq: 500                # TensorBoard に学習中の 128 patch グリッドを出す間隔（step。batch 16 なら 1 epoch = 4,000 step → 8 回/epoch）。Stage 1 と同じ仕組み（2026-09-09）
