@@ -71,11 +71,16 @@ def setup():
 def wait(timeout, poll):
     r = repo()
     tok = discord_token()
-    chat = chat_config()
-    try:   # 初回はここで既読位置を決める（過去のメッセージで起きない）。Discord が落ちていても git の監視は続ける
-        chat_state(r, tok, chat)
-    except (WatchError, OSError) as e:
-        print(f"[watch] Discord の確認に失敗（git の監視は続行）: {one_line(str(e))}", flush=True)
+    chats = [chat_config()]
+    try:   # #watch-ideas（議論用）は設定があれば一緒に見る
+        chats.append(chat_config("ideas"))
+    except WatchError:
+        pass
+    for chat in chats:
+        try:   # 初回はここで既読位置を決める（過去のメッセージで起きない）。Discord が落ちていても git の監視は続ける
+            chat_state(r, tok, chat)
+        except (WatchError, OSError) as e:
+            print(f"[watch] Discord の確認に失敗（git の監視は続行）: {one_line(str(e))}", flush=True)
     base = r.head()
     t0 = time.time()
     last_git = 0.0
@@ -95,16 +100,17 @@ def wait(timeout, poll):
             if any(not x.startswith("status/") for x in paths):
                 print(f"[watch] 更新あり（{(base or '')[:8]} → {sha[:8]}）。sync してください")
                 return
-        # git とは別に、#watch-chat に研究者の新しいメッセージが来たら起きる（status/ だけの git 更新で起きない規則はそのまま）
-        try:
-            msgs, _ = chat_fetch(r, tok, chat)
-        except (WatchError, OSError) as e:   # URLError・timeout は OSError。Discord の一時的な障害で監視を止めない
-            print(f"[watch] Discord の確認に失敗（続行）: {one_line(str(e))}", flush=True)
-            msgs = []
-        if msgs:
-            chat_check_content(msgs)
-            print(f"[watch] Discord #watch-chat に新しいメッセージ（{len(msgs)} 件）。chat-inbox で読んでください")
-            return
+        # git とは別に、#watch-chat / #watch-ideas に研究者の新しいメッセージが来たら起きる（status/ だけの git 更新で起きない規則はそのまま）
+        for chat in chats:
+            try:
+                msgs, _ = chat_fetch(r, tok, chat)
+            except (WatchError, OSError) as e:   # URLError・timeout は OSError。Discord の一時的な障害で監視を止めない
+                print(f"[watch] Discord の確認に失敗（続行）: {one_line(str(e))}", flush=True)
+                msgs = []
+            if msgs:
+                chat_check_content(msgs)
+                print(f"[watch] Discord {chat['name']} に新しいメッセージ（{len(msgs)} 件）。{chat['kind']}-inbox で読んでください")
+                return
         time.sleep(CHAT_POLL_S)
     print(f"[watch] {timeout} 秒、更新なし（定期確認として status を見てください）")
 
@@ -181,20 +187,24 @@ def sync():
 
 # ---------------------------------------------------------------- chat（#watch-chat。研究者が外出先から Discord でホストと会話する）
 
-def chat_config():
+CHAT_KINDS = {"chat": "#watch-chat", "ideas": "#watch-ideas"}   # 研究者と話すチャンネル。ideas = 手法・方針の議論用（2026-11-09）
+
+
+def chat_config(kind="chat"):
     d = need(shared_config(), "discord", str(SHARED_CONFIG))
-    return {"channel": need(d, "chat_channel_id", f"{SHARED_CONFIG} の discord（mac.py setup-chat で作る）"),
+    return {"kind": kind, "name": CHAT_KINDS[kind],
+            "channel": need(d, f"{kind}_channel_id", f"{SHARED_CONFIG} の discord（mac.py setup-chat / setup-ideas で作る）"),
             "user": need(d, "call_user_id", f"{SHARED_CONFIG} の discord")}
 
 
 def chat_state(r, tok, chat):
     """既読位置（最後に見たメッセージ id）。無ければ今の最新を既読にする（過去の会話を新着として扱わない）。"""
-    st = r.read_state("chat")
+    st = r.read_state(chat.get("kind", "chat"))
     if st.get("channel") != chat["channel"]:
         latest = discord_api("GET", f"/channels/{chat['channel']}/messages?limit=1", tok)
         st = {"channel": chat["channel"], "last_seen": latest[0]["id"] if latest else "0", "at": now_iso()}
-        r.write_state("chat", st)
-        print(f"[watch] #watch-chat の既読位置を初期化しました（{st['last_seen']}）", flush=True)
+        r.write_state(chat.get("kind", "chat"), st)
+        print(f"[watch] {chat.get('name', '#watch-chat')} の既読位置を初期化しました（{st['last_seen']}）", flush=True)
     return st
 
 
@@ -222,25 +232,25 @@ def chat_check_content(msgs):
                          "Privileged Gateway Intents の Message Content Intent を有効にしてください")
 
 
-def chat_inbox():
+def chat_inbox(kind="chat"):
     r = repo()
     tok = discord_token()
-    chat = chat_config()
+    chat = chat_config(kind)
     msgs, top = chat_fetch(r, tok, chat)
     chat_check_content(msgs)   # 本文が読めないうちは既読にしない
     if not msgs:
-        print("[watch] #watch-chat に未読はありません")
+        print(f"[watch] {chat['name']} に未読はありません")
     for m in msgs:
         at = m["timestamp"][:19].replace("T", " ")
         files = [a["filename"] for a in m.get("attachments", [])]
         print(f"\n## {at} UTC（{m['id']}）\n{m.get('content', '')}" + (f"\n  添付（開いていない）: {', '.join(files)}" if files else ""))
-    st = r.read_state("chat")
+    st = r.read_state(kind)
     st.update({"last_seen": top, "at": now_iso()})
-    r.write_state("chat", st)
+    r.write_state(kind, st)
 
 
-def chat_send(text, files):
-    """#watch-chat に返事する。長い本文は行で分けて最大 3 通、それを超えるなら全文を md にして添付する。"""
+def chat_send(text, files, kind="chat"):
+    """#watch-chat（kind=ideas なら #watch-ideas）に返事する。長い本文は行で分けて最大 3 通、それを超えるなら全文を md にして添付する。"""
     chunks, cur = [], ""
     for line in text.splitlines(keepends=True):
         while len(line) > DISCORD_MAX:   # 1 行が長すぎるときはそのまま切る
@@ -265,7 +275,28 @@ def chat_send(text, files):
         chunks = [one_line(text, 200) + "\n（長いので全文を md で添付します）"]
         files.append(str(full))
     for i, c in enumerate(chunks or [""]):
-        discord_post("chat", c, files=files if i == len(chunks or [""]) - 1 else None)
+        discord_post(kind, c, files=files if i == len(chunks or [""]) - 1 else None)
+
+
+def setup_ideas():
+    """#watch-ideas（手法・方針の議論用）を作って config に入れる。setup_chat と同じ作り。"""
+    cfg = shared_config()
+    d = need(cfg, "discord", str(SHARED_CONFIG))
+    if d.get("ideas_channel_id"):
+        print(f"[watch] #watch-ideas は設定済みです（{d['ideas_channel_id']}）")
+        return
+    tok = discord_token()
+    name = "watch-ideas"
+    chans = discord_api("GET", f"/guilds/{need(d, 'guild_id', 'discord')}/channels", tok)
+    cat = next((c for c in chans if c["type"] == 4 and c["name"] == d.get("category")), None)
+    ch = next((c for c in chans if c["type"] == 0 and c["name"] == name), None)
+    if ch is None:
+        ch = discord_api("POST", f"/guilds/{d['guild_id']}/channels", tok,
+                         {"name": name, "type": 0, "parent_id": cat["id"] if cat else None,
+                          "topic": "手法・方針の議論（Mac の Claude と研究者）。監視の報告は #watch-log / #watch-call、運用の会話は #watch-chat"})
+    d["ideas_channel_name"], d["ideas_channel_id"] = name, ch["id"]
+    SHARED_CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"[watch] #watch-ideas を用意しました（{ch['id']}）。watch/config.json を commit してください")
 
 
 def setup_chat():
@@ -393,6 +424,11 @@ def main():
         s.add_argument("--file", action="append", default=[])
     sub.add_parser("setup-chat")
     sub.add_parser("chat-inbox")
+    sub.add_parser("ideas-inbox")
+    sub.add_parser("setup-ideas")
+    s = sub.add_parser("ideas")
+    s.add_argument("text", nargs="?", default="")
+    s.add_argument("--file", action="append", default=[])
     s = sub.add_parser("chat")
     s.add_argument("text")
     s.add_argument("--file", action="append", default=[])
@@ -416,6 +452,12 @@ def main():
             discord_post(a.cmd, ("[Mac] " if a.cmd == "log" else "") + a.text, files=a.file, mention=(a.cmd == "call"))
         elif a.cmd == "setup-chat":
             setup_chat()
+        elif a.cmd == "ideas-inbox":
+            chat_inbox("ideas")
+        elif a.cmd == "setup-ideas":
+            setup_ideas()
+        elif a.cmd == "ideas":
+            chat_send(a.text, a.file, "ideas")
         elif a.cmd == "chat-inbox":
             chat_inbox()
         elif a.cmd == "chat":
