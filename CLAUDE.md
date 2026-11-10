@@ -26,11 +26,11 @@
 ## リポジトリの構成（2026-11-11 整理）
 
 - `stage1/`（直下）: **新しい Stage 1（描き手 P）の実装**（ブランチ `028-f_main-redraw_create`）。起動は `bash start.sh [マシン名] [build|shell|down|tb|generate] [resume <run> [tag]] [best <run> <tag>] [--flag value]`、設定は `stage1/configs/{train,model,generate}.yaml` + `configs/shared.yaml`（正は `stage1/configs/schema.py`）、説明 `stage1/README.md`、式の出典と設計書からの差分 `stage1/UPSTREAM.md`。学習結果は `runs/stage1/<run>/`（`machines.yaml` の `painter_checkpoints_dir`）、疑似 EID は `pseudo_eid_dir`
-- `stage2/`（直下）: 新しい Stage 2（未実装）。学習結果の置き場は `runs/stage2/`（`flow_checkpoints_dir`。コンテナ内 `/workspace/runs/...`、git 管理外）
+- `stage2/`（直下）: **新しい Stage 2（U = 形を決める回帰 + V = 質感を作るフロー）の実装**（同じブランチ）。起動は `bash start2.sh [マシン名] [u|v|infer|check|tb|shell|down|build] [resume <u|v> <run> [tag]] [best <u|v> <run> <tag>] [--flag value]`、設定は `stage2/configs/{data,u,v,infer,check}.yaml` + `configs/shared.yaml`（正は `stage2/configs/schema.py`）、説明 `stage2/README.md`、式の出典と設計書からの差分 `stage2/UPSTREAM.md`。学習結果は `runs/stage2/u/<run>/`・`runs/stage2/v/<run>/`（`machines.yaml` の `flow_checkpoints_dir`。コンテナ内 `/workspace/runs/...`、git 管理外）、推論の出力は `outputs/stage2/`
 - `old/`: 2026-11-11 以前の実装（旧 Stage 1 / Stage 2 / ablation と起動 sh）。説明は `old/README.md`。起動は `bash old/start.sh` / `bash old/start2.sh` / `bash old/start_ablation.sh`。旧コードの学習結果・出力も `old/` 配下（`old/stage1/checkpoints`・`old/stage2/checkpoints`・`old/ablation/checkpoints`・`old/output`。`configs/machines.yaml` の `*checkpoints_dir`）
 - 共有: `configs/`（`machines.yaml` = マシン定義、`shared.yaml` = 両 Stage で共有する値、`eval_only.yaml` = 評価専用症例、`splits/`）、`docker/`（世代別 compose / Dockerfile。リポジトリは `/workspace` にマウント）、`create_dataset/`
 - 監視: `watch/`（train-watch。説明は `watch/README.md`）
-- 直下の `start.sh` は新しい Stage 1 の起動口（Stage 2 の起動口は別に作る）
+- 直下の `start.sh` は新しい Stage 1 の起動口、`start2.sh` は新しい Stage 2 の起動口
 
 ## 実装の決まり
 
