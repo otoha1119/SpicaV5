@@ -1,0 +1,12 @@
+# stage1/configs/model.yaml — 描き手 P のネットワーク（設計書 C-1・C-2）。唯一の正は configs/schema.py の MODEL。再開で変えられない。
+# 畳み込みだけの U-Net（注意機構なし・位置の符号なし。パッチ 256 で学び 512 全体で描くため）。
+base_ch: 96
+ch_mult: [1, 2, 3, 4]      # 96 / 192 / 288 / 384。解像度は画素の 1/2・1/4・1/8・1/16
+blocks_per_level: 2        # 下り 2 個、上り 3 個（skip を連結）
+mid_blocks: 2
+groups: 32                 # GroupNorm
+emb_dim: 384               # 度合い（σ・σ_b・σ_c・手がかりの有無）の埋め込み
+emb_freqs: 32              # 各スカラーを sin / cos 64 次元に
+emb_freq_min: 0.25
+emb_freq_max: 64.0
+fold: haar1                # 入口と出口だけ Haar 1 段（512×512×1 ↔ 256×256×4）

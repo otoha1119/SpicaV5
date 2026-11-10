@@ -1,0 +1,88 @@
+# stage1/configs/train.yaml — 新 Stage 1（描き手 P）の学習パラメータ。唯一の正は configs/schema.py の TRAIN（キーの欠落・未知・型違いはエラー）。既定値は無い。
+# 設計: docs/plans/20261111_detail_design/stage1_painter_spec.md。値は「練習する幅の端」「初期値」で、実測値に合わせた的ではない。
+# 書き方: 小数は必ず点を付ける。真偽値は true / false。run 名はここに書かない（起動時刻 yyyy_mmdd_HHMM）。
+
+optim:
+  lr: 0.0002               # AdamW。発散したら 0.0001（設計書 G-1）
+  beta1: 0.9
+  beta2: 0.999
+  weight_decay: 0.0
+  warmup_steps: 2000       # 0 から直線で上げ、その後は一定
+  batch_size: 32           # パッチ 256 × 32（1 スライスから 4 個 → 8 スライス）
+  grad_clip: 1.0
+  ema_decay: 0.9999        # 序盤は min(0.9999, (1 + n) / (10 + n))。描画・val は常に EMA
+  precision: bf16          # 学習の U-Net 本体だけ CUDA autocast。入口・出口・損失・埋め込みは FP32（設計書 C-4）。fp32 で切れる
+  compile: true            # 学習の U-Net 本体を torch.compile。false で切れる
+  compile_mode: max-autotune   # 落ちたら default に下げる（--compile_mode default）
+  compile_after_steps: 20  # 最初の 20 step は compile せずに回して scalar をすぐ出す。21 step 目に compile（初回は数分）
+  channels_last: true
+  fp32_top_level: false    # diag/bf16_val_ratio/bin0 が 1.2 を超えるなら true（最上段を FP32）
+  max_steps: 250000        # 36 時間と早いほうで止まり、latest を保存して正常終了
+  max_hours: 36.0          # 再開をまたいだ累計
+  seed: 1234
+
+data:
+  patch_size: 256
+  margin: 32               # スライスを reflect で 32 広げ、320 を切って GPU へ。ぼかしてから中央 256 を使う
+  patches_per_slice: 4
+  hu_offset: 1400          # stored = HU + 1400
+  hu_min: -1400
+  hu_max: 4096
+  hu_scale: 1000.0         # x = HU ÷ 1000
+  split_file: configs/splits/eid_v5.yaml   # train だけで学習、val は損失の監視、test は読まない（log.eid_slices の表示だけ例外）
+  unlisted_cases: train    # 分割ファイルに無い症例は学習に入れる（数を表示して dataset_info.yaml に記録）。評価専用（configs/eval_only.yaml）は常に除外
+  stats_patches: 2000      # 最初の 2,000 パッチで x の平均・標準偏差を測って記録（確認用）
+
+cue:                       # 手がかり = Gaussian ぼかし(元の絵, σ_b) + σ_c × 白色ノイズ。サンプルごとに独立にくじ（設計書 E-2）
+  drop_prob: 0.10          # 手がかりを隠す
+  blur_zero_prob: 0.15     # σ_b = 0
+  blur_min_px: 0.5         # 残りは [0.5, 8] 画素を対数一様
+  blur_max_px: 8.0
+  noise_zero_prob: 0.15    # σ_c = 0
+  noise_min_hu: 5.0        # 残りは [5, 400] HU を対数一様
+  noise_max_hu: 400.0
+
+diffusion:                 # EDM 型（Karras et al. 2022）。式の出典は stage1/UPSTREAM.md
+  sigma_min: 0.002         # 2 HU 相当
+  sigma_max: 40.0          # 40,000 HU 相当
+  sigma_data: 0.5
+  sigma_sampling: loguniform
+
+sample:                    # 学習中の途中経過の描画（本番は generate.yaml）
+  steps: 40
+  eta: 1.0
+  rho: 7.0
+  precision: bf16
+
+log:
+  print_steps: 100
+  steps_per_epoch: 10000
+  train_patch_steps: 500
+  n_train_patches: 4
+  val_steps: 2000
+  val_patches: 96
+  val_seed: 0
+  preview_steps: 2000
+  preview_first_step: 200  # 起動して 200 step 目に 1 回、val・パネル・latest の保存を通す（配線の確認）
+  save_latest_steps: 5000
+  save_weights_steps: 25000
+  # 途中経過のパネルに使うスライス。コンテナ内の絶対パスの一覧。無いファイルがあれば起動前にエラー（--eid_slices a,b で差し替え）。
+  # 実 EID の 1 つ目が基準（diag/check_redraw_*、参照列、拡大）。学習に使う症例（分割の train 側）は置けない
+  eid_slices:
+    - /workspace/DataSet/EID_v5/EID-049/EID-049-079.png                 # ImageCAS（test 側）
+    - /workspace/DataSet/DataSet_new/EID/EID-1021/EID-1021-038.png      # 病院 EID（評価専用。並べて見るだけ）
+  pcd_slices:
+    - /workspace/DataSet/PCD512_v2/PCD-002/PCD-002-236.png
+  preview_cues: ["2:0", "0:150", "2:50"]                        # σ_b（画素）:σ_c（HU）
+  preview_seed: 0
+  nocue_n: 4
+  zoom_size: 72
+  zoom_scale: 4
+  eid_zoom_x: 327          # 旧 crop.yaml の case 1
+  eid_zoom_y: 188
+  pcd_zoom_x: 266
+  pcd_zoom_y: 222
+  diff_range_hu: 100.0
+  display_hu_min: -1400
+  display_hu_max: 3000
+  check_highpass_px: 2.0

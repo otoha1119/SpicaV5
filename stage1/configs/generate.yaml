@@ -1,0 +1,28 @@
+# stage1/configs/generate.yaml — 疑似 EID の作成（PCD512 →）・実 EID の描き直し（bash start.sh generate → run_generate.py）。唯一の正は configs/schema.py の GENERATE。
+# 出力: <pseudo_eid_dir>/<組>/k00, k01, …/<症例>/<スライス>.png（512、1ch 16bit、stored = HU + 1400）と <組>/manifest.yaml。
+# 組の名前 = <run>_step<N>_b<σ_b>_c<σ_c>_a<σ_a>[_<name_suffix>]。既にある組には書かない（エラー）。
+# ネットワーク・拡散の設定は run の重み（state.pth）の実効設定から、明るさを平均する広さ σ_a は configs/shared.yaml の brightness.sigma_px_512（このときだけ別の値を試すなら --brightness_sigma_px_512 8。使った値は manifest.yaml に残る）。
+generate:
+  run: ""                  # --run <run 名> で渡す
+  tag: latest              # latest | best | step 番号
+  input_dir: ""            # 空 = machines.yaml の pcd_dir。実 EID の描き直しは --input_dir /workspace/DataSet/EID_v5
+  cases: []                # [] = 全症例（評価専用も除外しない）。--cases PCD-001,PCD-002
+  k: 2                     # 1 枚につき何通り（k00, k01）
+  seed: 1234               # base_seed（manifest に記録）
+  slice_step: 1            # スライスの間引き（2 = 1 枚おき）。確認用に絞る例: --cases PCD-002 --slice_step 4
+  max_slices: 0            # 症例ごとの上限（0 = 全部）
+  name_suffix: ""
+
+cue:
+  blur_px: 2.0             # σ_b（画素）。設計書 F-5 の 9 点から選ぶ
+  noise_hu: 50.0           # σ_c（HU）
+  use: true                # false = 手がかり無し（診断用）
+
+sample:
+  steps: 40
+  eta: 1.0
+  rho: 7.0
+  batch: 8
+  precision: bf16
+  compile: false           # 大量に作るときだけ true（batch 固定、端数は詰め物）
+  compile_mode: max-autotune
