@@ -14,19 +14,21 @@ Photon-counting CT（PCD-CT）と従来型 CT（EID-CT）の画像を扱う研�
 
 | 場所 | 内容 |
 |---|---|
-| `stage1/` `stage2/` | **新しい実装**。ブランチ `028-f_main-redraw_create` で実装中（main にはまだ無い） |
+| `stage1/` | **新しい Stage 1（描き手 P: 実 EID だけで学ぶ拡散モデル）**。ブランチ `028-f_main-redraw_create` で実装（設定 `stage1/configs/`、説明 `stage1/README.md`、式の出典 `stage1/UPSTREAM.md`） |
+| `stage2/` | 新しい Stage 2（未実装。同じブランチで実装する） |
 | `runs/` | 新しい学習結果の置き場（`runs/stage1/`・`runs/stage2/`、コンテナ内 `/workspace/runs/...`。git 管理外） |
 | `old/` | 2026-11-11 以前の実装: `old/stage1/`（FE-GAN、junyanz 基盤）、`old/stage2/`（U-Net 回帰）、`old/ablation/`（SRCycleGAN / CycleGAN）と起動 sh。説明は `old/README.md`、詳しい仕様は `old/README_main_20261111.md`。学習結果・推論出力も `old/` 配下（`old/stage1/checkpoints`・`old/stage2/checkpoints`・`old/ablation/checkpoints`・`old/output`、git 管理外） |
-| `configs/` | 共有の設定: `machines.yaml`（マシン定義: GPU 世代、データのパス、学習結果の置き場、TensorBoard のポート）、`eval_only.yaml`（評価専用症例）、`splits/`（症例分割） |
+| `configs/` | 共有の設定: `machines.yaml`（マシン定義: GPU 世代、データのパス、学習結果の置き場、TensorBoard のポート）、`shared.yaml`（両 Stage で共有する値: 明るさを平均する広さ）、`eval_only.yaml`（評価専用症例）、`splits/`（症例分割） |
 | `docker/` | 世代別の compose / Dockerfile / requirements（gen30 = RTX 30・40 系、gen50 = RTX 50 系、cpu = mac）。コンテナ名 `spicav5`、リポジトリは `/workspace` にマウント |
 | `create_dataset/` | PCD1024 データの変換・照合スクリプト |
 | `watch/` | 学習の監視（train-watch。`watch/README.md`） |
 | `skills/` | research-skills |
-| `start.sh` | 案内だけ（実行すると旧版の起動方法を表示して終了コード 1）。新しい起動口は 028 ブランチで作る |
+| `start.sh` | 新しい Stage 1 の起動口（学習 / resume / generate / best / tb / build / shell / down）。Stage 2 の起動口は別に作る |
 
 ## 3. 起動
 
-- 新しい Stage 1 / Stage 2: ブランチ `028-f_main-redraw_create` で実装中
+- 新しい Stage 1: `bash start.sh [マシン名] [build|shell|down|tb|generate] [resume <run> [tag]] [best <run> <tag>] [--flag value]`（サブコマンド無し = 学習。学習結果は `runs/stage1/<run>/`、疑似 EID は `machines.yaml` の `pseudo_eid_dir`。詳しくは `stage1/README.md`）
+- 新しい Stage 2: 未実装
 - 旧版（リポジトリ直下から、ホストのシェルで）:
   - `bash old/start.sh [マシン名] [build|shell|down|tb|infer|crop|split|chain] [resume <run> [tag]] [best <run> <epoch>] [--flag value]`（旧 Stage 1）
   - `bash old/start2.sh [マシン名] [dataset|infer|tb|build|shell|down] ...`（旧 Stage 2）
