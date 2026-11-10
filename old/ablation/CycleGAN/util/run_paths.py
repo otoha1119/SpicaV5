@@ -112,8 +112,8 @@ INFER_STAMP_FORMAT = "%Y_%m%d_%H%M%S"
 
 
 def repo_root():
-    """リポジトリ直下（このファイルは <repo>/ablation/CycleGAN/util/run_paths.py）。コンテナでは /workspace。"""
-    return Path(__file__).resolve().parents[3]
+    """リポジトリ直下（このファイルは <repo>/old/ablation/CycleGAN/util/run_paths.py）。コンテナでは /workspace。"""
+    return Path(__file__).resolve().parents[4]
 
 
 def output_root(root=None):

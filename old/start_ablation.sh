@@ -5,7 +5,7 @@
 #   OS 共通。リポジトリ直下でホストのシェルから実行する。コンテナ内では動かない（/.dockerenv があれば即エラー）。
 #
 # ■ 引数の規則
-#   bash start_ablation.sh [マシン名] <アブレーション名> [infer|build|shell|down|tb] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
+#   bash old/start_ablation.sh [マシン名] <アブレーション名> [infer|build|shell|down|tb] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
 #   ・--flag より前の単語を読む。順不同。infer / build / shell / down / tb / resume / best はサブコマンド。
 #     それ以外の単語は、ablation/ 直下にそのディレクトリ（train.sh 入り）があれば「アブレーション名」、無ければ「マシン名」（sh 内の MACHINE より優先）。
 #     アブレーション名は shell / down / build 以外では必須（無ければ候補を出してエラー）。マシン名を 2 つ渡すとエラー。
@@ -20,23 +20,23 @@
 #   ・コンテナが起動済みなら、どのアクションでも up を呼ばず exec だけ。build は起動済みなら拒否。compose を変えたら中の処理が終わってから down → 起動し直す。
 #
 # ■ アブレーションを増やすとき
-#   ablation/<新しい名前>/ に train.sh / infer.sh / mark_best.py（と configs/ 以下）を同じ契約で置けば、このファイルは変えずに bash start_ablation.sh <マシン> <新しい名前> で動く。
+#   ablation/<新しい名前>/ に train.sh / infer.sh / mark_best.py（と configs/ 以下）を同じ契約で置けば、このファイルは変えずに bash old/start_ablation.sh <マシン> <新しい名前> で動く。
 #   一覧と目的は ablation/README.md に 1 行足す。
 #
 # ■ 例
-#   bash start_ablation.sh PC3 SRCycleGAN                       # 学習（論文の設定: batch 4、lr 1e-5、100 + 100 epoch）
-#   bash start_ablation.sh PC3 SRCycleGAN --n_epochs 50 --n_epochs_decay 50
-#   bash start_ablation.sh PC3 SRCycleGAN resume 2026_1027_1200 # latest から再開
-#   bash start_ablation.sh PC3 SRCycleGAN infer --max_slices 4 --save_panel true
-#   bash start_ablation.sh PC3 SRCycleGAN best 2026_1027_1200 120
-#   bash start_ablation.sh PC3 SRCycleGAN tb
-#   bash start_ablation.sh PC3 shell
+#   bash old/start_ablation.sh PC3 SRCycleGAN                       # 学習（論文の設定: batch 4、lr 1e-5、100 + 100 epoch）
+#   bash old/start_ablation.sh PC3 SRCycleGAN --n_epochs 50 --n_epochs_decay 50
+#   bash old/start_ablation.sh PC3 SRCycleGAN resume 2026_1027_1200 # latest から再開
+#   bash old/start_ablation.sh PC3 SRCycleGAN infer --max_slices 4 --save_panel true
+#   bash old/start_ablation.sh PC3 SRCycleGAN best 2026_1027_1200 120
+#   bash old/start_ablation.sh PC3 SRCycleGAN tb
+#   bash old/start_ablation.sh PC3 shell
 # =============================================================================
 set -euo pipefail
 
 # --- ホスト専用。コンテナ内で叩かれたら docker が無いので即エラー ---
 if [ -f /.dockerenv ]; then
-  echo "[start_ablation] start_ablation.sh はホスト側で実行するスクリプトです（コンテナ内には docker がありません）。コンテナ内で使うのは bash ablation/<名前>/train.sh / infer.sh です" >&2
+  echo "[start_ablation] start_ablation.sh はホスト側で実行するスクリプトです（コンテナ内には docker がありません）。コンテナ内で使うのは bash old/ablation/<名前>/train.sh / infer.sh です" >&2
   exit 2
 fi
 
@@ -55,7 +55,7 @@ exec_it() {  # 対話 exec。Windows では winpty か -T を付ける。引数�
 MACHINE="PC2"          # configs/machines.yaml のエントリ名（PC1 / PC2 / mac / ...）
 # =========================================
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"   # リポジトリ直下（このファイルは <repo>/old/ にある。2026-11-11 に old/ へ移動）
 MACHINES="$ROOT/configs/machines.yaml"
 
 # --- 引数: --flag より前の単語を読む。build / shell / down / tb / train / infer / resume / best はサブコマンド、ablation/ にあるディレクトリ名はアブレーション名、それ以外はマシン名 ---
@@ -70,16 +70,16 @@ while [ $# -gt 0 ]; do
     infer)   ACTION=infer; shift ;;
     resume)
       shift
-      [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start_ablation] resume には run 名が必要です: bash start_ablation.sh resume yyyy_mmdd_HHMM [latest|best|<epoch>]" >&2; exit 2; }
+      [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start_ablation] resume には run 名が必要です: bash old/start_ablation.sh resume yyyy_mmdd_HHMM [latest|best|<epoch>]" >&2; exit 2; }
       RESUME="$1"; shift
       if [ $# -gt 0 ] && [[ "$1" =~ ^([0-9]+|latest|best)$ ]]; then RESUME_TAG="$1"; shift; fi ;;
     best)
       shift
-      [ $# -ge 2 ] && [[ "$1" != --* ]] && [[ "$2" =~ ^[0-9]+$ ]] || { echo "[start_ablation] best には run 名と epoch 番号が必要です: bash start_ablation.sh best yyyy_mmdd_HHMM <epoch>" >&2; exit 2; }
+      [ $# -ge 2 ] && [[ "$1" != --* ]] && [[ "$2" =~ ^[0-9]+$ ]] || { echo "[start_ablation] best には run 名と epoch 番号が必要です: bash old/start_ablation.sh best yyyy_mmdd_HHMM <epoch>" >&2; exit 2; }
       ACTION=best; BEST_RUN="$1"; BEST_EPOCH="$2"; shift 2 ;;
     --*)     break ;;
     *)
-      if [ -d "$ROOT/ablation/$1" ] && [ -f "$ROOT/ablation/$1/train.sh" ]; then
+      if [ -d "$ROOT/old/ablation/$1" ] && [ -f "$ROOT/old/ablation/$1/train.sh" ]; then
         if [ -n "$ABLATION" ]; then echo "[start_ablation] アブレーション名が 2 つ指定されています: $ABLATION, $1" >&2; exit 2; fi
         ABLATION="$1"; shift; continue
       fi
@@ -99,7 +99,7 @@ case "$ACTION" in
   shell|down|build) ;;
   *)
     if [ -z "$ABLATION" ]; then
-      echo "[start_ablation] アブレーション名を指定してください（ablation/ 直下のディレクトリ名）。候補: $(ls -d "$ROOT"/ablation/*/ 2>/dev/null | xargs -n1 basename | grep -v '^checkpoints$' | tr '\n' ' ')" >&2; exit 2
+      echo "[start_ablation] アブレーション名を指定してください（ablation/ 直下のディレクトリ名）。候補: $(ls -d "$ROOT"/old/ablation/*/ 2>/dev/null | xargs -n1 basename | grep -v '^checkpoints$' | tr '\n' ' ')" >&2; exit 2
     fi ;;
 esac
 
@@ -160,11 +160,11 @@ check_container() {  # 起動済みコンテナが今回の指定（マシン名
   image=$(docker inspect -f '{{.Config.Image}}' spicav5 2>/dev/null)
   mount_src=$(docker inspect -f "{{range .Mounts}}{{if eq .Destination \"$CONTAINER_DATA_ROOT\"}}{{.Source}}{{end}}{{end}}" spicav5 2>/dev/null)
   if [ "$env_machine" != "$MACHINE" ]; then
-    echo "[start_ablation] 起動中のコンテナ spicav5 はマシン '$env_machine' で作られています（今回の指定は '$MACHINE'）。マウントも作成時のままなので、中の処理が終わってから bash start_ablation.sh down → 起動し直してください" >&2
+    echo "[start_ablation] 起動中のコンテナ spicav5 はマシン '$env_machine' で作られています（今回の指定は '$MACHINE'）。マウントも作成時のままなので、中の処理が終わってから bash old/start_ablation.sh down → 起動し直してください" >&2
     exit 2
   fi
   if [ "$image" != "spicav5-$GEN" ]; then
-    echo "[start_ablation] 起動中のコンテナ spicav5 のイメージは '$image' です（今回の指定 gpu_gen=$GPU_GEN → spicav5-$GEN）。中の処理が終わってから bash start_ablation.sh down → 起動し直してください" >&2
+    echo "[start_ablation] 起動中のコンテナ spicav5 のイメージは '$image' です（今回の指定 gpu_gen=$GPU_GEN → spicav5-$GEN）。中の処理が終わってから bash old/start_ablation.sh down → 起動し直してください" >&2
     exit 2
   fi
   host_real=$(cd "$HOST_DATA_ROOT" 2>/dev/null && pwd -P)
@@ -175,20 +175,20 @@ check_container() {  # 起動済みコンテナが今回の指定（マシン名
 port_published() { [ -n "$(docker port spicav5 "$1" 2>/dev/null)" ]; }
 if container_running; then
   if [ "$ACTION" = build ]; then
-    echo "[start_ablation] コンテナ spicav5 は起動済みです（Stage 1 / Stage 2 の学習中かもしれません）。build はコンテナを作り直すので、中の処理が終わってから bash start_ablation.sh down → bash start_ablation.sh build の順で実行してください" >&2
+    echo "[start_ablation] コンテナ spicav5 は起動済みです（Stage 1 / Stage 2 の学習中かもしれません）。build はコンテナを作り直すので、中の処理が終わってから bash old/start_ablation.sh down → bash old/start_ablation.sh build の順で実行してください" >&2
     exit 2
   fi
   check_container
   echo "[start_ablation] コンテナ spicav5 は起動済み（中の処理は触らない。マシン名・イメージは今回の指定と一致）。up は呼ばず exec だけ行う"
   if ! port_published "$TB_PORT_ABLATION"; then
-    echo "[start_ablation] 注意: 起動中のコンテナはポート $TB_PORT_ABLATION を公開していません（compose の設定を変えた後に down していない）。処理は動くが TensorBoard はホストから見えない。中の処理が終わってから bash start_ablation.sh down → 起動し直してください"
+    echo "[start_ablation] 注意: 起動中のコンテナはポート $TB_PORT_ABLATION を公開していません（compose の設定を変えた後に down していない）。処理は動くが TensorBoard はホストから見えない。中の処理が終わってから bash old/start_ablation.sh down → 起動し直してください"
   fi
 else
   "${COMPOSE[@]}" up -d $BUILD
   "${COMPOSE[@]}" exec -T spicav5 python -c "import torch; print('[start_ablation] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())"
 fi
 if [ "$ACTION" = build ]; then
-  echo "[start_ablation] ビルド完了。コンテナ spicav5 は起動したまま（学習: bash start_ablation.sh <マシン> <名前> / 停止: bash start_ablation.sh down）"
+  echo "[start_ablation] ビルド完了。コンテナ spicav5 は起動したまま（学習: bash old/start_ablation.sh <マシン> <名前> / 停止: bash old/start_ablation.sh down）"
   exit 0
 fi
 
@@ -229,7 +229,7 @@ open_when_ready() {  # バックグラウンド: 起動器が起動する run �
   local url="http://localhost:$TB_PORT_ABLATION"
   for _ in $(seq 1 120); do
     if curl -s -o /dev/null "$url"; then
-      echo "[start_ablation] TensorBoard: $url（この run だけ。全 run は bash start_ablation.sh tb）"
+      echo "[start_ablation] TensorBoard: $url（この run だけ。全 run は bash old/start_ablation.sh tb）"
       open_browser "$url" || echo "[start_ablation] ブラウザを自動で開けませんでした。$url を手で開いてください"
       return
     fi
@@ -241,14 +241,14 @@ open_when_ready() {  # バックグラウンド: 起動器が起動する run �
 case "$ACTION" in
   tb)      start_tensorboard ;;
   shell)   exec_it spicav5 bash ;;
-  infer)   exec_it spicav5 bash "ablation/$ABLATION/infer.sh" "$@" ;;
-  best)    exec_it spicav5 python "ablation/$ABLATION/mark_best.py" --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
+  infer)   exec_it spicav5 bash "old/ablation/$ABLATION/infer.sh" "$@" ;;
+  best)    exec_it spicav5 python "old/ablation/$ABLATION/mark_best.py" --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
   train)
     tb_kill
     if command -v curl >/dev/null 2>&1; then open_when_ready & fi
     if [ -n "$RESUME" ]; then
-      exec_it -e SPICA_TB_PORT="$TB_PORT_ABLATION" -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash "ablation/$ABLATION/train.sh" "$@"
+      exec_it -e SPICA_TB_PORT="$TB_PORT_ABLATION" -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash "old/ablation/$ABLATION/train.sh" "$@"
     else
-      exec_it -e SPICA_TB_PORT="$TB_PORT_ABLATION" spicav5 bash "ablation/$ABLATION/train.sh" "$@"
+      exec_it -e SPICA_TB_PORT="$TB_PORT_ABLATION" spicav5 bash "old/ablation/$ABLATION/train.sh" "$@"
     fi ;;
 esac

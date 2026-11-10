@@ -37,7 +37,7 @@ from util.run_paths import LAUNCH_FILE, ckpt_path, latest_launch, run_name, save
 # Stage 1 で固定の引数（チューニング対象ではないので設定ファイルには置かない）
 FIXED_ARGV = ["--model", "fidelity_gan", "--dataset_mode", "ct"]
 RESUME_ONLY_FLAGS = ("--continue_train", "--epoch_count")  # 再開の内部状態。sh からは上書きできない（run_train が決める）
-REPO_ROOT = HERE.parent  # sr.yaml の split_file の相対パスの基準（コンテナでは /workspace）
+REPO_ROOT = HERE.parents[1]  # <repo>（このファイルは <repo>/old/stage1/。2026-11-11 に old/ へ移動）。sr.yaml の split_file の相対パスの基準（コンテナでは /workspace）
 MANIFEST = "manifest.yaml"  # eid1024_dir の manifest（bash start2.sh dataset が書く。dataset.scale / interp / input_size）
 
 

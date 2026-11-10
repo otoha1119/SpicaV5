@@ -22,7 +22,7 @@ sys.path.insert(0, str(HERE))
 from configs.schema import MACHINE, TRAIN, ConfigError, apply_overrides, check_split, check_train_values, validate, validate_shared  # noqa: E402
 from util.run_paths import ABLATION, CKPT_KINDS, LAUNCH_FILE, checkpoints_root, ckpt_path, latest_launch, run_name, saved_tags  # noqa: E402
 
-REPO_ROOT = HERE.parents[1]  # <repo>（split_file の相対パスの基準。コンテナでは /workspace）
+REPO_ROOT = HERE.parents[2]  # <repo>（このファイルは <repo>/old/ablation/<名前>/。2026-11-11 に old/ へ移動）（split_file の相対パスの基準。コンテナでは /workspace）
 SHAPE_KEYS = ("network.scale", "network.n_blocks", "network.ngf", "network.ndf", "network.norm", "network.n_layers_D")  # 重みの形。再開で変えられない
 
 

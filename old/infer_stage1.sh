@@ -1,13 +1,13 @@
 #!/bin/bash
 # =============================================================================
 # Stage 1 (FE-GAN) 推論（症例丸ごと）の入口 — 取扱説明
-#   **Docker コンテナ内で実行する**。通常はホスト側の  bash start.sh infer [--flag value ...]  から自動で呼ばれる。
+#   **Docker コンテナ内で実行する**。通常はホスト側の  bash old/start.sh infer [--flag value ...]  から自動で呼ばれる。
 #   学習末尾のテストではなく、学習済みの重みで PNG フォルダを丸ごと EID-like に変換する「ちゃんとした推論」。
 #
 # ■ ここに書くもの（下の 4 変数。start.sh の MACHINE と同じ流儀。パスはコンテナ内から見えるもの）
 #   WEIGHT_DIR     重みディレクトリ = net_G.pth があるディレクトリ。次のどれか:
 #                    <checkpoints_dir>/<run>/latest            最後に保存したもの
-#                    <checkpoints_dir>/<run>/best              best_eNNN/ に解決される（採点で自動更新。bash start.sh best <run> <epoch> で手動上書き）
+#                    <checkpoints_dir>/<run>/best              best_eNNN/ に解決される（採点で自動更新。bash old/start.sh best <run> <epoch> で手動上書き）
 #                    <checkpoints_dir>/<run>/weights/epoch_NNN  epoch ごとの checkpoint
 #   INPUT_DIR      処理する PNG 群のフォルダ（uint16 1ch、stored = HU + 1400。直下に症例フォルダ PCD-nnn/、中に PCD-nnn-sss.png）。
 #                  machines.yaml の host_data_root → container_data_root のマウント配下（/workspace/DataSet/...）に置くこと
@@ -19,10 +19,10 @@
 #                  書く直前に参照 DICOM と入力 PNG を全画素で照合する（ズレていればエラー）。症例フォルダは単一 Series であること
 #
 # ■ コマンドで上書き（最優先）
-#   bash start.sh infer --weight_dir /workspace/stage1/checkpoints/2026_0907_1742/best --input_dir /workspace/DataSet/PCD512_v2
-#   bash start.sh infer --output_format both --dicom_dir /workspace/DataSet/photonCT/PhotonCT512_original
-#   bash start.sh infer --mode full --max_slices 4        # 方式の上書き。stage1/configs/schema.py の INFER にあるフラグだけ受け付ける
-#   bash start.sh infer --save_panel true --max_slices 1  # 学習中の目視確認用: 指定した重みで 1 枚だけパネル画像を出す（学習を止めない。input_dir は 1 枚だけのフォルダにするとさらに速い）
+#   bash old/start.sh infer --weight_dir /workspace/stage1/checkpoints/2026_0907_1742/best --input_dir /workspace/DataSet/PCD512_v2
+#   bash old/start.sh infer --output_format both --dicom_dir /workspace/DataSet/photonCT/PhotonCT512_original
+#   bash old/start.sh infer --mode full --max_slices 4        # 方式の上書き。stage1/configs/schema.py の INFER にあるフラグだけ受け付ける
+#   bash old/start.sh infer --save_panel true --max_slices 1  # 学習中の目視確認用: 指定した重みで 1 枚だけパネル画像を出す（学習を止めない。input_dir は 1 枚だけのフォルダにするとさらに速い）
 #
 # ■ 出力
 #   <リポジトリ直下>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻 yyyy_mmdd_HHMMSS>/   （実行ごとに別ディレクトリ。混ざらない。コンテナでは /workspace/output/）
@@ -35,7 +35,7 @@
 #
 # ■ デバイス
 #   machines.yaml の gpu_gen（start.sh から渡る SPICA_MACHINE のエントリ）で決まる: 0 → cpu、それ以外 → cuda（使えなければエラー。cpu に落とさない）。
-#   GPU の無いマシンで推論するときは gpu_gen: 0 のマシン定義で  bash start.sh <machine> infer  。
+#   GPU の無いマシンで推論するときは gpu_gen: 0 のマシン定義で  bash old/start.sh <machine> infer  。
 #
 # ■ 処理
 #   stage1/run_infer.py → infer.yaml / machines.yaml を schema.py で検証、WEIGHT_DIR の上の run の launch.yaml から G の構成を取り、
@@ -51,12 +51,12 @@ DICOM_DIR="/workspace/DataSet/photonCT/PhotonCT512_original"      # 元 DICOM �
 # =============================
 
 cd "$(dirname "$0")/stage1"
-MACHINE="${SPICA_MACHINE:?SPICA_MACHINE が未設定です。bash start.sh から起動するか、export SPICA_MACHINE=<machine> してください}"
+MACHINE="${SPICA_MACHINE:?SPICA_MACHINE が未設定です。bash old/start.sh から起動するか、export SPICA_MACHINE=<machine> してください}"
 python run_infer.py \
     --machine "$MACHINE" \
     --infer configs/infer.yaml \
     --train configs/train.yaml \
-    --machines ../configs/machines.yaml \
+    --machines ../../configs/machines.yaml \
     --weight_dir "$WEIGHT_DIR" \
     --input_dir "$INPUT_DIR" \
     --output_format "$OUTPUT_FORMAT" \

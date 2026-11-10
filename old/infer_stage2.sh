@@ -1,8 +1,8 @@
 #!/bin/bash
 # =============================================================================
 # Stage 2（U-Net）推論（フォルダ丸ごと）の入口 — 取扱説明
-#   **Docker コンテナ内で実行する**。通常はホスト側の  bash start2.sh infer [--flag value ...]  から自動で呼ばれる。
-#   学習済みの重みで PNG フォルダを丸ごと PCD-like1024 に変換する。入力は 1024（EID-like1024 = bash start2.sh dataset の出力）でも
+#   **Docker コンテナ内で実行する**。通常はホスト側の  bash old/start2.sh infer [--flag value ...]  から自動で呼ばれる。
+#   学習済みの重みで PNG フォルダを丸ごと PCD-like1024 に変換する。入力は 1024（EID-like1024 = bash old/start2.sh dataset の出力）でも
 #   512（実 EID = EID_v5、Stage 1 の推論出力 full/ など）でもよく、512 なら run の dataset_info.yaml に記録された方式（学習データ作成と同じ scale / interp）で
 #   1024 に補間してから通す（1 枚目の大きさで判定。混在・他の大きさはエラー）。
 #
@@ -13,9 +13,9 @@
 #                実 EID など教師の無い入力は --teacher false
 #
 # ■ コマンドで上書き（最優先）
-#   bash start2.sh infer --weight_dir /workspace/stage2/checkpoints/2026_0909_1200/best --input_dir /workspace/DataSet/EIDlike1024_v1
-#   bash start2.sh infer --max_slices 1 --save_panel true                                   # 1 枚だけ試す（stage2/configs/schema.py の INFER / MACHINE にあるフラグだけ受け付ける）
-#   bash start2.sh infer --input_dir /workspace/DataSet/EID_v5 --input eid --teacher false   # 実 EID512（補間してから通す。教師なし。パネルは 4・5 列目に入り 1〜3 列目は pcd_slice）
+#   bash old/start2.sh infer --weight_dir /workspace/stage2/checkpoints/2026_0909_1200/best --input_dir /workspace/DataSet/EIDlike1024_v1
+#   bash old/start2.sh infer --max_slices 1 --save_panel true                                   # 1 枚だけ試す（stage2/configs/schema.py の INFER / MACHINE にあるフラグだけ受け付ける）
+#   bash old/start2.sh infer --input_dir /workspace/DataSet/EID_v5 --input eid --teacher false   # 実 EID512（補間してから通す。教師なし。パネルは 4・5 列目に入り 1〜3 列目は pcd_slice）
 #
 # ■ 出力
 #   <リポジトリ直下>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻 yyyy_mmdd_HHMMSS>/   （実行ごとに別ディレクトリ。コンテナでは /workspace/output/。Stage 1 と同じ根）
@@ -43,12 +43,12 @@ INPUT_DIR="/workspace/DataSet/EIDlike1024_v1"           # 処理する PNG 群�
 # =============================
 
 cd "$(dirname "$0")/stage2"
-MACHINE="${SPICA_MACHINE:?SPICA_MACHINE が未設定です。bash start2.sh から起動するか、export SPICA_MACHINE=<machine> してください}"
+MACHINE="${SPICA_MACHINE:?SPICA_MACHINE が未設定です。bash old/start2.sh から起動するか、export SPICA_MACHINE=<machine> してください}"
 python run_infer.py \
     --machine "$MACHINE" \
     --infer configs/infer.yaml \
     --train configs/train.yaml \
-    --machines ../configs/machines.yaml \
+    --machines ../../configs/machines.yaml \
     --weight_dir "$WEIGHT_DIR" \
     --input_dir "$INPUT_DIR" \
     -- "$@"

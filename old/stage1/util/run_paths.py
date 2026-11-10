@@ -156,8 +156,8 @@ INFER_STAMP_FORMAT = "%Y_%m%d_%H%M%S"
 
 
 def repo_root():
-    """リポジトリ直下（このファイルは <repo>/stage1/util/run_paths.py）。コンテナでは /workspace。"""
-    return Path(__file__).resolve().parents[2]
+    """リポジトリ直下（このファイルは <repo>/old/stage1/util/run_paths.py）。コンテナでは /workspace。"""
+    return Path(__file__).resolve().parents[3]
 
 
 def output_root(root=None):

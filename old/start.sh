@@ -2,7 +2,9 @@
 # =============================================================================
 # SpicaV5 起動スクリプト — 取扱説明
 #   OS 共通。mac / Linux はターミナル、Windows は Git Bash か WSL。すべて bash 経由（実行権限は不要）。
-#   リポジトリ直下（このファイルがある場所）で、ホストのシェルから実行する。コンテナ内（bash start.sh shell で入った先）では動かない
+#   【2026-11-11】旧 Stage 1（〜2026-11-11）の起動口。old/ に移動した。リポジトリ直下で  bash old/start.sh ...  と打つ（どの cwd からでも可）。
+#   コード・設定は old/stage1/（下の説明文中の stage1/... は old/stage1/... と読む）。学習結果の場所（machines.yaml の checkpoints_dir = /workspace/stage1/checkpoints）と configs/・docker/ は移動前のまま。
+#   ホストのシェルから実行する。コンテナ内（bash old/start.sh shell で入った先）では動かない
 #   （docker が無い。/.dockerenv があれば即エラーで止める）。コンテナ内で使うのは train_stage1.sh / infer_stage1.sh / crop_stage1.sh の方。
 #
 # ■ 何をするか
@@ -12,11 +14,11 @@
 #   4. コンテナ内で train_stage1.sh を実行して学習を始める（shell / down のときは除く）
 #
 # ■ 引数の規則
-#   bash start.sh [マシン名] [build|shell|down|tb|infer|crop|split] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
+#   bash old/start.sh [マシン名] [build|shell|down|tb|infer|crop|split] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
 #   ・--flag より前の単語を読む。順不同。
 #   ・build / shell / down / tb / infer / crop / split / resume / best はサブコマンド。それ以外の単語は「マシン名」とみなし、sh 内の MACHINE より優先する。
 #   ・split は task: sr（一発超解像。stage1/configs/mode.yaml の task）用の症例分割ファイル configs/splits/eid_v5.yaml を作る（split_stage1.sh の比率・seed・FORCE_TEST。
-#     既にあれば止まる。作り直すなら bash start.sh split --overwrite）。学習は mode.yaml の task: sr（または --task sr）で stage1/configs/sr.yaml を読む
+#     既にあれば止まる。作り直すなら bash old/start.sh split --overwrite）。学習は mode.yaml の task: sr（または --task sr）で stage1/configs/sr.yaml を読む
 #   ・build は「イメージを（再）ビルドしてコンテナを起動し、torch / cuda の確認を表示して終わる」だけ。学習は始めない（本番機の初期セットアップ用）。
 #   ・resume の直後は run 名（yyyy_mmdd_HHMM）、その次が latest / best / epoch 番号なら checkpoint の tag（省略時 latest）。
 #   ・best の直後は run 名と epoch 番号（両方必須）。best/ は best.tmp/ に揃えてから差し替える。
@@ -33,28 +35,28 @@
 #   ・同じ分に 2 回起動すると 2 回目はエラー（run 名の衝突。F-11）。
 #
 # ■ 例
-#   bash start.sh                            # sh 内の MACHINE で起動 → 学習
-#   bash start.sh PC2                        # マシン名を指定（sh 内の MACHINE より優先）
-#   bash start.sh build                      # イメージをビルド（既にあれば再ビルド）→ コンテナ起動 → torch/cuda 確認 → 終了。学習はしない
-#   bash start.sh --n_epochs 50              # 学習パラメータを上書きして学習
-#   bash start.sh PC2 build                  # マシン指定でビルドだけ（本番機で最初にやる）
-#   bash start.sh resume 2026_0905_1234      # その run の latest から学習を再開（同じディレクトリに続きを保存）
-#   bash start.sh resume 2026_0905_1234 30 --n_epochs 400   # epoch 30 の checkpoint（weights/30_*）から、epoch 数を延ばして再開
-#   bash start.sh PC4 chain                  # 学習 → best で推論（full）→ Stage 2 のデータ作成 → Stage 2 の学習を 1 本で（chain_stage1to2.sh。重み・データの置き場はその冒頭の変数）
-#   bash start.sh PC4 chain resume 2026_1102_2347 latest   # 既存 run の続きから同じ流れ（学習済みなら推論から）
-#   bash start.sh best 2026_0905_1234 30     # epoch 30 を best にする（weights/epoch_030/ → best_e030/、best.txt に記録。通常は util/validator.py が採点で自動更新するので手動上書き用）
-#   bash start.sh infer                      # 推論。infer_stage1.sh の WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR、stage1/configs/infer.yaml の方式
-#   bash start.sh infer --mode full --max_slices 4                        # 方式を上書きして推論
-#   bash start.sh infer --output_format both --dicom_dir /workspace/DataSet/PhotonCT512_original   # PNG と DICOM の両方を書く
-#   bash start.sh crop                       # パッチ切り出し（学習中でも可）。crop_stage1.sh の WEIGHT_DIR、stage1/configs/crop.yaml のケース
-#   bash start.sh crop --weight_dir /workspace/stage1/checkpoints/2026_0907_1742/weights/epoch_141 --device cuda
-#   bash start.sh PC3 split                  # task: sr 用の症例分割（EID を 15:15:70、EID-049 を test に固定）を configs/splits/eid_v5.yaml に作る
-#   bash start.sh PC3 --task sr              # 一発超解像（EID1024 → PCD-like1024）で学習。stage1/configs/sr.yaml の分割・除外・patch 256 を使う
-#   bash start.sh mac infer --weight_dir /workspace/stage1/checkpoints/2026_0905_1234/best --input_dir /workspace/DataSet/PCD512_v2
+#   bash old/start.sh                            # sh 内の MACHINE で起動 → 学習
+#   bash old/start.sh PC2                        # マシン名を指定（sh 内の MACHINE より優先）
+#   bash old/start.sh build                      # イメージをビルド（既にあれば再ビルド）→ コンテナ起動 → torch/cuda 確認 → 終了。学習はしない
+#   bash old/start.sh --n_epochs 50              # 学習パラメータを上書きして学習
+#   bash old/start.sh PC2 build                  # マシン指定でビルドだけ（本番機で最初にやる）
+#   bash old/start.sh resume 2026_0905_1234      # その run の latest から学習を再開（同じディレクトリに続きを保存）
+#   bash old/start.sh resume 2026_0905_1234 30 --n_epochs 400   # epoch 30 の checkpoint（weights/30_*）から、epoch 数を延ばして再開
+#   bash old/start.sh PC4 chain                  # 学習 → best で推論（full）→ Stage 2 のデータ作成 → Stage 2 の学習を 1 本で（chain_stage1to2.sh。重み・データの置き場はその冒頭の変数）
+#   bash old/start.sh PC4 chain resume 2026_1102_2347 latest   # 既存 run の続きから同じ流れ（学習済みなら推論から）
+#   bash old/start.sh best 2026_0905_1234 30     # epoch 30 を best にする（weights/epoch_030/ → best_e030/、best.txt に記録。通常は util/validator.py が採点で自動更新するので手動上書き用）
+#   bash old/start.sh infer                      # 推論。infer_stage1.sh の WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR、stage1/configs/infer.yaml の方式
+#   bash old/start.sh infer --mode full --max_slices 4                        # 方式を上書きして推論
+#   bash old/start.sh infer --output_format both --dicom_dir /workspace/DataSet/PhotonCT512_original   # PNG と DICOM の両方を書く
+#   bash old/start.sh crop                       # パッチ切り出し（学習中でも可）。crop_stage1.sh の WEIGHT_DIR、stage1/configs/crop.yaml のケース
+#   bash old/start.sh crop --weight_dir /workspace/stage1/checkpoints/2026_0907_1742/weights/epoch_141 --device cuda
+#   bash old/start.sh PC3 split                  # task: sr 用の症例分割（EID を 15:15:70、EID-049 を test に固定）を configs/splits/eid_v5.yaml に作る
+#   bash old/start.sh PC3 --task sr              # 一発超解像（EID1024 → PCD-like1024）で学習。stage1/configs/sr.yaml の分割・除外・patch 256 を使う
+#   bash old/start.sh mac infer --weight_dir /workspace/stage1/checkpoints/2026_0905_1234/best --input_dir /workspace/DataSet/PCD512_v2
 #                                            # GPU 無しのマシン定義（gpu_gen 0 → cpu）で、重みと入力を引数で指定して推論
-#   bash start.sh tb                         # TensorBoard だけ起動してブラウザを開く（学習はしない）
-#   bash start.sh mac shell                  # 学習せず、mac のコンテナの bash に入る（exit で抜けてもコンテナは残る）
-#   bash start.sh mac down                   # mac のコンテナを停止・削除（イメージは残る）
+#   bash old/start.sh tb                         # TensorBoard だけ起動してブラウザを開く（学習はしない）
+#   bash old/start.sh mac shell                  # 学習せず、mac のコンテナの bash に入る（exit で抜けてもコンテナは残る）
+#   bash old/start.sh mac down                   # mac のコンテナを停止・削除（イメージは残る）
 #
 # ■ マシン定義（configs/machines.yaml）
 #   ・MACHINE（下）または引数のマシン名でエントリを選ぶ。
@@ -67,13 +69,13 @@
 #   ・実験の保存先は checkpoints_dir/<run>（run = 起動時刻 yyyy_mmdd_HHMM、JST）。レイアウト（正は stage1/util/run_paths.py）:
 #       launch.yaml / train_opt.txt / loss_log.txt
 #       latest/net_G.pth, net_D.pth, state.pth        直下の重みディレクトリは latest と best_eNNN だけ
-#       best_eNNN/net_G.pth, net_D.pth, state.pth     採点（val/score）最良の epoch を自動保存（フォルダ名に epoch。best.txt に記録）。bash start.sh best <run> <epoch> で手動上書き。tag "best" と <run>/best はこれに解決
+#       best_eNNN/net_G.pth, net_D.pth, state.pth     採点（val/score）最良の epoch を自動保存（フォルダ名に epoch。best.txt に記録）。bash old/start.sh best <run> <epoch> で手動上書き。tag "best" と <run>/best はこれに解決
 #       weights/epoch_NNN/net_G.pth, net_D.pth, state.pth   save_epoch_freq（既定 1 = 毎 epoch）ごと（+ 学習終了時の最終 epoch。保存は .tmp → rename で原子的）
 #       output_images/epoch_NNN/ checkpoint（毎 epoch）ごとのフル 512（<slice>_pcd / _eidlike / _R.png、16bit、入力と同じ規約）
 #       output_images/preview_fixed_<slice>/epoch_NNN.png   固定スライス（train.yaml log.full_slice）の表示用パネル [PCD | EID-like | R]（epoch 順に見比べる）
 #       output_images/preview_random/epoch_NNN_<slice>.png  epoch ごとに別のランダムスライスの同じパネル。128 patch グリッドは TensorBoard だけ
-#       infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   bash start.sh infer の出力（実行ごとに別ディレクトリ。full/ patch/ = 16bit PNG、*_dicom/ = DICOM、*_R/ = 残差 PNG、diff_stats.txt、infer.yaml）
-#       infer/<重みディレクトリ名>/crop/<実行時刻>/case<N>_<pcd>_<eid>/   bash start.sh crop の出力（1_EID / 2_EID-like / 3_PCD / 4_R_color の個別 + panel.png、crop.yaml）
+#       infer/<重みディレクトリ名>/<入力フォルダ名>/<実行時刻>/   bash old/start.sh infer の出力（実行ごとに別ディレクトリ。full/ patch/ = 16bit PNG、*_dicom/ = DICOM、*_R/ = 残差 PNG、diff_stats.txt、infer.yaml）
+#       infer/<重みディレクトリ名>/crop/<実行時刻>/case<N>_<pcd>_<eid>/   bash old/start.sh crop の出力（1_EID / 2_EID-like / 3_PCD / 4_R_color の個別 + panel.png、crop.yaml）
 #       tb/                      TensorBoard
 #
 # ■ 設定ファイル（既定値は無い。無いキーはエラー）
@@ -97,7 +99,7 @@
 #   ・学習（train / resume）のときは、起動器（stage1/run_train.py）が **その run の <run>/tb だけ**を logdir にして TensorBoard を起動する
 #     （port = machines.yaml の tb_port、ログ <run>/tensorboard.log）。前の run の TensorBoard は止める。start.sh は応答を待ってホストのブラウザで
 #     http://localhost:<tb_port> を開く。学習が終わっても TensorBoard は残る（次の学習か down で止まる）。
-#   ・全 run を並べて比較したいときは  bash start.sh tb （logdir = checkpoints_dir 全体）。ポートが塞がっていたら machines.yaml の tb_port を変える。
+#   ・全 run を並べて比較したいときは  bash old/start.sh tb （logdir = checkpoints_dir 全体）。ポートが塞がっていたら machines.yaml の tb_port を変える。
 #   ・Stage 2（start2.sh）の TensorBoard は machines.yaml の stage2_tb_port（別ポート）。compose は両方を公開するので start.sh も stage2_tb_port を読む。
 #     起動・停止は自分のポートのものだけを対象にする（同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない。2026-09-08）。
 #     ポート設定を変えても起動済みのコンテナには反映されない（up を呼ばないため）。中の処理が終わってから down → 起動し直す。
@@ -107,17 +109,17 @@
 # ■ 再開（resume）の仕組み
 #   ・学習中は重み（net_G.pth / net_D.pth）に加えて state.pth（optimizer / RNG / epoch / iteration 数）を同じ重みディレクトリに保存する。
 #     保存タイミングは本家と同じ（save_latest_freq 枚ごとに latest/、save_epoch_freq epoch ごとに weights/epoch_NNN/）。
-#   ・tag は latest | best | <epoch>。best = <run>/best_eNNN/（採点で自動更新。bash start.sh best <run> <epoch> で手動上書き）。
+#   ・tag は latest | best | <epoch>。best = <run>/best_eNNN/（採点で自動更新。bash old/start.sh best <run> <epoch> で手動上書き）。
 #   ・resume は**選んだ checkpoint の state.pth に入っている実効設定**（その重みを作った設定）を使う（今の yaml は無視。差があれば表示。2026-09-09 変更:
 #     失敗した起動の launch_resume_*.yaml を次の基準にしない。state.pth に設定が無い古い run だけ最新の launch を使う）。
 #     sh の --flag 上書きだけは末尾に付くので、n_epochs を延ばすなどに使える。
 #   ・途中保存（epoch 未完）の latest から再開すると、その epoch を頭からやり直す（ケース 1 はランダム抽選なので害はない）。
 #
 # ■ よくある操作
-#   ・イメージを作り直す: bash start.sh down → bash start.sh build（→ 学習は bash start.sh）
-#   ・本番機の初回: bash start.sh build で "[start] torch ... | cuda available: True" が出れば準備完了
-#   ・コンテナ内で手動学習: bash start.sh shell → bash train_stage1.sh [--flag value ...]
-#   ・コンテナ内で手動推論: bash start.sh shell → bash infer_stage1.sh [--flag value ...]（パッチ切り出しは bash crop_stage1.sh）
+#   ・イメージを作り直す: bash old/start.sh down → bash old/start.sh build（→ 学習は bash old/start.sh）
+#   ・本番機の初回: bash old/start.sh build で "[start] torch ... | cuda available: True" が出れば準備完了
+#   ・コンテナ内で手動学習: bash old/start.sh shell → bash old/train_stage1.sh [--flag value ...]
+#   ・コンテナ内で手動推論: bash old/start.sh shell → bash old/infer_stage1.sh [--flag value ...]（パッチ切り出しは bash old/crop_stage1.sh）
 #
 # ■ 推論（infer）= 学習済みの重みで PNG フォルダを丸ごと EID-like に変換する
 #   ・重みディレクトリ・入力フォルダ・出力形式・元 DICOM ルートは infer_stage1.sh の WEIGHT_DIR / INPUT_DIR / OUTPUT_FORMAT / DICOM_DIR（同名の --flag で上書き可）。
@@ -132,7 +134,7 @@ set -euo pipefail
 
 # --- ホスト専用。コンテナ内で叩かれたら docker が無いので即エラー（WSL 判定より先に見る。コンテナは WSL2 のカーネルを共有するので /proc/version だけでは区別できない） ---
 if [ -f /.dockerenv ]; then
-  echo "[start] start.sh はホスト側で実行するスクリプトです（コンテナ内には docker がありません）。exit でコンテナを抜けて、ホストの PowerShell / ターミナルで bash start.sh <machine> ... を実行してください。コンテナ内で使うのは bash train_stage1.sh / bash infer_stage1.sh / bash crop_stage1.sh です" >&2
+  echo "[start] start.sh はホスト側で実行するスクリプトです（コンテナ内には docker がありません）。exit でコンテナを抜けて、ホストの PowerShell / ターミナルで bash old/start.sh <machine> ... を実行してください。コンテナ内で使うのは bash old/train_stage1.sh / bash old/infer_stage1.sh / bash old/crop_stage1.sh です" >&2
   exit 2
 fi
 
@@ -154,7 +156,7 @@ exec_it() {  # 対話 exec（学習 / 推論 / shell / best）。Windows では 
 MACHINE="PC3"          # configs/machines.yaml のエントリ名（PC1 / mac / ...）
 # =========================================
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"   # リポジトリ直下（このファイルは <repo>/old/ にある。2026-11-11 に old/ へ移動）
 MACHINES="$ROOT/configs/machines.yaml"
 
 # --- 引数: --flag より前の単語を読む。build / shell / down / tb / resume / infer / crop / best はサブコマンド、それ以外の単語はマシン名（sh 内の MACHINE より優先）。
@@ -169,7 +171,7 @@ while [ $# -gt 0 ]; do
     tb)    ACTION=tb; shift ;;
     resume)
       shift
-      [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start] resume には run 名が必要です: bash start.sh resume yyyy_mmdd_HHMM [latest|best|<epoch>]" >&2; exit 2; }
+      [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start] resume には run 名が必要です: bash old/start.sh resume yyyy_mmdd_HHMM [latest|best|<epoch>]" >&2; exit 2; }
       RESUME="$1"; shift
       if [ $# -gt 0 ] && [[ "$1" =~ ^([0-9]+|latest|best)$ ]]; then RESUME_TAG="$1"; shift; fi ;;
     infer) ACTION=infer; shift ;;
@@ -178,7 +180,7 @@ while [ $# -gt 0 ]; do
     split) ACTION=split; shift ;;
     best)
       shift
-      [ $# -ge 2 ] && [[ "$1" != --* ]] && [[ "$2" =~ ^[0-9]+$ ]] || { echo "[start] best には run 名と epoch 番号が必要です: bash start.sh best yyyy_mmdd_HHMM <epoch>" >&2; exit 2; }
+      [ $# -ge 2 ] && [[ "$1" != --* ]] && [[ "$2" =~ ^[0-9]+$ ]] || { echo "[start] best には run 名と epoch 番号が必要です: bash old/start.sh best yyyy_mmdd_HHMM <epoch>" >&2; exit 2; }
       ACTION=best; BEST_RUN="$1"; BEST_EPOCH="$2"; shift 2 ;;
     --*)   break ;;
     *)
@@ -191,7 +193,7 @@ if [ -n "$MACHINE_ARG" ]; then
   MACHINE="$MACHINE_ARG"
 fi
 if [ "$ACTION" = build ] && [ $# -gt 0 ]; then
-  echo "[start] build はビルドだけで学習しないので --flag は付けられません: $*  （学習は bash start.sh [--flag ...]）" >&2; exit 2
+  echo "[start] build はビルドだけで学習しないので --flag は付けられません: $*  （学習は bash old/start.sh [--flag ...]）" >&2; exit 2
 fi
 
 # --- ホストの python（machines.yaml を読む） ---
@@ -243,7 +245,7 @@ fi
 
 # 起動の規則（2026-09-08 改訂。コンテナは Stage 1 / Stage 2 で共用なので、中で動いている処理を止めないことを最優先にする）
 #   ・コンテナ spicav5 が起動済みなら、**どのアクションでも up を呼ばず exec だけ行う**（学習 / 再開も同じ）。compose は設定（ポート・マウント・イメージ）が
-#     変わっていると up -d でコンテナを作り直し、中の学習を殺すため。設定を変えたときは、学習が終わってから bash start.sh down → 起動し直す
+#     変わっていると up -d でコンテナを作り直し、中の学習を殺すため。設定を変えたときは、学習が終わってから bash old/start.sh down → 起動し直す
 #   ・build は起動済みなら拒否する（イメージの再ビルドはコンテナの作り直しを伴う）
 #   ・コンテナを止めるのは down だけ
 container_running() { [ "$(docker inspect -f '{{.State.Running}}' spicav5 2>/dev/null)" = "true" ]; }
@@ -253,11 +255,11 @@ check_container() {  # 起動済みコンテナが今回の指定（マシン名
   image=$(docker inspect -f '{{.Config.Image}}' spicav5 2>/dev/null)
   mount_src=$(docker inspect -f "{{range .Mounts}}{{if eq .Destination \"$CONTAINER_DATA_ROOT\"}}{{.Source}}{{end}}{{end}}" spicav5 2>/dev/null)
   if [ "$env_machine" != "$MACHINE" ]; then
-    echo "[start] 起動中のコンテナ spicav5 はマシン '$env_machine' で作られています（今回の指定は '$MACHINE'）。マウントも作成時のままなので、中の処理が終わってから bash start.sh down → 起動し直してください" >&2
+    echo "[start] 起動中のコンテナ spicav5 はマシン '$env_machine' で作られています（今回の指定は '$MACHINE'）。マウントも作成時のままなので、中の処理が終わってから bash old/start.sh down → 起動し直してください" >&2
     exit 2
   fi
   if [ "$image" != "spicav5-$GEN" ]; then
-    echo "[start] 起動中のコンテナ spicav5 のイメージは '$image' です（今回の指定 gpu_gen=$GPU_GEN → spicav5-$GEN）。中の処理が終わってから bash start.sh down → 起動し直してください" >&2
+    echo "[start] 起動中のコンテナ spicav5 のイメージは '$image' です（今回の指定 gpu_gen=$GPU_GEN → spicav5-$GEN）。中の処理が終わってから bash old/start.sh down → 起動し直してください" >&2
     exit 2
   fi
   host_real=$(cd "$HOST_DATA_ROOT" 2>/dev/null && pwd -P)
@@ -268,20 +270,20 @@ check_container() {  # 起動済みコンテナが今回の指定（マシン名
 port_published() { [ -n "$(docker port spicav5 "$1" 2>/dev/null)" ]; }  # 起動中のコンテナがそのポートをホストに公開しているか
 if container_running; then
   if [ "$ACTION" = build ]; then
-    echo "[start] コンテナ spicav5 は起動済みです（学習中かもしれません）。build はコンテナを作り直すので、中の処理が終わってから bash start.sh down → bash start.sh build の順で実行してください" >&2
+    echo "[start] コンテナ spicav5 は起動済みです（学習中かもしれません）。build はコンテナを作り直すので、中の処理が終わってから bash old/start.sh down → bash old/start.sh build の順で実行してください" >&2
     exit 2
   fi
   check_container
   echo "[start] コンテナ spicav5 は起動済み（中の処理は触らない。マシン名・イメージは今回の指定と一致）。up は呼ばず exec だけ行う"
   if ! port_published "$TB_PORT"; then
-    echo "[start] 注意: 起動中のコンテナはポート $TB_PORT を公開していません（compose の設定を変えた後に down していない）。処理は動くが TensorBoard はホストから見えない。中の処理が終わってから bash start.sh down → 起動し直してください"
+    echo "[start] 注意: 起動中のコンテナはポート $TB_PORT を公開していません（compose の設定を変えた後に down していない）。処理は動くが TensorBoard はホストから見えない。中の処理が終わってから bash old/start.sh down → 起動し直してください"
   fi
 else
   "${COMPOSE[@]}" up -d $BUILD
   "${COMPOSE[@]}" exec -T spicav5 python -c "import torch; print('[start] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())"
 fi
 if [ "$ACTION" = build ]; then
-  echo "[start] ビルド完了。コンテナ spicav5 は起動したまま（学習: bash start.sh / 推論: bash start.sh infer / 停止: bash start.sh down）"
+  echo "[start] ビルド完了。コンテナ spicav5 は起動したまま（学習: bash old/start.sh / 推論: bash old/start.sh infer / 停止: bash old/start.sh down）"
   exit 0
 fi
 
@@ -324,7 +326,7 @@ open_when_ready() {  # バックグラウンド: 学習側（run_train.py）が�
   local url="http://localhost:$TB_PORT"
   for _ in $(seq 1 120); do
     if curl -s -o /dev/null "$url"; then
-      echo "[start] TensorBoard: $url（この run だけ。全 run は bash start.sh tb）"
+      echo "[start] TensorBoard: $url（この run だけ。全 run は bash old/start.sh tb）"
       open_browser "$url" || echo "[start] ブラウザを自動で開けませんでした。$url を手で開いてください"
       return
     fi
@@ -336,14 +338,14 @@ open_when_ready() {  # バックグラウンド: 学習側（run_train.py）が�
 case "$ACTION" in
   tb)    start_tensorboard ;;
   shell) exec_it spicav5 bash ;;
-  infer) exec_it spicav5 bash infer_stage1.sh "$@" ;;
-  crop)  exec_it spicav5 bash crop_stage1.sh "$@" ;;
-  split) exec_it spicav5 bash split_stage1.sh "$@" ;;
-  best)  exec_it spicav5 python stage1/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
+  infer) exec_it spicav5 bash old/infer_stage1.sh "$@" ;;
+  crop)  exec_it spicav5 bash old/crop_stage1.sh "$@" ;;
+  split) exec_it spicav5 bash old/split_stage1.sh "$@" ;;
+  best)  exec_it spicav5 python old/stage1/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
   train|chain)
     tb_kill
     if command -v curl >/dev/null 2>&1; then open_when_ready & fi
-    SCRIPT=train_stage1.sh; [ "$ACTION" = chain ] && SCRIPT=chain_stage1to2.sh
+    SCRIPT=old/train_stage1.sh; [ "$ACTION" = chain ] && SCRIPT=old/chain_stage1to2.sh
     if [ -n "$RESUME" ]; then
       exec_it -e SPICA_TB_PORT="$TB_PORT" -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash "$SCRIPT" "$@"
     else

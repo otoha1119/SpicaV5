@@ -12,7 +12,7 @@
 #   3. サブコマンドに応じてコンテナ内のスクリプトを exec する
 #
 # ■ 引数の規則
-#   bash start2.sh [マシン名] [dataset|infer|build|shell|down|tb] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
+#   bash old/start2.sh [マシン名] [dataset|infer|build|shell|down|tb] [resume <run> [tag]] [best <run> <epoch>] [--flag value ...]
 #   ・--flag より前の単語を読む。順不同。dataset / build / shell / down / tb / resume / best / infer はサブコマンド、それ以外の単語は「マシン名」とみなし、
 #     sh 内の MACHINE より優先する。マシン名を 2 つ渡すとエラー。configs/machines.yaml に無い名前もエラー（候補を表示）。
 #   ・サブコマンド無し = 学習（train_stage2.sh → stage2/run_train.py → train.py）。設定は stage2/configs/train.yaml（数値・症例分割）と mode.yaml（方式）、
@@ -42,24 +42,24 @@
 #     compose の設定を変えたときは、中の処理が終わってから down → 起動し直す（起動済みのままだと反映されず、注意が出る）。
 #
 # ■ 例
-#   bash start2.sh                                # 学習（sh 内の MACHINE）。TensorBoard が開く
-#   bash start2.sh PC1 --n_epochs 50 --batch_size 32   # 上書きして学習
-#   bash start2.sh --val_cases PCD-017,PCD-018 --test_cases PCD-019,PCD-020 --train_cases PCD-001,PCD-002,...   # 分割の一時変更（恒久的には train.yaml）
-#   bash start2.sh resume 2026_0908_2130          # その run の latest から再開
-#   bash start2.sh resume 2026_0908_2130 30 --n_epochs 200   # epoch 30 の checkpoint から、epoch 数を延ばして再開
-#   bash start2.sh best 2026_0908_2130 30         # epoch 30 を best にする（手動。自動更新は学習中に val で行われる）
-#   bash start2.sh tb                             # Stage 2 の全 run を並べた TensorBoard（stage2_tb_port）
-#   bash start2.sh dataset                        # dataset_stage2.sh の INPUT_DIR → machines.yaml の eidlike1024_dir、stage2/configs/dataset.yaml の方式
-#   bash start2.sh PC1 dataset                    # マシン名を指定（sh 内の MACHINE より優先）
-#   bash start2.sh dataset --input_dir /workspace/stage1/checkpoints/2026_0907_2222/infer/epoch_141/PCD512_v2/2026_0908_120000/full
-#   bash start2.sh dataset --input_dir /workspace/DataSet/EID_v5 --eidlike1024_dir /workspace/DataSet/EID1024_v1     # 実 EID（推論用）も同じ道具で 1024 にする（出力先を一時上書き）
-#   bash start2.sh dataset --interp bilinear      # 方式の上書き
-#   bash start2.sh infer                          # 推論。infer_stage2.sh の WEIGHT_DIR / INPUT_DIR、stage2/configs/infer.yaml の方式
-#   bash start2.sh infer --max_slices 1 --save_panel true                                   # 1 枚だけ試してパネルも出す
-#   bash start2.sh infer --weight_dir /workspace/stage2/checkpoints/2026_0909_1200/best --input_dir /workspace/DataSet/EIDlike1024_v1   # PCD のテスト症例（教師あり → metrics.txt）
-#   bash start2.sh infer --input_dir /workspace/DataSet/EID_v5 --input eid --teacher false   # 実 EID512（補間してから通す。教師なし。パネルは右 2 列に入り左 3 列は pcd_slice の参照）
-#   bash start2.sh PC1 build                     # イメージをビルド（本番機の初回。start.sh build と同じ）
-#   bash start2.sh shell                          # コンテナに入る（手動: bash dataset_stage2.sh [--flag ...]）
+#   bash old/start2.sh                                # 学習（sh 内の MACHINE）。TensorBoard が開く
+#   bash old/start2.sh PC1 --n_epochs 50 --batch_size 32   # 上書きして学習
+#   bash old/start2.sh --val_cases PCD-017,PCD-018 --test_cases PCD-019,PCD-020 --train_cases PCD-001,PCD-002,...   # 分割の一時変更（恒久的には train.yaml）
+#   bash old/start2.sh resume 2026_0908_2130          # その run の latest から再開
+#   bash old/start2.sh resume 2026_0908_2130 30 --n_epochs 200   # epoch 30 の checkpoint から、epoch 数を延ばして再開
+#   bash old/start2.sh best 2026_0908_2130 30         # epoch 30 を best にする（手動。自動更新は学習中に val で行われる）
+#   bash old/start2.sh tb                             # Stage 2 の全 run を並べた TensorBoard（stage2_tb_port）
+#   bash old/start2.sh dataset                        # dataset_stage2.sh の INPUT_DIR → machines.yaml の eidlike1024_dir、stage2/configs/dataset.yaml の方式
+#   bash old/start2.sh PC1 dataset                    # マシン名を指定（sh 内の MACHINE より優先）
+#   bash old/start2.sh dataset --input_dir /workspace/stage1/checkpoints/2026_0907_2222/infer/epoch_141/PCD512_v2/2026_0908_120000/full
+#   bash old/start2.sh dataset --input_dir /workspace/DataSet/EID_v5 --eidlike1024_dir /workspace/DataSet/EID1024_v1     # 実 EID（推論用）も同じ道具で 1024 にする（出力先を一時上書き）
+#   bash old/start2.sh dataset --interp bilinear      # 方式の上書き
+#   bash old/start2.sh infer                          # 推論。infer_stage2.sh の WEIGHT_DIR / INPUT_DIR、stage2/configs/infer.yaml の方式
+#   bash old/start2.sh infer --max_slices 1 --save_panel true                                   # 1 枚だけ試してパネルも出す
+#   bash old/start2.sh infer --weight_dir /workspace/stage2/checkpoints/2026_0909_1200/best --input_dir /workspace/DataSet/EIDlike1024_v1   # PCD のテスト症例（教師あり → metrics.txt）
+#   bash old/start2.sh infer --input_dir /workspace/DataSet/EID_v5 --input eid --teacher false   # 実 EID512（補間してから通す。教師なし。パネルは右 2 列に入り左 3 列は pcd_slice の参照）
+#   bash old/start2.sh PC1 build                     # イメージをビルド（本番機の初回。start.sh build と同じ）
+#   bash old/start2.sh shell                          # コンテナに入る（手動: bash old/dataset_stage2.sh [--flag ...]）
 #
 # ■ 設定ファイル（既定値は無い。無いキーはエラー）
 #   stage2/configs/train.yaml     学習パラメータ（optim / data / log。症例分割 train_cases / val_cases / test_cases もここ）
@@ -72,7 +72,7 @@
 #
 # ■ run ディレクトリ（正は stage2/util/run_paths.py）
 #   <stage2_checkpoints_dir>/<run>/  launch.yaml（実効設定。再開で launch_resume_*.yaml が増える）, dataset_info.yaml（症例分割とペア枚数）, loss_log.txt,
-#     latest/ best/（net_G.pth + state.pth。best は val の log.best_metric 更新で自動、bash start2.sh best で手動）, best.txt, weights/epoch_NNN/（save_epoch_freq ごと）, output_images/, tb/
+#     latest/ best/（net_G.pth + state.pth。best は val の log.best_metric 更新で自動、bash old/start2.sh best で手動）, best.txt, weights/epoch_NNN/（save_epoch_freq ごと）, output_images/, tb/
 #
 # ■ ホスト要件・Windows・WSL・改行コード: start.sh と同じ（docker compose v2、python3 + pyyaml。MSYS のパス変換停止、winpty、wslpath 変換、LF 固定）
 # =============================================================================
@@ -80,7 +80,7 @@ set -euo pipefail
 
 # --- ホスト専用。コンテナ内で叩かれたら docker が無いので即エラー ---
 if [ -f /.dockerenv ]; then
-  echo "[start2] start2.sh はホスト側で実行するスクリプトです（コンテナ内には docker がありません）。コンテナ内で使うのは bash train_stage2.sh / bash dataset_stage2.sh / bash infer_stage2.sh です" >&2
+  echo "[start2] start2.sh はホスト側で実行するスクリプトです（コンテナ内には docker がありません）。コンテナ内で使うのは bash old/train_stage2.sh / bash old/dataset_stage2.sh / bash old/infer_stage2.sh です" >&2
   exit 2
 fi
 
@@ -99,7 +99,7 @@ exec_it() {  # 対話 exec。Windows では winpty か -T を付ける。引数�
 MACHINE="PC2"          # configs/machines.yaml のエントリ名（PC1 / PC2 / mac / ...）
 # =========================================
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"   # リポジトリ直下（このファイルは <repo>/old/ にある。2026-11-11 に old/ へ移動）
 MACHINES="$ROOT/configs/machines.yaml"
 
 # --- 引数: --flag より前の単語を読む。dataset / build / shell / down / train / infer はサブコマンド、それ以外の単語はマシン名 ---
@@ -115,12 +115,12 @@ while [ $# -gt 0 ]; do
     infer)   ACTION=infer; shift ;;
     resume)
       shift
-      [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start2] resume には run 名が必要です: bash start2.sh resume yyyy_mmdd_HHMM [latest|best|<epoch>]" >&2; exit 2; }
+      [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start2] resume には run 名が必要です: bash old/start2.sh resume yyyy_mmdd_HHMM [latest|best|<epoch>]" >&2; exit 2; }
       RESUME="$1"; shift
       if [ $# -gt 0 ] && [[ "$1" =~ ^([0-9]+|latest|best)$ ]]; then RESUME_TAG="$1"; shift; fi ;;
     best)
       shift
-      [ $# -ge 2 ] && [[ "$1" != --* ]] && [[ "$2" =~ ^[0-9]+$ ]] || { echo "[start2] best には run 名と epoch 番号が必要です: bash start2.sh best yyyy_mmdd_HHMM <epoch>" >&2; exit 2; }
+      [ $# -ge 2 ] && [[ "$1" != --* ]] && [[ "$2" =~ ^[0-9]+$ ]] || { echo "[start2] best には run 名と epoch 番号が必要です: bash old/start2.sh best yyyy_mmdd_HHMM <epoch>" >&2; exit 2; }
       ACTION=best; BEST_RUN="$1"; BEST_EPOCH="$2"; shift 2 ;;
     --*)     break ;;
     *)
@@ -193,11 +193,11 @@ check_container() {  # 起動済みコンテナが今回の指定（マシン名
   image=$(docker inspect -f '{{.Config.Image}}' spicav5 2>/dev/null)
   mount_src=$(docker inspect -f "{{range .Mounts}}{{if eq .Destination \"$CONTAINER_DATA_ROOT\"}}{{.Source}}{{end}}{{end}}" spicav5 2>/dev/null)
   if [ "$env_machine" != "$MACHINE" ]; then
-    echo "[start2] 起動中のコンテナ spicav5 はマシン '$env_machine' で作られています（今回の指定は '$MACHINE'）。マウントも作成時のままなので、中の処理が終わってから bash start2.sh down → 起動し直してください" >&2
+    echo "[start2] 起動中のコンテナ spicav5 はマシン '$env_machine' で作られています（今回の指定は '$MACHINE'）。マウントも作成時のままなので、中の処理が終わってから bash old/start2.sh down → 起動し直してください" >&2
     exit 2
   fi
   if [ "$image" != "spicav5-$GEN" ]; then
-    echo "[start2] 起動中のコンテナ spicav5 のイメージは '$image' です（今回の指定 gpu_gen=$GPU_GEN → spicav5-$GEN）。中の処理が終わってから bash start2.sh down → 起動し直してください" >&2
+    echo "[start2] 起動中のコンテナ spicav5 のイメージは '$image' です（今回の指定 gpu_gen=$GPU_GEN → spicav5-$GEN）。中の処理が終わってから bash old/start2.sh down → 起動し直してください" >&2
     exit 2
   fi
   host_real=$(cd "$HOST_DATA_ROOT" 2>/dev/null && pwd -P)
@@ -208,20 +208,20 @@ check_container() {  # 起動済みコンテナが今回の指定（マシン名
 port_published() { [ -n "$(docker port spicav5 "$1" 2>/dev/null)" ]; }
 if container_running; then
   if [ "$ACTION" = build ]; then
-    echo "[start2] コンテナ spicav5 は起動済みです（Stage 1 / Stage 2 の学習中かもしれません）。build はコンテナを作り直すので、中の処理が終わってから bash start2.sh down → bash start2.sh build の順で実行してください" >&2
+    echo "[start2] コンテナ spicav5 は起動済みです（Stage 1 / Stage 2 の学習中かもしれません）。build はコンテナを作り直すので、中の処理が終わってから bash old/start2.sh down → bash old/start2.sh build の順で実行してください" >&2
     exit 2
   fi
   check_container
   echo "[start2] コンテナ spicav5 は起動済み（中の処理は触らない。マシン名・イメージは今回の指定と一致）。up は呼ばず exec だけ行う"
   if ! port_published "$TB_PORT_STAGE2"; then
-    echo "[start2] 注意: 起動中のコンテナはポート $TB_PORT_STAGE2 を公開していません（compose の設定を変えた後に down していない）。処理は動くが TensorBoard はホストから見えない。中の処理が終わってから bash start2.sh down → 起動し直してください"
+    echo "[start2] 注意: 起動中のコンテナはポート $TB_PORT_STAGE2 を公開していません（compose の設定を変えた後に down していない）。処理は動くが TensorBoard はホストから見えない。中の処理が終わってから bash old/start2.sh down → 起動し直してください"
   fi
 else
   "${COMPOSE[@]}" up -d $BUILD
   "${COMPOSE[@]}" exec -T spicav5 python -c "import torch; print('[start2] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())"
 fi
 if [ "$ACTION" = build ]; then
-  echo "[start2] ビルド完了。コンテナ spicav5 は起動したまま（学習: bash start2.sh / データ作成: bash start2.sh dataset / 停止: bash start2.sh down）"
+  echo "[start2] ビルド完了。コンテナ spicav5 は起動したまま（学習: bash old/start2.sh / データ作成: bash old/start2.sh dataset / 停止: bash old/start2.sh down）"
   exit 0
 fi
 
@@ -262,7 +262,7 @@ open_when_ready() {  # バックグラウンド: 起動器が起動する run �
   local url="http://localhost:$TB_PORT_STAGE2"
   for _ in $(seq 1 120); do
     if curl -s -o /dev/null "$url"; then
-      echo "[start2] TensorBoard: $url（この run だけ。全 run は bash start2.sh tb）"
+      echo "[start2] TensorBoard: $url（この run だけ。全 run は bash old/start2.sh tb）"
       open_browser "$url" || echo "[start2] ブラウザを自動で開けませんでした。$url を手で開いてください"
       return
     fi
@@ -274,15 +274,15 @@ open_when_ready() {  # バックグラウンド: 起動器が起動する run �
 case "$ACTION" in
   tb)      start_tensorboard ;;
   shell)   exec_it spicav5 bash ;;
-  dataset) exec_it spicav5 bash dataset_stage2.sh "$@" ;;
-  infer)   exec_it spicav5 bash infer_stage2.sh "$@" ;;
-  best)    exec_it spicav5 python stage2/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
+  dataset) exec_it spicav5 bash old/dataset_stage2.sh "$@" ;;
+  infer)   exec_it spicav5 bash old/infer_stage2.sh "$@" ;;
+  best)    exec_it spicav5 python old/stage2/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --epoch "$BEST_EPOCH" ;;
   train)
     tb_kill
     if command -v curl >/dev/null 2>&1; then open_when_ready & fi
     if [ -n "$RESUME" ]; then
-      exec_it -e SPICA_TB_PORT="$TB_PORT_STAGE2" -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash train_stage2.sh "$@"
+      exec_it -e SPICA_TB_PORT="$TB_PORT_STAGE2" -e SPICA_RESUME="$RESUME" -e SPICA_RESUME_TAG="$RESUME_TAG" spicav5 bash old/train_stage2.sh "$@"
     else
-      exec_it -e SPICA_TB_PORT="$TB_PORT_STAGE2" spicav5 bash train_stage2.sh "$@"
+      exec_it -e SPICA_TB_PORT="$TB_PORT_STAGE2" spicav5 bash old/train_stage2.sh "$@"
     fi ;;
 esac

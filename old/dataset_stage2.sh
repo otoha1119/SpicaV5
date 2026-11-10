@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # Stage 2 データセット作成の入口 — 取扱説明
-#   **Docker コンテナ内で実行する**。通常はホスト側の  bash start2.sh dataset [--flag value ...]  から自動で呼ばれる。
+#   **Docker コンテナ内で実行する**。通常はホスト側の  bash old/start2.sh dataset [--flag value ...]  から自動で呼ばれる。
 #   INPUT_DIR の <case>/<slice>.png（uint16 1ch、一辺 input_size = 512）を scale 倍（2 → 1024）に補間し、
 #   machines.yaml の eidlike1024_dir に同じ <case>/<slice>.png で書く。値の規約は変えない（stored = HU + 1400 のまま）。
 #   PCD1024（machines.yaml の pcd1024_dir、別途変換）とはファイル名 PCD-nnn-sss で対応する。
@@ -16,7 +16,7 @@
 #                     実 EID（EID_v5）を推論用に 1024 にするときも --input_dir /workspace/DataSet/EID_v5 --eidlike1024_dir /workspace/DataSet/EID1024_v1 のように上書きで使える
 #
 # ■ 方式  stage2/configs/dataset.yaml（scale / interp / input_size）。既定値は無い。
-#   コマンドで上書き（最優先）: bash start2.sh dataset --interp bilinear --input_dir ... --eidlike1024_dir ...
+#   コマンドで上書き（最優先）: bash old/start2.sh dataset --interp bilinear --input_dir ... --eidlike1024_dir ...
 #   受け付けるのは stage2/configs/schema.py の DATASET / MACHINE にあるフラグと --input_dir だけ。無いフラグはエラー
 #
 # ■ 出力
@@ -34,10 +34,10 @@ INPUT_DIR="/workspace/DataSet/EIDlike_512v1"
 # =============================
 
 cd "$(dirname "$0")/stage2"
-MACHINE="${SPICA_MACHINE:?SPICA_MACHINE が未設定です。bash start2.sh から起動するか、export SPICA_MACHINE=<machine> してください}"
+MACHINE="${SPICA_MACHINE:?SPICA_MACHINE が未設定です。bash old/start2.sh から起動するか、export SPICA_MACHINE=<machine> してください}"
 python make_dataset.py \
     --machine "$MACHINE" \
     --config configs/dataset.yaml \
-    --machines ../configs/machines.yaml \
+    --machines ../../configs/machines.yaml \
     --input_dir "$INPUT_DIR" \
     -- "$@"
