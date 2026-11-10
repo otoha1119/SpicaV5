@@ -1,0 +1,25 @@
+# stage2/configs/data.yaml — 新 Stage 2（U・V 共通）のデータの決まり。唯一の正は configs/schema.py の DATA（キーの欠落・未知・型違いはエラー）。既定値は無い。
+# 設計: docs/plans/20261111_detail_design/stage2_u_flow_spec.md の E・F-1、RECONCILE.md #3・#9・#10・#12。
+# 入力 = 疑似 EID512（Stage 1 の bash start.sh generate の出力）をその場で bicubic ×2、正解 = PCD1024。
+data:
+  pseudo_eid_set: ""                 # 疑似 EID の「組」のフォルダ名（<pseudo_eid_dir>/<組>/k00, k01, …/<症例>/<スライス>.png と <組>/manifest.yaml）。--pseudo_eid_set で渡す
+  allow_brightness_mismatch: false   # 組の manifest.yaml の brightness_sigma_px_512 が configs/shared.yaml と違うと起動前にエラー。true で通す（明示したときだけ）
+  hu_offset: 1400                    # stored = HU + 1400
+  hu_min: -1400                      # tensor の値 n = (HU − hu_min) ÷ (hu_max − hu_min) × 2 − 1（旧 Stage 2 と同じ物差し。範囲外も切らない）
+  hu_max: 4096
+  upsample_scale: 2                  # 512 → 1024。その場で計算（ファイル化しない。設計書 E-2）
+  upsample_interp: bicubic
+  patches_per_slice: 8               # 1 回読んだ（入力 + 正解）から 8 パッチ。同じスライスの 8 個は同じ 1 通り（k）
+  # 症例分割（旧 Stage 2 と同じ。2026-09-09）。ディスク上の症例（評価専用を除く）は必ずどれかに入っていること
+  train_cases: [PCD-003, PCD-004, PCD-005, PCD-006, PCD-007, PCD-008, PCD-009, PCD-010, PCD-011, PCD-012, PCD-013, PCD-014, PCD-015, PCD-016]
+  val_cases: [PCD-017, PCD-018]
+  test_cases: [PCD-001, PCD-002, PCD-019, PCD-020]   # 読まない。例外は log.pcd_slice の 1 枚（目視用）
+  eid_split_file: configs/splits/eid_v5.yaml          # 表示・確認の実 EID が「P の学習に使った症例（train 側）」でないことの検査に使う
+
+display:
+  hu_min: -1400            # 表示は HU −1400〜3000（stored 0〜4400）
+  hu_max: 3000
+  diff_range_hu: 300.0     # 乱数の差の絵（白 = 0、青 −、赤 +）
+  diff_blur_range_hu: 50.0 # それを σ 3 でぼかした絵
+  tb_scale: 2              # TensorBoard のフルのパネルは 1/2 に縮める（ディスクは等倍）
+  body_hu: -500.0          # 「体内」の印 = 入力の広い平均 > −500 HU。測るためだけに使う（ネットワークには入れない）

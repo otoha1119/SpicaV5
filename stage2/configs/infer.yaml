@@ -1,0 +1,21 @@
+# stage2/configs/infer.yaml — フォルダ丸ごとの推論（bash start2.sh infer → run_infer.py）。唯一の正は configs/schema.py の INFER。
+# ネットワーク・HU の物差し・補間・明るさの広さは run の重み（state.pth）の実効設定から取る。1024 一枚をそのまま通す（タイルなし）。
+infer:
+  kind: v                  # u | v
+  run: ""                  # --run で渡す
+  tag: best                # best | latest | step 番号
+  mode: uv                 # u（μ だけ）| uv（最終出力）
+  input_dir: ""            # --input_dir（<症例>/<スライス>.png か直下に PNG。コンテナ内の絶対パス）
+  upsample: true           # 入力は 512（実 EID・疑似 EID）。false = 既に 1024
+  cases: []
+  slice_step: 1
+  max_slices: 0
+  sigma_s_hu: 100.0        # 乱数の強さ（学習した幅の中で選ぶ）
+  steps: 25
+  seed: 0
+  n_seeds: 1
+  precision: fp32          # 推論は FP32（bf16 は V の本体だけに掛かる）
+  save_mu: true
+  save_input1024: false
+  save_panel: true
+  out_root: /workspace/outputs/stage2

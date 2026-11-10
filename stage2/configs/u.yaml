@@ -1,0 +1,55 @@
+# stage2/configs/u.yaml — U（形を決める回帰。設計書 B）の構成と学習。唯一の正は configs/schema.py の U。既定値は無い。
+# μ = f + G∗(x↑ − f)（f = net(x↑)。明るさの固定つき）。損失 = MSE(μ, X′)、X′ = X + G∗(x↑ − X)。G の広さは configs/shared.yaml（512 で σ 16 → 1024 で 32）。
+net:
+  arch: unet_ilumenate     # 旧 Stage 2 の U-Net をそのまま（128 / 256 / 512、pool 2、BN なし、最終 Conv3×3 → 1ch 線形、約 9.8M）
+  base_ch: 128
+  n_pool: 2
+  init_type: xavier_uniform
+  final_act: linear
+  residual: false
+
+optim:
+  lr: 0.0003               # Adam、一定（11-08〜11-10 の Stage 2 と同じ。1e-3 は発散の記録）
+  beta1: 0.9
+  beta2: 0.999
+  batch_size: 8            # RECONCILE #11: パッチ 256 × 8（画素数は旧 128 × 16 の 2 倍）
+  max_steps: 40000         # 4,000 step × 10 epoch
+  steps_per_epoch: 4000
+  max_hours: 12.0          # 安全のための上限（再開をまたいだ累計）。見積もりは 1〜2 時間
+  ema_decay: 0.999         # val・画像・推論・V の学習に使うのは EMA
+  precision: bf16          # 学習の forward だけ CUDA autocast。損失・明るさの固定・val・推論は FP32。fp32 で切れる
+  compile: true            # 学習の forward を torch.compile。false で切れる
+  compile_mode: max-autotune   # 落ちたら --compile_mode default
+  compile_after_steps: 20  # 最初の 20 step は compile せずに回して scalar をすぐ出す
+  channels_last: false     # 旧 Stage 2 と同じ（速度の実測 0.085 s/step の条件）
+  seed: 0
+
+patch:
+  size: 256                # RECONCILE #11（明るさの核 193 画素がパッチに収まること）
+
+log:
+  print_steps: 100
+  image_steps: 500
+  n_images: 2
+  save_latest_steps: 500
+  save_weights_epochs: 1
+  first_check_step: 200    # 起動して 200 step 目に 1 回、latest の保存と確認の縮小版を通す（配線の確認）
+  first_check_slices: 2
+  val_slices_per_case: 100 # val/rmse（旧 Stage 2 と同じ枚数）
+  pcd_slice: PCD-002/PCD-002-236.png
+  eid_slices:              # コンテナ内の絶対パス。1 つ目 = 固定パネルの右側と切り抜き。P の学習に使った症例（train 側）は置けない
+    - /workspace/DataSet/EID_v5/EID-049/EID-049-079.png                 # ImageCAS（test 側）
+    - /workspace/DataSet/DataSet_new/EID/EID-1021/EID-1021-038.png      # 病院 EID（評価専用。並べて見るだけ。これを見て重み・設定を選ばない）
+  n_random: 1
+  crop_size: 256
+  crop_scale: 2
+  pcd_crop_center: [516, 604]   # 10 月の固定の切り抜き PCD-002-236（左上 y 444, x 532 + 72）
+  eid_crop_center: [448, 726]   # 同 EID-049-079（左上 y 376, x 654 + 72）
+  preview_seed: 0
+
+mag:                       # 虫眼鏡の数字（設計書 G-1）。合格線は無い（どちらに近いかを見る材料）
+  slices_per_case: 20
+  eid_cases: [EID-049, EID-002]   # ImageCAS（test・val 側。RECONCILE #12）
+  hospital_dirs:
+    - /workspace/DataSet/DataSet_new/EID/EID-1021
+  tile: 128

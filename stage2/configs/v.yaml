@@ -1,0 +1,76 @@
+# stage2/configs/v.yaml — V（質感を作るフロー。設計書 C）の構成と学習。唯一の正は configs/schema.py の V。既定値は無い。
+# PMRF（Ohayon et al., ICLR 2025）: Z0 = μ + σs·ε、Zt = (1 − t)·Z0 + t·X′、V(Zt, t, σs) が X′ − Z0 を当てる。式の出典は stage2/UPSTREAM.md。
+u:
+  run: ""                  # 固定して使う U の run 名。--u_run で渡す
+  tag: best                # best = U の最終 epoch の EMA
+
+net:                       # Haar 1 段で 1024・1ch ↔ 512・4ch → ResBlock U-Net。注意機構なし、画素ごとの LayerNorm。再開で変えられない
+  base_ch: 64
+  ch_mult: [1, 2, 4, 4]    # 64 / 128 / 256 / 256
+  blocks_per_level: 2
+  mid_blocks: 2
+  emb_dim: 256
+  emb_freq_dim: 64
+
+flow:
+  unit_hu: 100.0           # V の中の値 = HU ÷ 100
+  sigma_s_min_hu: 25.0     # 学習は [25, 400] HU を対数一様にくじ引きして V に教える（PMRF から変えた点。min = max で論文どおりの定数）
+  sigma_s_max_hu: 400.0
+  sigma_s_hu: 100.0        # 学習中の表示・確認に使う値
+  steps: 25                # Euler の回数 K
+  solver: euler
+  t_sampling: uniform      # 設計書どおり。stratified_uniform = PMRF の公式実装の既定
+
+optim:
+  lr: 0.0001
+  beta1: 0.9
+  beta2: 0.999
+  weight_decay: 0.0
+  warmup_steps: 1000
+  grad_clip: 1.0
+  batch_size: 16
+  max_steps: 150000        # 5,000 step × 30 epoch
+  steps_per_epoch: 5000
+  max_hours: 16.0          # 超えたら latest と best（rule: last）を保存して正常終了。足りなければ resume で延ばす
+  ema_decay: 0.9999
+  precision: bf16          # V の本体だけ CUDA autocast。入口（Haar・最初の Conv）・出口（LN・Conv・逆 Haar）・埋め込み・損失は FP32
+  compile: true
+  compile_mode: max-autotune
+  compile_after_steps: 20
+  channels_last: true
+  u_precision: bf16        # 学習中の固定した U の順伝播（設計書 C-5）。fp32 で切れる（1 step が遅くなる）
+  u_compile: true
+  seed: 0
+
+patch:
+  size: 256                # V に渡す中央（畳んだ後は 128、最下段 16）
+  margin: 96               # U と明るさの固定は 448 四方で計算する。明るさの広さ（1024 で σ 32）の 3 倍（RECONCILE #11）
+
+log:
+  print_steps: 100
+  image_steps: 500
+  n_images: 2
+  save_latest_steps: 1000
+  save_weights_epochs: 1   # 5,000 step ごとに weights/step_NNNNNNN/
+  first_check_step: 200
+  first_check_slices: 2
+  val_slices_per_case: 10
+  val_patches: 16
+  val_seed: 0
+  pcd_slice: PCD-002/PCD-002-236.png
+  eid_slices:
+    - /workspace/DataSet/EID_v5/EID-049/EID-049-079.png
+    - /workspace/DataSet/DataSet_new/EID/EID-1021/EID-1021-038.png
+  n_random: 1
+  crop_size: 256
+  crop_scale: 2
+  pcd_crop_center: [516, 604]
+  eid_crop_center: [448, 726]
+  preview_seed: 0
+
+mag:
+  slices_per_case: 10      # 学習中は 10 枚（1 枚 約 2 秒 × 5 症例）。確認コマンドは check.yaml の 20
+  eid_cases: [EID-049, EID-002]
+  hospital_dirs:
+    - /workspace/DataSet/DataSet_new/EID/EID-1021
+  tile: 128

@@ -1,0 +1,38 @@
+# stage2/configs/check.yaml — 確認の道具（bash start2.sh check → run_check.py。設計書 G）。唯一の正は configs/schema.py の CHECK。
+# 数値の合格線は無い。数字は「どちらに近いか」を見る材料。出力は <run>/check/<重み>_<時刻>/。
+check:
+  kind: v                  # u | v
+  run: ""                  # --run で渡す
+  tag: best
+  what: [magnifier, seeds] # magnifier | seeds | flicker
+  pseudo_eid_set: ""       # 空 = run が学習に使った組
+  sigma_s_list: [50, 100, 200]   # 学習し直さずに比べる σs（HU）
+  steps: 25
+  seed: 0
+  n_seeds: 8
+  precision: fp32
+  old_output_dir: ""       # 比べる相手（旧モデル）の出力フォルダ。空なら無し
+  out_root: ""             # 空 = <run>/check/
+
+mag:
+  slices_per_case: 20
+  eid_cases: [EID-049, EID-002]
+  hospital_dirs:
+    - /workspace/DataSet/DataSet_new/EID/EID-1021
+  tile: 128
+
+seeds:
+  slices:                  # 種類:パス:中心 y:中心 x（1024 の画素）
+    - "pseudo:PCD-002/PCD-002-236.png:516:604"
+    - "pseudo:PCD-002/PCD-002-222.png:818:668"
+    - "eid:/workspace/DataSet/EID_v5/EID-049/EID-049-079.png:448:726"
+  crop_size: 256
+  crop_scale: 2
+
+flicker:
+  series:
+    - "pseudo:PCD-017"
+    - "eid:/workspace/DataSet/EID_v5/EID-049"
+    - "eid:/workspace/DataSet/DataSet_new/EID/EID-1021"
+  n_slices: 32
+  stretch: 8
