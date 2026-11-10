@@ -10,12 +10,22 @@
 /stage1/datasets/*
 !/stage1/datasets/*.sh
 !/stage1/datasets/*.md
+/old/stage1/datasets/*
+!/old/stage1/datasets/*.sh
+!/old/stage1/datasets/*.md
 
 # ===== 学習・推論生成物 =====
+# 旧 Stage 1 / 2 / ablation（コードは old/ に移動、2026-11-11）の学習結果は、学習 PC では従来の場所（machines.yaml の *checkpoints_dir = /workspace/stage1/checkpoints 等）に
+# 残したまま読み書きする。コード移動後に残る __pycache__ 等も含め、従来の無視パターンは消さない
 /stage1/checkpoints/
 /stage1/results/
 /stage2/checkpoints/
 /ablation/checkpoints/
+/old/stage1/checkpoints/
+/old/stage1/results/
+/old/stage2/checkpoints/
+/old/ablation/checkpoints/
+# 新しい Stage 1 / Stage 2（2026-11-11〜）の学習結果の置き場
 /runs/
 /output/
 *.pth
