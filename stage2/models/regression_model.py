@@ -1,7 +1,8 @@
 """stage2/models/regression_model.py — Stage 2 の教師あり回帰（U-Net + MSE / L1）の司令塔。junyanz の BaseModel は使わない。
 
-  forward   : ns_forward（range / null-space 分離、2026-11-10 ブランチ 027）: x_in = g_σin ∗ x（train.ns.input_sigma。0 なら x）→ f = net(x_in)（mode.residual=true なら x_in + net(x_in)）
-              → y = g_σR ∗ x + (f − g_σR ∗ f)（train.ns.range_sigma。0 なら f。x は生の入力）。両 σ が 0 なら従来の net(x) / x + net(x) と同一。
+  forward   : ns_forward（range / null-space 分離、2026-11-10 ブランチ 027）: x_in = L_in(x)（網に見せる入力。無効なら x）→ f = net(x_in)（mode.residual=true なら x_in + net(x_in)）
+              → y = L_R(x) + (f − L_R(f))（無効なら f。x は生の入力）。L は train.ns.kernel で選ぶ: gaussian = g_σ ∗ x（ns.input_sigma / range_sigma [px]）、
+              ideal = FFT の理想低域射影 P（ns.input_cutoff / range_cutoff [cycles/px @1024]、ns.taper）。gaussian で両 σ が 0 なら従来の net(x) / x + net(x) と同一。
               学習の損失・D の偽物・EMA・val・preview・推論（inference_dir.py が同じ ns_forward を import）はすべて y を使う
   loss      : mse | l1 を正規化空間 [−1,1] で計算。表示用に HU 換算（1.0 = hu_per_unit HU）の RMSE / MAE も返す
   optimizer : Adam(lr, (beta1, beta2))。lr は一定（論文に減衰の記載なし）→ scheduler は持たない
@@ -16,6 +17,7 @@ import os
 import random
 import shutil
 import time
+from collections import namedtuple
 from pathlib import Path
 
 import numpy as np
@@ -69,7 +71,12 @@ def _to_tuple(x):
 
 
 # --- range / null-space 分離（2026-11-10 ブランチ 027）。inference_dir.py も同じ関数を使う ---
-_GAUSS_1D = {}   # (σ, device, dtype) → (1,1,1,K) の正規化 1 次元 Gaussian。lowpass が使い回す
+# 低域化 L の種類（train.ns.kernel。schema.NS_KERNELS と同じ値。schema は torch を読まないので別に持つ）
+#   gaussian: 分離 Gaussian（σ は px @1024）。核のスペクトルに零が無く可逆なので、網が逆畳み込みして入力の高域（鍵）を復元・増幅できた（EXP-20261110-01）
+#   ideal   : FFT の理想低域射影 P（cutoff は cycles/px @1024、taper で遷移帯）。P² = P なので入力の高域は完全に消え、出力の低域 P y = P x が厳密に固定される（2026-11-10 第 2 版）
+NS_KERNELS = ("gaussian", "ideal")
+_GAUSS_1D = {}     # (σ, device, dtype) → (1,1,1,K) の正規化 1 次元 Gaussian。lowpass_gaussian が使い回す
+_IDEAL_MASK = {}   # (2H, 2W, cutoff, taper, device) → (1,1,2H,W+1) float32 の放射状マスク M(f)。lowpass_ideal が使い回す
 
 
 def gaussian_kernel1d(sigma, device, dtype):
@@ -85,9 +92,9 @@ def gaussian_kernel1d(sigma, device, dtype):
     return k
 
 
-def lowpass(x, sigma):
+def lowpass_gaussian(x, sigma):
     """g_σ ∗ x: 1ch (N,1,H,W) に分離 Gaussian（横 → 縦）を reflect padding で掛ける（線形。正規化空間のままでよい）。σ ≤ 0 なら x そのもの（コピーしない）。
-    半径 ceil(3σ)。128 patch でも 1024 フルでも同じ核（reflect は半径 < 一辺 が条件。schema.check_train_values が patch_size と照合）。"""
+    半径 ceil(3σ)。128 patch でも 1024 フルでも同じ核（reflect は半径 < 一辺 が条件。schema.check_train_values が patch_size と照合）。第 1 版（33e3673）の lowpass そのもの。"""
     if sigma <= 0.0:
         return x
     k = gaussian_kernel1d(sigma, x.device, x.dtype)
@@ -96,19 +103,116 @@ def lowpass(x, sigma):
     return F.conv2d(F.conv2d(x, k), k.transpose(-1, -2))
 
 
-def ns_combine(x, x_in, out, residual, range_sigma):
-    """網の生出力 out から最終出力 y を作る。f = x_in + out（mode.residual）| out、y = g_σ ∗ x + (f − g_σ ∗ f)（range_sigma > 0）| f。
-    range 項は**生の x**（input_sigma を掛ける前）。出力の低域 = 入力の低域で固定し、網の寄与は零空間（高域）だけになる。"""
+def ideal_mask(hp, wp, cutoff, taper, device):
+    """延長後 (hp, wp) グリッドの rfft2 スペクトル (hp, wp//2+1) に掛ける放射状マスク M(f)（(hp, wp, cutoff, taper, device) ごとにキャッシュ。常に float32）。
+    f = √(fy² + fx²) [cycles/px]（fftfreq / rfftfreq = 1 標本あたりの周期数。延長しても画素間隔は変わらないので 128 patch でも 1024 フルでも同じ単位 = 1024 グリッドの cycles/px）。
+    M = 1 (f ≤ c − t/2) | 0 (f ≥ c + t/2) | raised cosine ½(1 + cos(π (f − (c − t/2)) / t)) の間（c = cutoff、t = taper。t = 0 なら f ≤ c で 1、他は 0 の急峻な遮断）。"""
+    key = (int(hp), int(wp), float(cutoff), float(taper), str(device))
+    m = _IDEAL_MASK.get(key)
+    if m is None:
+        fy = torch.fft.fftfreq(hp, dtype=torch.float64)
+        fx = torch.fft.rfftfreq(wp, dtype=torch.float64)
+        f = torch.sqrt(fy[:, None] ** 2 + fx[None, :] ** 2)
+        if taper > 0.0:
+            lo, hi = cutoff - taper / 2.0, cutoff + taper / 2.0
+            ramp = 0.5 * (1.0 + torch.cos(math.pi * (f - lo) / taper))
+            m = torch.where(f <= lo, torch.ones_like(f), torch.where(f >= hi, torch.zeros_like(f), ramp))
+        else:
+            m = (f <= cutoff).to(torch.float64)
+        m = m.to(device=device, dtype=torch.float32)[None, None]
+        _IDEAL_MASK[key] = m
+    return m
+
+
+def lowpass_ideal(x, cutoff, taper):
+    """P x: 1ch (N,1,H,W) の理想低域射影（cutoff / taper は cycles/px）。cutoff ≤ 0 なら x そのもの（コピーしない）。
+    FFT は周期境界なので、patch の左右・上下端が隣り合って段差になり、その輪帯（ringing）が内側へ回り込む。これを避けるため x を半画素対称に 2 倍へ延長
+    （横に [x, x↔]、縦に [·, ·↕] の (2H, 2W)。DCT-II と同じ周期化で、境界は連続・段差なし）してから rfft2 → M(f) を掛ける → irfft2 → 左上 H×W を切り出す。
+    対称な信号に偶な核（M は放射状）を掛けても対称性は保たれるので、延長 → 切り出しを含めた P は直交射影: taper 0 なら P² = P で P(y) = P(x) が厳密に成り立つ
+    （taper > 0 なら遷移帯 c ± t/2 の中だけ近似）。16 px の reflect padding + 切り出しは射影にならない（P² ≠ P、境界から鍵が漏れる）ので採らない。
+    128 patch（学習）でも 1024 フル（推論）でも同じ関数・同じ単位。FFT は bf16 autocast の中でも float32 で計算する（入口で float に、出口で x の dtype に戻す）。"""
+    if cutoff <= 0.0:
+        return x
+    h, w = x.shape[-2:]
+    with torch.autocast(device_type=x.device.type, enabled=False):
+        xe = x.float()
+        xe = torch.cat([xe, xe.flip(-1)], dim=-1)
+        xe = torch.cat([xe, xe.flip(-2)], dim=-2)   # (N,1,2H,2W) 半画素対称延長
+        spec = torch.fft.rfft2(xe) * ideal_mask(2 * h, 2 * w, cutoff, taper, x.device)
+        y = torch.fft.irfft2(spec, s=(2 * h, 2 * w))[..., :h, :w]
+    return y.to(x.dtype)
+
+
+def lowpass(x, kernel, sigma, cutoff, taper):
+    """低域化 L の振り分け（train.ns.kernel）: gaussian → lowpass_gaussian(x, σ)、ideal → lowpass_ideal(x, cutoff, taper)。無効（σ / cutoff が 0）なら x そのもの。"""
+    if kernel == "gaussian":
+        return lowpass_gaussian(x, sigma)
+    if kernel == "ideal":
+        return lowpass_ideal(x, cutoff, taper)
+    raise ValueError(f"ns.kernel は {NS_KERNELS}: {kernel!r}")
+
+
+class NSConfig(namedtuple("NSConfig", "kernel input_sigma range_sigma input_cutoff range_cutoff taper")):
+    """train.ns.* の実効値（RegressionModel と inference_dir.py が同じものを持つ）。kernel が gaussian なら σ [px]、ideal なら cutoff / taper [cycles/px @1024] を使い、
+    使わない側は 0.0（schema.check_train_values が検査。launch.yaml を読む側はこれで単位を取り違えない）。"""
+    __slots__ = ()
+    KEYS = ("ns.kernel", "ns.input_sigma", "ns.range_sigma", "ns.input_cutoff", "ns.range_cutoff", "ns.taper")   # = schema.NS_KEYS（順序も同じ）
+
+    @classmethod
+    def from_flat(cls, train):
+        return cls(str(train["ns.kernel"]), float(train["ns.input_sigma"]), float(train["ns.range_sigma"]),
+                   float(train["ns.input_cutoff"]), float(train["ns.range_cutoff"]), float(train["ns.taper"]))
+
+    def check(self):
+        """値の整合（schema.check_train_values の ns の規則のうち patch_size に依らない部分。inference_dir.py の引数検査用）。問題があれば ValueError。"""
+        P = []
+        if self.kernel not in NS_KERNELS: P.append(f"kernel は {NS_KERNELS}: {self.kernel!r}")
+        for name, v in (("input_sigma", self.input_sigma), ("range_sigma", self.range_sigma)):
+            if v < 0.0: P.append(f"{name} ≥ 0.0: {v}")
+            elif v > 0.0 and self.kernel != "gaussian": P.append(f"{name} {v} は kernel gaussian のときだけ（ideal では 0.0 にして *_cutoff を使う）")
+        for name, v in (("input_cutoff", self.input_cutoff), ("range_cutoff", self.range_cutoff)):
+            if not (0.0 <= v <= 0.5): P.append(f"{name} は 0.0（無し）〜 0.5 cycles/px: {v}")
+            elif v > 0.0 and self.kernel != "ideal": P.append(f"{name} {v} は kernel ideal のときだけ（gaussian では 0.0 にして *_sigma を使う）")
+            elif v > 0.0 and self.taper / 2.0 >= v: P.append(f"taper {self.taper} の半分が {name} {v} 以上（直流まで減衰する。taper < 2 × cutoff）")
+        if self.taper < 0.0: P.append(f"taper ≥ 0.0: {self.taper}")
+        elif self.taper > 0.0 and self.kernel != "ideal": P.append(f"taper {self.taper} は kernel ideal のときだけ（gaussian では 0.0）")
+        if P:
+            raise ValueError("ns: " + " / ".join(P))
+        return self
+
+    @property
+    def range_on(self):
+        """range 項（y = L_R(x) + f − L_R(f)）が有効か。無効なら y = f。"""
+        return (self.range_sigma if self.kernel == "gaussian" else self.range_cutoff) > 0.0
+
+    def input_lowpass(self, x):
+        """x_in = L_in(x)（網に見せる入力）。"""
+        return lowpass(x, self.kernel, self.input_sigma, self.input_cutoff, self.taper)
+
+    def range_lowpass(self, x):
+        """L_R(x)（range 項 = 出力の低域）。"""
+        return lowpass(x, self.kernel, self.range_sigma, self.range_cutoff, self.taper)
+
+    def describe(self):
+        """起動ログ用。"""
+        if self.kernel == "gaussian":
+            return f"gaussian σ_in {self.input_sigma} σ_R {self.range_sigma} [px@1024]"
+        return f"ideal c_in {self.input_cutoff} c_R {self.range_cutoff} taper {self.taper} [cycles/px@1024]"
+
+
+def ns_combine(x, x_in, out, residual, ns):
+    """網の生出力 out から最終出力 y を作る。f = x_in + out（mode.residual）| out、y = L_R(x) + (f − L_R(f))（range が有効）| f。
+    range 項は**生の x**（input 側の低域化を掛ける前）。出力の低域 = 入力の低域で固定し、網の寄与は零空間（高域）だけになる（ideal なら厳密、gaussian は近似）。"""
     f = x_in + out if residual else out
-    if range_sigma > 0.0:
-        return lowpass(x, range_sigma) + f - lowpass(f, range_sigma)
+    if ns.range_on:
+        return ns.range_lowpass(x) + f - ns.range_lowpass(f)
     return f
 
 
-def ns_forward(x, net, residual, input_sigma, range_sigma):
-    """x → y の全体（RegressionModel.forward と inference_dir.py が共用）。両 σ が 0 なら従来の net(x) / x + net(x) とビット一致。"""
-    x_in = lowpass(x, input_sigma)
-    return ns_combine(x, x_in, net(x_in), residual, range_sigma)
+def ns_forward(x, net, residual, ns):
+    """x → y の全体（RegressionModel.forward と inference_dir.py が共用）。ns は NSConfig。gaussian で両 σ が 0 なら従来の net(x) / x + net(x) とビット一致。"""
+    x_in = ns.input_lowpass(x)
+    return ns_combine(x, x_in, net(x_in), residual, ns)
 
 
 class RegressionModel:
@@ -116,8 +220,8 @@ class RegressionModel:
         self.device = device
         self.config = {"train": dict(train), "mode": dict(mode), "machine": dict(machine)}  # この重みに対応する実効設定（state.pth に入れる。再開の基準）
         self.residual = mode["residual"]
-        # range / null-space 分離（2026-11-10 ブランチ 027。両方 0.0 で 024 と同一。resume で変更不可 = schema.RESUME_FIXED_TRAIN_KEYS）。lowpass / ns_combine / ns_forward（モジュール関数）
-        self.ns_input_sigma, self.ns_range_sigma = float(train["ns.input_sigma"]), float(train["ns.range_sigma"])
+        # range / null-space 分離（2026-11-10 ブランチ 027。gaussian で両 σ 0.0 なら 024 と同一。resume で変更不可 = schema.RESUME_FIXED_TRAIN_KEYS）。NSConfig / lowpass / ns_combine / ns_forward（モジュール関数）
+        self.ns = NSConfig.from_flat(train)
         self.net = build_net(mode).to(device)
         # 高速化（Stage 1 と同じ、2026-11-03）: 学習の forward だけ bf16 autocast + torch.compile。val・監視・推論は compile しない FP32 の self.net（同じ重み）。
         # compile は torch.compile で別の呼び出し口を作る（state_dict のキーは self.net のまま）。CUDA Graph の出力 buffer 再利用に備えて学習の出力は clone する
@@ -159,7 +263,7 @@ class RegressionModel:
     # --- 前向き ---
     def forward(self, x, net=None):
         net = self.net if net is None else net
-        return ns_forward(x, net, self.residual, self.ns_input_sigma, self.ns_range_sigma)
+        return ns_forward(x, net, self.residual, self.ns)
 
     @property
     def net_eval(self):
@@ -179,14 +283,14 @@ class RegressionModel:
         forward は bf16 autocast（optim.precision）+ compile（optim.compile）。出力は FP32 に戻してから損失を計算する。"""
         x = batch["input"].to(self.device, non_blocking=True)
         t = batch["target"].to(self.device, non_blocking=True)
-        x_in = lowpass(x, self.ns_input_sigma)   # 網に見せる入力（ns.input_sigma > 0 なら低域化。FP32、autocast の外）。range 項と損失は生の x / 教師 t
+        x_in = self.ns.input_lowpass(x)   # 網に見せる入力（ns の input 側が有効なら低域化。FP32、autocast の外）。range 項と損失は生の x / 教師 t
         self.net.train()
         with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16):
             y = self.net_train(x_in)
         y = y.float()
         if self.compile_enabled:
             y = y.clone()
-        pred = ns_combine(x, x_in, y, self.residual, self.ns_range_sigma)   # = ns_forward(x) と同じ値（autocast / compile の都合で分けて書く）
+        pred = ns_combine(x, x_in, y, self.residual, self.ns)   # = ns_forward(x) と同じ値（autocast / compile の都合で分けて書く）
         loss_mse = self.criterion(pred, t)
         loss, extra, fake = loss_mse, {}, None
         if self.net_D is not None:
@@ -194,13 +298,13 @@ class RegressionModel:
             fakes = []
             if self.adv_source in ("eid", "both"):
                 e = batch["eid"].to(self.device, non_blocking=True)
-                e_in = lowpass(e, self.ns_input_sigma)
+                e_in = self.ns.input_lowpass(e)
                 with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.use_bf16):
                     ye = self.net_train(e_in)
                 ye = ye.float()
                 if self.compile_enabled:
                     ye = ye.clone()
-                fakes.append(ns_combine(e, e_in, ye, self.residual, self.ns_range_sigma))
+                fakes.append(ns_combine(e, e_in, ye, self.residual, self.ns))
             if self.adv_source in ("eidlike", "both"):
                 fakes.append(pred)
             fake = torch.cat(fakes, 0)

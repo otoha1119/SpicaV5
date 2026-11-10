@@ -41,9 +41,17 @@ adv:                      # 出力側 D（2026-11-09 ブランチ 023、研究�
 ema:                      # G の重みの指数移動平均（2026-11-09 ブランチ 024。GAN 項で epoch ごとに出力が振れる対策。学習は変えず、評価・保存に平均した重みを使う）
   decay: 0.0              # 0.0 = 無し。例 0.999（直近 ≈ 1,000 step の平均、1 epoch は 4,000 step）。val / best / net_G.pth は EMA、学習中の重みは net_G_raw.pth に別保存
 
-ns:                       # range / null-space 分離（2026-11-10 ブランチ 027。models/regression_model.py の lowpass / ns_forward）。両方 0.0 = 024 と同一。導入前の run の resume は 0 扱い、resume で変更不可（学習する関数が変わる）
-  input_sigma: 0.0        # 網に見せる入力を g_σ ∗ x に低域化する σ（px @1024。分離 Gaussian・reflect padding・半径 ceil(3σ)。0 = そのまま）。EID-like と教師 PCD1024 が同じ sinogram 由来で共有する高域のノイズ実現値（鍵）を網から隠す。例 2.3（半径 7 px）
-  range_sigma: 0.0        # 出力 y = g_σ ∗ x + (f − g_σ ∗ f)（x = 生の入力、f = 網の推定）。出力の低域は入力の低域で固定し、網は零空間（高域）だけを推定する。損失・D・EMA・val・preview・推論はすべて y。0 = y = f。例 2.3
+ns:                       # range / null-space 分離（2026-11-10 ブランチ 027。models/regression_model.py の NSConfig / lowpass / ns_forward）。x_in = L_in(x) → f = 網(x_in) → y = L_R(x) + (f − L_R(f))。
+                          # 入力の低域だけを網に見せて EID-like と教師 PCD1024 が共有する高域のノイズ実現値（鍵）を隠し、出力の低域は入力の低域で固定して網は零空間（高域）だけを推定する。損失・D・EMA・val・preview・推論はすべて y
+                          # kernel gaussian + 両 σ 0.0 = 024 と同一。導入前の run の resume は gaussian / 0 扱い、resume で ns.* は変更不可（学習する関数が変わる）
+  kernel: gaussian        # 低域化 L の種類（入力側・出力側で共通）: gaussian | ideal
+                          #   gaussian = 分離 Gaussian g_σ（σ は px @1024、reflect padding、半径 ceil(3σ)。第 1 版 33e3673）。核のスペクトルに零が無く可逆なので、σ 2.3 の学習では網が逆畳み込みして入力の高域（鍵）を復元・増幅し、出力の低域も固定されなかった（EXP-20261110-01）
+                          #   ideal    = FFT の理想低域射影 P（cutoff は cycles/px @1024。半画素対称延長 = DCT-II 型で周期境界の段差を避ける）。射影 P² = P なので入力の高域（f > cutoff）は完全に消え、出力の低域 P y = P x が厳密に固定される。128 patch でも 1024 フルでも同じ単位
+  input_sigma: 0.0        # [gaussian] 網に見せる入力 x_in = g_σ ∗ x の σ（px @1024。0 = そのまま。例 2.3 = 半径 7 px）。ideal では 0.0
+  range_sigma: 0.0        # [gaussian] 出力 y = g_σ ∗ x + (f − g_σ ∗ f) の σ（px @1024。x = 生の入力、f = 網の推定。0 = y = f。例 2.3）。Gaussian は射影ではないので g ∗ y = g ∗ x は近似。ideal では 0.0
+  input_cutoff: 0.0       # [ideal] 網に見せる入力 x_in = P x の遮断周波数（cycles/px @1024、radial。0 = そのまま。例 0.10 = Nyquist 0.5 の 1/5、512 グリッド換算 0.20）。gaussian では 0.0
+  range_cutoff: 0.0       # [ideal] 出力 y = P x + (f − P f) の遮断周波数（cycles/px @1024。0 = y = f。例 0.10）。gaussian では 0.0
+  taper: 0.0              # [ideal] 遮断の raised-cosine 遷移帯の幅（cycles/px。cutoff ± taper/2 の間で 1 → 0。0.0 = 急峻な遮断 = 厳密な射影。例 0.02 → 0.09 以下は通し 0.11 以上は零、遷移帯の中だけ近似的に射影）。taper < 2 × cutoff。gaussian では 0.0
 
 log:
   print_freq: 100               # バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）

@@ -68,9 +68,14 @@ TRAIN = {
     "adv.lr_d":     Key(float, "--adv_lr_d",     "D の Adam lr（β 0.5, 0.999）。G と同じ step 数で 1 回ずつ更新"),
     "adv.ndf":      Key(int,   "--adv_ndf",      "D（70×70 PatchGAN）の基本チャネル数。junyanz 既定 64"),
     "ema.decay":    Key(float, "--ema_decay",    "G の重みの指数移動平均（EMA）の減衰率。0.0 で無し。例 0.999（1 epoch 4,000 step の 1/4 程度を平均）。val / best / 保存の net_G.pth は EMA の重み、学習そのものは変えない（2026-11-09 ブランチ 024）"),
-    # ns（range / null-space 分離。2026-11-10 ブランチ 027。models/regression_model.py の lowpass / ns_forward。両方 0.0 で 024 と同一。resume で変更不可 = RESUME_FIXED_TRAIN_KEYS）
-    "ns.input_sigma": Key(float, "--ns_input_sigma", "網に見せる入力を g_σ ∗ x に低域化する σ [px、1024 グリッド]（分離 Gaussian、reflect padding、半径 ceil(3σ)。σ 2.3 → 7 px）。EID-like と教師 PCD1024 が同じ sinogram 由来で共有する高域のノイズ実現値（鍵）を網から隠す。0.0 で無し（x をそのまま見せる）"),
-    "ns.range_sigma": Key(float, "--ns_range_sigma", "出力 y = g_σ ∗ x + (f − g_σ ∗ f) の σ [px、1024 グリッド]。x は**生の入力**（input_sigma を掛ける前）、f は網の推定（mode.residual なら x_in + net(x_in)）。出力の低域を入力の低域で固定し、網は零空間（高域）だけを推定する。損失・D・EMA・val・preview・推論はすべて y。0.0 で無し（y = f）"),
+    # ns（range / null-space 分離。2026-11-10 ブランチ 027。models/regression_model.py の NSConfig / lowpass / ns_forward。x_in = L_in(x) → f = net(x_in) → y = L_R(x) + (f − L_R(f))。
+    #     kernel gaussian + 両 σ 0.0 で 024 と同一。resume で変更不可 = RESUME_FIXED_TRAIN_KEYS。kernel が gaussian なら *_sigma [px]、ideal なら *_cutoff / taper [cycles/px] を使い、使わない側は 0.0（check_train_values））
+    "ns.kernel":       Key(str,   "--ns_kernel",       "低域化 L の種類: gaussian（分離 Gaussian、σ は px。第 1 版 33e3673。核のスペクトルに零が無く可逆なので網が逆畳み込みして鍵を復元・増幅できた = EXP-20261110-01）| ideal（FFT の理想低域射影 P、cutoff は cycles/px @1024。半画素対称延長 = DCT-II 型で周期境界の段差を避ける。P² = P なので入力の高域が完全に消え、出力の低域 P y = P x が厳密に固定される。2026-11-10 第 2 版）"),
+    "ns.input_sigma":  Key(float, "--ns_input_sigma",  "[gaussian] 網に見せる入力を g_σ ∗ x に低域化する σ [px、1024 グリッド]（reflect padding、半径 ceil(3σ)。σ 2.3 → 7 px）。EID-like と教師 PCD1024 が同じ sinogram 由来で共有する高域のノイズ実現値（鍵）を網から隠す。0.0 で無し（x をそのまま見せる）。ideal では 0.0"),
+    "ns.range_sigma":  Key(float, "--ns_range_sigma",  "[gaussian] 出力 y = g_σ ∗ x + (f − g_σ ∗ f) の σ [px、1024 グリッド]。x は**生の入力**（input 側の低域化を掛ける前）、f は網の推定（mode.residual なら x_in + net(x_in)）。出力の低域を入力の低域で固定し、網は零空間（高域）だけを推定する。損失・D・EMA・val・preview・推論はすべて y。0.0 で無し（y = f）。ideal では 0.0"),
+    "ns.input_cutoff": Key(float, "--ns_input_cutoff", "[ideal] 網に見せる入力 x_in = P x の遮断周波数 [cycles/px、1024 グリッド]（radial。f ≤ cutoff を通す）。0.0 で無し。例 0.10（1024 グリッドの Nyquist 0.5 の 1/5）。gaussian では 0.0"),
+    "ns.range_cutoff": Key(float, "--ns_range_cutoff", "[ideal] 出力 y = P x + (f − P f) の遮断周波数 [cycles/px、1024 グリッド]。0.0 で無し（y = f）。例 0.10。gaussian では 0.0"),
+    "ns.taper":        Key(float, "--ns_taper",        "[ideal] 遮断の raised-cosine 遷移帯の幅 [cycles/px]（cutoff を中心に ± taper/2。M = 1 (f ≤ c − t/2) | 0 (f ≥ c + t/2) | ½(1 + cos) の間）。0.0 = 急峻な遮断（厳密な射影）。例 0.02 → 0.09 以下を通し 0.11 以上を零（遷移帯の中だけ近似的に射影）。taper < 2 × cutoff。gaussian では 0.0"),
     # log
     "log.print_freq":              Key(int, "--print_freq",              "バー末尾の損失・TensorBoard scalar・loss_log.txt の更新間隔（step = batch_size 枚）"),
     "log.image_freq":              Key(int, "--image_freq",              "TensorBoard に学習中の 128 patch グリッド（images/current, images/fixed）を出す間隔（step）。Stage 1 と同じ仕組み（2026-09-09）"),
@@ -355,8 +360,10 @@ LEGACY_TRAIN_DEFAULTS = {"optim.precision": "fp32", "optim.compile": False,
                          "aug.blur_sigma_max": 0.0, "aug.hf_phase_cutoff": 0.0,   # 導入前の run（2026-11-08 以前）は augmentation なしで続ける
                          "adv.lambda": 0.0, "adv.source": "eid", "adv.gan_mode": "lsgan", "adv.lr_d": 1e-4, "adv.ndf": 64,   # 導入前の run（2026-11-09 以前）は D なしで続ける
                          "ema.decay": 0.0,   # 導入前の run は EMA なしで続ける
-                         "ns.input_sigma": 0.0, "ns.range_sigma": 0.0}   # 導入前の run（2026-11-10 以前）は range / null-space 分離なし（= 024 と同じ関数）で続ける
-NS_KEYS = ("ns.input_sigma", "ns.range_sigma")   # range / null-space 分離の σ（run_infer.py も launch.yaml からこのキーを読む）
+                         "ns.kernel": "gaussian", "ns.input_sigma": 0.0, "ns.range_sigma": 0.0,   # 導入前の run（2026-11-10 以前）は range / null-space 分離なし（= 024 と同じ関数）で続ける
+                         "ns.input_cutoff": 0.0, "ns.range_cutoff": 0.0, "ns.taper": 0.0}   # 第 1 版（33e3673、kernel 無し）の run は gaussian のまま続ける
+NS_KERNELS = ("gaussian", "ideal")   # ns.kernel の値（models/regression_model.py の NS_KERNELS と同じ）
+NS_KEYS = ("ns.kernel", "ns.input_sigma", "ns.range_sigma", "ns.input_cutoff", "ns.range_cutoff", "ns.taper")   # range / null-space 分離の設定（run_infer.py も launch.yaml からこのキーを読む。順序は NSConfig と同じ）
 # resume で変えられない train のキー（学習する関数そのものが変わる。Stage 1 の mode.residual と同じ扱い）。run_train.py prepare_resume が checkpoint の値と上書き後の値を照合して止める
 RESUME_FIXED_TRAIN_KEYS = NS_KEYS
 ADV_SOURCES = ("eid", "eidlike", "both")
@@ -388,9 +395,18 @@ def check_train_values(train, mode, machine):
     if train["adv.lr_d"] <= 0.0: P.append("adv.lr_d は正")
     if train["adv.ndf"] < 1: P.append("adv.ndf ≥ 1")
     if not (0.0 <= train["ema.decay"] < 1.0): P.append("ema.decay は 0.0 以上 1.0 未満（0.0 で無し）")
-    for k in NS_KEYS:
+    kn = train["ns.kernel"]
+    if kn not in NS_KERNELS: P.append(f"ns.kernel は {NS_KERNELS}")
+    for k in ("ns.input_sigma", "ns.range_sigma"):   # gaussian の σ [px]。ideal では 0.0（単位の取り違えを起動前に止める）
         if not (0.0 <= train[k] <= 8.0): P.append(f"{k} は 0.0（無し）〜 8.0 px")
+        elif train[k] > 0.0 and kn != "gaussian": P.append(f"{k} {train[k]} は ns.kernel gaussian のときだけ（ideal では 0.0 にして ns.*_cutoff を使う）")
         elif train[k] > 0.0 and math.ceil(3 * train[k]) >= ps: P.append(f"{k} {train[k]} の核の半径 ceil(3σ) = {math.ceil(3 * train[k])} px が data.patch_size {ps} 以上（reflect padding できない）")
+    for k in ("ns.input_cutoff", "ns.range_cutoff"):   # ideal の遮断周波数 [cycles/px]。gaussian では 0.0
+        if not (0.0 <= train[k] <= 0.5): P.append(f"{k} は 0.0（無し）〜 0.5 cycles/px（1024 グリッドの Nyquist）")
+        elif train[k] > 0.0 and kn != "ideal": P.append(f"{k} {train[k]} は ns.kernel ideal のときだけ（gaussian では 0.0 にして ns.*_sigma を使う）")
+        elif train[k] > 0.0 and train["ns.taper"] / 2.0 >= train[k]: P.append(f"ns.taper {train['ns.taper']} の半分が {k} {train[k]} 以上（直流まで減衰する。taper < 2 × cutoff）")
+    if train["ns.taper"] < 0.0: P.append("ns.taper ≥ 0.0（0.0 で急峻な遮断）")
+    elif train["ns.taper"] > 0.0 and kn != "ideal": P.append(f"ns.taper {train['ns.taper']} は ns.kernel ideal のときだけ（gaussian では 0.0）")
     for k in ("data.train_cases", "data.val_cases"):
         if not train[k]: P.append(f"{k} は 1 症例以上")
     lists = {k: train[k] for k in ("data.train_cases", "data.val_cases", "data.test_cases")}
