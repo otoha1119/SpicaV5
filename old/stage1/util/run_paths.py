@@ -22,8 +22,8 @@ checkpoint は「重みディレクトリ」単位で扱う（G と D と optimi
   （学習中の 128 patch グリッドは TensorBoard だけ）
   tb/                         TensorBoard
 
-推論とパッチ切り出しの出力は run の下ではなく **リポジトリ直下の output/**（2026-09-09 ユーザー指示。run の下は 6 階層で探しにくい。.gitignore 済み、コンテナでは /workspace/output/）:
-<repo>/output/
+推論とパッチ切り出しの出力は run の下ではなく **<repo>/old/output/（2026-11-11 に直下の output/ から移動）**（2026-09-09 ユーザー指示。run の下は 6 階層で探しにくい。.gitignore 済み、コンテナでは /workspace/old/output/）:
+<repo>/old/output/
   <run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/   bash start.sh infer の出力（inference_dir.py。uint16 PNG / DICOM）。実行ごとに別ディレクトリ
       {full,patch}/<case>/<slice>.png, {full,patch}_dicom/, {full,patch}_R/（16bit、0 HU = 32768）, {full,patch}_R_color/（表示用カラー 8bit RGB）, R_colorbar_pm<range>HU.png, diff_stats.txt, infer.yaml
       {full,patch}_panel/<case>/<slice>.png   表示用パネル [EID-like | PCD | R + ゲージ]（学習の output_images/preview_* と同じ正規化表示、util/panel.py）。--save_panel のとき
@@ -40,7 +40,7 @@ TOP_TAGS = ("latest", "best")                    # run 直下に置く重みデ�
 BEST_PREFIX = "best_e"                           # best の実フォルダ名 = best_eNNN（2026-11-02）
 WEIGHTS_DIR = "weights"
 OUTPUT_IMAGES_DIR = "output_images"
-OUTPUT_DIRNAME = "output"  # 推論・crop の出力の根（<repo>/output/。.gitignore 済み）
+OUTPUT_DIRNAME = "output"  # 推論・crop の出力の根（<repo>/old/output/。.gitignore 済み）  # 2026-11-11: 根は <repo>/old/output/（旧コードの生成物を old/ 配下に統一）
 BEST_NOTE = "best.txt"
 LAUNCH_FILE = "launch.yaml"
 CKPT_KINDS = ("net_G.pth", "net_D.pth", "state.pth")  # 重みディレクトリの中身
@@ -161,16 +161,16 @@ def repo_root():
 
 
 def output_root(root=None):
-    """推論・crop の出力の根。省略時は <repo>/output/。scratch 実行のときだけ root で差し替える。"""
-    return Path(root) if root else repo_root() / OUTPUT_DIRNAME
+    """推論・crop の出力の根。省略時は <repo>/old/output/。scratch 実行のときだけ root で差し替える。"""
+    return Path(root) if root else repo_root() / "old" / OUTPUT_DIRNAME
 
 
 def infer_output_dir(run_dir, weight_dir, input_dir, now, root=None):
-    """推論の出力先: <repo>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<yyyy_mmdd_HHMMSS>/（2026-09-09、run の下の深い階層から移動）。
+    """推論の出力先: <repo>/old/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<yyyy_mmdd_HHMMSS>/（2026-09-09、run の下の深い階層から移動）。
     名前に run・重み・入力・時刻を全部入れるので、階層を掘らずに何の出力か分かる。実行時刻付きなので再実行が混ざらない（F-13）。"""
     return output_root(root) / f"{Path(run_dir).name}_{Path(weight_dir).name}_{Path(input_dir).name}_{now.strftime(INFER_STAMP_FORMAT)}"
 
 
 def crop_output_dir(run_dir, weight_dir, now, root=None):
-    """パッチ切り出し（bash start.sh crop）の出力先: <repo>/output/<run>_<重みディレクトリ名>_crop_<yyyy_mmdd_HHMMSS>/。"""
+    """パッチ切り出し（bash start.sh crop）の出力先: <repo>/old/output/<run>_<重みディレクトリ名>_crop_<yyyy_mmdd_HHMMSS>/。"""
     return output_root(root) / f"{Path(run_dir).name}_{Path(weight_dir).name}_crop_{now.strftime(INFER_STAMP_FORMAT)}"

@@ -23,8 +23,8 @@ checkpoint は「重みディレクトリ」単位で扱う（net_G.pth と stat
   tb/                         TensorBoard（scalar と images/full/fixed|random）
   tensorboard.log
 
-推論の出力は run の下ではなく **リポジトリ直下の output/**（Stage 1 と同じ根。.gitignore 済み、コンテナでは /workspace/output/。2026-09-10）:
-<repo>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/   bash start2.sh infer の出力（inference_dir.py）。実行ごとに別ディレクトリ
+推論の出力は run の下ではなく **<repo>/old/output/（2026-11-11 に直下の output/ から移動）**（Stage 1 と同じ根。.gitignore 済み、コンテナでは /workspace/old/output/。2026-09-10）:
+<repo>/old/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/   bash start2.sh infer の出力（inference_dir.py）。実行ごとに別ディレクトリ
     full/<case>/<slice>.png            PCD-like1024（uint16、stored = HU + 1400）
     full_input1024/<case>/<slice>.png  512 入力を補間した 1024 入力（uint16）。512 入力 かつ infer.yaml の save_input1024 のとき
     full_panel/<case>/<slice>.png      表示用パネル。学習の固定パネルと同じ 5 列 [EID-like1024 | PCD-like1024 | PCD1024 | 実 EID → PCD-like1024 | 実 EID1024]（util/panel.py full_labels）。save_panel のとき
@@ -132,8 +132,8 @@ def find_run_dir(weight_dir):
     return None
 
 
-# --- 推論の出力（Stage 1 の run_paths.py と同じ規約。根は <repo>/output/ で両 Stage 共用） ---
-OUTPUT_DIRNAME = "output"
+# --- 推論の出力（Stage 1 の run_paths.py と同じ規約。根は <repo>/old/output/ で両 Stage 共用） ---
+OUTPUT_DIRNAME = "output"  # 2026-11-11: 根は <repo>/old/output/（旧コードの生成物を old/ 配下に統一）
 INFER_STAMP_FORMAT = "%Y_%m%d_%H%M%S"
 
 
@@ -143,10 +143,10 @@ def repo_root():
 
 
 def output_root(root=None):
-    """推論の出力の根。省略時は <repo>/output/。scratch 実行のときだけ root で差し替える。"""
-    return Path(root) if root else repo_root() / OUTPUT_DIRNAME
+    """推論の出力の根。省略時は <repo>/old/output/。scratch 実行のときだけ root で差し替える。"""
+    return Path(root) if root else repo_root() / "old" / OUTPUT_DIRNAME
 
 
 def infer_output_dir(run_dir, weight_dir, input_dir, now, root=None):
-    """推論の出力先: <repo>/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<yyyy_mmdd_HHMMSS>/。名前に run・重み・入力・時刻を全部入れる（実行ごとに別）。"""
+    """推論の出力先: <repo>/old/output/<run>_<重みディレクトリ名>_<入力フォルダ名>_<yyyy_mmdd_HHMMSS>/。名前に run・重み・入力・時刻を全部入れる（実行ごとに別）。"""
     return output_root(root) / f"{Path(run_dir).name}_{Path(weight_dir).name}_{Path(input_dir).name}_{now.strftime(INFER_STAMP_FORMAT)}"

@@ -212,8 +212,8 @@ start_tensorboard() {  # 全 run 表示（logdir = ablation_checkpoints_dir/<名
   local url="http://localhost:$TB_PORT_ABLATION"
   if ! tb_running_all; then
     tb_kill  # run 単位の TensorBoard（学習が起動したもの）が同じポートにいれば止めて、全 run 表示に切り替える
-    echo "[start_ablation] TensorBoard を起動: logdir=$CHECKPOINTS_DIR port=${TB_PORT_ABLATION}（ログ: /workspace/tb_server_ablation.log）"
-    "${COMPOSE[@]}" exec -d spicav5 bash -c "tensorboard --logdir '$CHECKPOINTS_DIR' --port '$TB_PORT_ABLATION' --bind_all > /workspace/tb_server_ablation.log 2>&1"
+    echo "[start_ablation] TensorBoard を起動: logdir=$CHECKPOINTS_DIR port=${TB_PORT_ABLATION}（ログ: /workspace/old/tb_server_ablation.log）"
+    "${COMPOSE[@]}" exec -d spicav5 bash -c "tensorboard --logdir '$CHECKPOINTS_DIR' --port '$TB_PORT_ABLATION' --bind_all > /workspace/old/tb_server_ablation.log 2>&1"
   else
     echo "[start_ablation] TensorBoard（全 run）は起動済み ($url)"
   fi

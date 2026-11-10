@@ -3,7 +3,7 @@
 # SpicaV5 起動スクリプト — 取扱説明
 #   OS 共通。mac / Linux はターミナル、Windows は Git Bash か WSL。すべて bash 経由（実行権限は不要）。
 #   【2026-11-11】旧 Stage 1（〜2026-11-11）の起動口。old/ に移動した。リポジトリ直下で  bash old/start.sh ...  と打つ（どの cwd からでも可）。
-#   コード・設定は old/stage1/（下の説明文中の stage1/... は old/stage1/... と読む）。学習結果の場所（machines.yaml の checkpoints_dir = /workspace/stage1/checkpoints）と configs/・docker/ は移動前のまま。
+#   コード・設定は old/stage1/（下の説明文中の stage1/... は old/stage1/... と読む）。学習結果の場所（machines.yaml の checkpoints_dir = /workspace/old/stage1/checkpoints）と configs/・docker/ は移動前のまま。
 #   ホストのシェルから実行する。コンテナ内（bash old/start.sh shell で入った先）では動かない
 #   （docker が無い。/.dockerenv があれば即エラーで止める）。コンテナ内で使うのは train_stage1.sh / infer_stage1.sh / crop_stage1.sh の方。
 #
@@ -49,10 +49,10 @@
 #   bash old/start.sh infer --mode full --max_slices 4                        # 方式を上書きして推論
 #   bash old/start.sh infer --output_format both --dicom_dir /workspace/DataSet/PhotonCT512_original   # PNG と DICOM の両方を書く
 #   bash old/start.sh crop                       # パッチ切り出し（学習中でも可）。crop_stage1.sh の WEIGHT_DIR、stage1/configs/crop.yaml のケース
-#   bash old/start.sh crop --weight_dir /workspace/stage1/checkpoints/2026_0907_1742/weights/epoch_141 --device cuda
+#   bash old/start.sh crop --weight_dir /workspace/old/stage1/checkpoints/2026_0907_1742/weights/epoch_141 --device cuda
 #   bash old/start.sh PC3 split                  # task: sr 用の症例分割（EID を 15:15:70、EID-049 を test に固定）を configs/splits/eid_v5.yaml に作る
 #   bash old/start.sh PC3 --task sr              # 一発超解像（EID1024 → PCD-like1024）で学習。stage1/configs/sr.yaml の分割・除外・patch 256 を使う
-#   bash old/start.sh mac infer --weight_dir /workspace/stage1/checkpoints/2026_0905_1234/best --input_dir /workspace/DataSet/PCD512_v2
+#   bash old/start.sh mac infer --weight_dir /workspace/old/stage1/checkpoints/2026_0905_1234/best --input_dir /workspace/DataSet/PCD512_v2
 #                                            # GPU 無しのマシン定義（gpu_gen 0 → cpu）で、重みと入力を引数で指定して推論
 #   bash old/start.sh tb                         # TensorBoard だけ起動してブラウザを開く（学習はしない）
 #   bash old/start.sh mac shell                  # 学習せず、mac のコンテナの bash に入る（exit で抜けてもコンテナは残る）
@@ -304,8 +304,8 @@ start_tensorboard() {
   local url="http://localhost:$TB_PORT"
   if ! tb_running_all; then
     tb_kill  # run 単位の TensorBoard（学習が起動したもの）が同じポートにいれば止めて、全 run 表示に切り替える
-    echo "[start] TensorBoard を起動: logdir=$CHECKPOINTS_DIR port=${TB_PORT}（ログ: /workspace/tb_server.log）"
-    "${COMPOSE[@]}" exec -d spicav5 bash -c "tensorboard --logdir '$CHECKPOINTS_DIR' --port '$TB_PORT' --bind_all > /workspace/tb_server.log 2>&1"
+    echo "[start] TensorBoard を起動: logdir=$CHECKPOINTS_DIR port=${TB_PORT}（ログ: /workspace/old/tb_server.log）"
+    "${COMPOSE[@]}" exec -d spicav5 bash -c "tensorboard --logdir '$CHECKPOINTS_DIR' --port '$TB_PORT' --bind_all > /workspace/old/tb_server.log 2>&1"
   else
     echo "[start] TensorBoard（全 run）は起動済み ($url)"
   fi

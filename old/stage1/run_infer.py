@@ -13,7 +13,7 @@
 
 使い方（通常は ../infer_stage1.sh 経由）:
   python run_infer.py --machine PC1 --infer configs/infer.yaml --machines ../configs/machines.yaml \
-      --weight_dir /workspace/stage1/checkpoints/2026_0907_1742/weights/epoch_030 --input_dir /workspace/DataSet/PCD512_v2 \
+      --weight_dir /workspace/old/stage1/checkpoints/2026_0907_1742/weights/epoch_030 --input_dir /workspace/DataSet/PCD512_v2 \
       --output_format png --dicom_dir "" -- --mode full --max_slices 4
 """
 

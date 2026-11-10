@@ -37,7 +37,7 @@
 #               （input eidlike|eid / max_slices / batch_slices / teacher / save_input1024 / save_panel / eid_slice / pcd_slice / io.*。schema の INFER / MACHINE にあるフラグだけ上書き可）。
 #               入力は 1024（EID-like1024）でも 512（実 EID_v5、Stage 1 の推論出力 full/）でもよく、512 は run の dataset_info.yaml の方式（学習と同じ scale / interp）で 1024 にしてから通す。
 #               teacher=true なら pcd1024_dir の同名スライスを教師に rmse / ssim / psnr を metrics.txt へ（PCD のテスト症例向け。実 EID は --teacher false）。
-#               U-Net の構成は run の launch.yaml から。出力 <repo>/output/<run>_<重み>_<入力名>_<時刻>/（Stage 1 と同じ根）。学習中に同じコンテナで打ってよい（exec だけ。VRAM は取り合う）。
+#               U-Net の構成は run の launch.yaml から。出力 <repo>/old/output/<run>_<重み>_<入力名>_<時刻>/（Stage 1 と同じ根）。学習中に同じコンテナで打ってよい（exec だけ。VRAM は取り合う）。
 #   ・コンテナが起動済みなら、どのアクションでも up を呼ばず exec だけ行う（Stage 1 の学習中でも安全）。build は起動済みなら拒否。止めるのは down だけ。
 #     compose の設定を変えたときは、中の処理が終わってから down → 起動し直す（起動済みのままだと反映されず、注意が出る）。
 #
@@ -51,12 +51,12 @@
 #   bash old/start2.sh tb                             # Stage 2 の全 run を並べた TensorBoard（stage2_tb_port）
 #   bash old/start2.sh dataset                        # dataset_stage2.sh の INPUT_DIR → machines.yaml の eidlike1024_dir、stage2/configs/dataset.yaml の方式
 #   bash old/start2.sh PC1 dataset                    # マシン名を指定（sh 内の MACHINE より優先）
-#   bash old/start2.sh dataset --input_dir /workspace/stage1/checkpoints/2026_0907_2222/infer/epoch_141/PCD512_v2/2026_0908_120000/full
+#   bash old/start2.sh dataset --input_dir /workspace/old/stage1/checkpoints/2026_0907_2222/infer/epoch_141/PCD512_v2/2026_0908_120000/full
 #   bash old/start2.sh dataset --input_dir /workspace/DataSet/EID_v5 --eidlike1024_dir /workspace/DataSet/EID1024_v1     # 実 EID（推論用）も同じ道具で 1024 にする（出力先を一時上書き）
 #   bash old/start2.sh dataset --interp bilinear      # 方式の上書き
 #   bash old/start2.sh infer                          # 推論。infer_stage2.sh の WEIGHT_DIR / INPUT_DIR、stage2/configs/infer.yaml の方式
 #   bash old/start2.sh infer --max_slices 1 --save_panel true                                   # 1 枚だけ試してパネルも出す
-#   bash old/start2.sh infer --weight_dir /workspace/stage2/checkpoints/2026_0909_1200/best --input_dir /workspace/DataSet/EIDlike1024_v1   # PCD のテスト症例（教師あり → metrics.txt）
+#   bash old/start2.sh infer --weight_dir /workspace/old/stage2/checkpoints/2026_0909_1200/best --input_dir /workspace/DataSet/EIDlike1024_v1   # PCD のテスト症例（教師あり → metrics.txt）
 #   bash old/start2.sh infer --input_dir /workspace/DataSet/EID_v5 --input eid --teacher false   # 実 EID512（補間してから通す。教師なし。パネルは右 2 列に入り左 3 列は pcd_slice の参照）
 #   bash old/start2.sh PC1 build                     # イメージをビルド（本番機の初回。start.sh build と同じ）
 #   bash old/start2.sh shell                          # コンテナに入る（手動: bash old/dataset_stage2.sh [--flag ...]）
@@ -245,8 +245,8 @@ start_tensorboard() {  # 全 run 表示（logdir = stage2_checkpoints_dir、port
   local url="http://localhost:$TB_PORT_STAGE2"
   if ! tb_running_all; then
     tb_kill  # run 単位の TensorBoard（学習が起動したもの）が同じポートにいれば止めて、全 run 表示に切り替える
-    echo "[start2] TensorBoard を起動: logdir=$CHECKPOINTS_DIR port=${TB_PORT_STAGE2}（ログ: /workspace/tb_server_stage2.log）"
-    "${COMPOSE[@]}" exec -d spicav5 bash -c "tensorboard --logdir '$CHECKPOINTS_DIR' --port '$TB_PORT_STAGE2' --bind_all > /workspace/tb_server_stage2.log 2>&1"
+    echo "[start2] TensorBoard を起動: logdir=$CHECKPOINTS_DIR port=${TB_PORT_STAGE2}（ログ: /workspace/old/tb_server_stage2.log）"
+    "${COMPOSE[@]}" exec -d spicav5 bash -c "tensorboard --logdir '$CHECKPOINTS_DIR' --port '$TB_PORT_STAGE2' --bind_all > /workspace/old/tb_server_stage2.log 2>&1"
   else
     echo "[start2] TensorBoard（全 run）は起動済み ($url)"
   fi

@@ -16,7 +16,7 @@ INPUT_DIR の <case>/<slice>.png（uint16 1ch、一辺 input_size = 512）を sc
 
 使い方（通常は ../dataset_stage2.sh 経由）:
   python make_dataset.py --machine PC1 --config configs/dataset.yaml --machines ../configs/machines.yaml \
-      --input_dir /workspace/stage1/checkpoints/<run>/infer/<weights>/PCD512_v2/<time>/full -- --interp bicubic [--eidlike1024_dir /workspace/DataSet/EID1024_v1]
+      --input_dir /workspace/old/stage1/checkpoints/<run>/infer/<weights>/PCD512_v2/<time>/full -- --interp bicubic [--eidlike1024_dir /workspace/DataSet/EID1024_v1]
 """
 
 import argparse

@@ -152,6 +152,7 @@ def prepare_resume(a, train_yaml, mode_yaml, machine_yaml, overrides, now):
         machine = validate_shared("machine(run)", saved["machine"], MACHINE)
     except (KeyError, TypeError) as e:
         raise ConfigError(f"{base} の形式が不正です: {e}")
+    machine["stage2_checkpoints_dir"] = machine_yaml["stage2_checkpoints_dir"]  # run の置き場は学習の設定ではなく「今どこにあるか」。checkpoint に残る移動前の場所（/workspace/stage1/checkpoints 等）ではなく今の machines.yaml の値を使う（2026-11-11 に学習結果を old/ 配下へ移したため。--flag の上書きはこの後に効く）
     for section, cur, sv in (("train", train_yaml, train), ("mode", mode_yaml, mode), ("machine", machine_yaml, machine)):
         diff = {k: (sv.get(k), v) for k, v in cur.items() if sv.get(k) != v}
         if diff:

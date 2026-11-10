@@ -14,7 +14,7 @@
 
 使い方（通常は ../infer_stage2.sh 経由）:
   python run_infer.py --machine PC2 --infer configs/infer.yaml --train configs/train.yaml --machines ../configs/machines.yaml \
-      --weight_dir /workspace/stage2/checkpoints/2026_0909_1200/best --input_dir /workspace/DataSet/EIDlike1024_v1 -- --max_slices 1 --save_panel true
+      --weight_dir /workspace/old/stage2/checkpoints/2026_0909_1200/best --input_dir /workspace/DataSet/EIDlike1024_v1 -- --max_slices 1 --save_panel true
 """
 
 import argparse

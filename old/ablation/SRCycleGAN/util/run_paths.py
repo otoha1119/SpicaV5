@@ -15,7 +15,7 @@ run 名は起動時刻（JST）を yyyy_mmdd_HHMM にしたもの。checkpoint �
   tb/                         TensorBoard（ablation_tb_port）
   tensorboard.log
 
-推論の出力は <repo>/output/ablation/SRCycleGAN/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/（.gitignore 済みの output/ の下。コンテナでは /workspace/output/...）
+推論の出力は <repo>/old/output/ablation/SRCycleGAN/<run>_<重みディレクトリ名>_<入力フォルダ名>_<実行時刻>/（.gitignore 済みの output/ の下。コンテナでは /workspace/old/output/...）
     full/<case>/<slice>.png            PCD-like1024（uint16、stored = HU + 1400）
     full_R/, full_R_color/             R = G1(z) − f↑(z)（save_residual）
     full_panel/                        [PCD-like1024 | EID↑2 | R + ゲージ]（save_panel）
@@ -106,7 +106,7 @@ def preview_dir(run_dir, name):
 
 
 # --- 推論の出力 ---
-OUTPUT_DIRNAME = "output"
+OUTPUT_DIRNAME = "output"  # 2026-11-11: 根は <repo>/old/output/（旧コードの生成物を old/ 配下に統一）
 INFER_STAMP_FORMAT = "%Y_%m%d_%H%M%S"
 
 
@@ -116,8 +116,8 @@ def repo_root():
 
 
 def output_root(root=None):
-    """<repo>/output/ablation/SRCycleGAN/。scratch 実行のときだけ root で差し替える。"""
-    return (Path(root) if root else repo_root() / OUTPUT_DIRNAME) / "ablation" / ABLATION
+    """<repo>/old/output/ablation/SRCycleGAN/。scratch 実行のときだけ root で差し替える。"""
+    return (Path(root) if root else repo_root() / "old" / OUTPUT_DIRNAME) / "ablation" / ABLATION
 
 
 def infer_output_dir(run_dir, weight_dir, input_dir, now, root=None):

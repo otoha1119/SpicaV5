@@ -15,19 +15,21 @@
 !/old/stage1/datasets/*.md
 
 # ===== 学習・推論生成物 =====
-# 旧 Stage 1 / 2 / ablation（コードは old/ に移動、2026-11-11）の学習結果は、学習 PC では従来の場所（machines.yaml の *checkpoints_dir = /workspace/stage1/checkpoints 等）に
-# 残したまま読み書きする。コード移動後に残る __pycache__ 等も含め、従来の無視パターンは消さない
-/stage1/checkpoints/
-/stage1/results/
-/stage2/checkpoints/
-/ablation/checkpoints/
+# 旧 Stage 1 / 2 / ablation（コードは old/ に移動、2026-11-11）の生成物は old/ 配下に統一した
+# （machines.yaml の *checkpoints_dir = /workspace/old/stage1/checkpoints 等、推論出力 old/output/）
 /old/stage1/checkpoints/
 /old/stage1/results/
 /old/stage2/checkpoints/
 /old/ablation/checkpoints/
-# 新しい Stage 1 / Stage 2（2026-11-11〜）の学習結果の置き場
-/runs/
+/old/output/
+# 移動前の場所。学習 PC で管理外フォルダを old/ へ移し終えるまでは無視し続ける（消さない）
+/stage1/checkpoints/
+/stage1/results/
+/stage2/checkpoints/
+/ablation/checkpoints/
 /output/
+# 新しい Stage 1 / Stage 2（2026-11-11〜）の学習結果の置き場（runs/stage1/・runs/stage2/）
+/runs/
 *.pth
 *.pt
 *.ckpt
@@ -51,7 +53,10 @@ docs
 weight/
 outputs
 
-# TensorBoard のサーバログ（start.sh がコンテナ内 /workspace に書く）
+# TensorBoard のサーバログ（old/start*.sh がコンテナ内 /workspace/old に書く。2026-11-11 より前は /workspace 直下）
 /tb_server.log
 /tb_server_stage2.log
 /tb_server_ablation.log
+/old/tb_server.log
+/old/tb_server_stage2.log
+/old/tb_server_ablation.log
