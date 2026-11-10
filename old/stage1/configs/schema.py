@@ -130,6 +130,10 @@ MACHINE = {
     # アブレーション用（ablation/<名前>/、start_ablation.sh。2026-10-27）。Stage 1 は使わない（宣言だけ）
     "ablation_checkpoints_dir": Key(str, None,      "アブレーションの run の保存先ルート（ablation/<名前>/util/run_paths.py）。Stage 1 は使わない"),
     "ablation_tb_port":    Key(int, None,                "アブレーションの TensorBoard のポート（compose が 3 本とも公開するので start.sh も読む）。Stage 1 は使わない"),
+    # 新しい Stage 1 / Stage 2（2026-11-11、直下の stage1/ stage2/）用。旧 Stage 1 は使わない（未知キーで落とさないための宣言だけ）
+    "painter_checkpoints_dir": Key(str, None,       "新 Stage 1（描き手 P）の run の置き場。旧 Stage 1 は使わない"),
+    "flow_checkpoints_dir": Key(str, None,          "新 Stage 2（U + フロー）の run の置き場。旧 Stage 1 は使わない"),
+    "pseudo_eid_dir":      Key(str, None,                "疑似 EID の置き場（新 Stage 1 の generate の出力）。旧 Stage 1 は使わない"),
 }
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,9 @@
 # configs/machines.yaml — マシン定義（Stage 共通）。旧コード（old/）が読むキーの唯一の正は old/stage1/configs/schema.py の MACHINE。
 # 【2026-11-11】旧コードの学習結果の置き場（checkpoints_dir / stage2_checkpoints_dir / ablation_checkpoints_dir）を old/ 配下に統一した（/workspace/old/stage1/checkpoints など）。
-#   データセットのパス（pcd_dir など）は変えていない。新しい Stage 1 / 2 の置き場（runs/stage1・runs/stage2 の予定）のキーは次の実装で足す。
+#   データセットのパス（pcd_dir など）は変えていない。
+# 【2026-11-11 追加】新しい Stage 1 / 2 のキー: painter_checkpoints_dir（runs/stage1）、flow_checkpoints_dir（runs/stage2）、pseudo_eid_dir。
+#   新 Stage 1 が読むキーの正は stage1/configs/schema.py の MACHINE（使うキーだけ検査）。旧 Stage 1 の schema は未知キーを拒むので、old/stage1/configs/schema.py にも宣言だけ足してある。
+#   監視ツール（watch/exporter.py）は名前が checkpoints_dir で終わるキーを run の置き場として拾う。
 # 全環境 Docker 内で実行する。pcd_dir / eid_dir / checkpoints_dir は「コンテナ内から見えるパス」を書く。
 # 推論（bash start.sh infer）もここの gpu_gen で Docker とデバイス（0 → cpu、それ以外 → cuda）を決める。重みと入力のパスは infer_stage1.sh に書く。
 # host_data_root → container_data_root が Docker 起動時のマウント（start.sh が使う。詳細は Docker の項で別途）。
@@ -24,6 +27,9 @@ PC1:                                   # 研究室 Windows 機
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
   ablation_checkpoints_dir: /workspace/old/ablation/checkpoints   # アブレーション（old/ablation/<名前>/、bash old/start_ablation.sh）の run の保存先ルート。この下に <名前>/<run>/。Stage 1 / 2 は使わない（2026-10-27）
   ablation_tb_port: 6008   # アブレーションの TensorBoard のポート（Stage 1 の 6006、Stage 2 の 6007 とは別）
+  painter_checkpoints_dir: /workspace/runs/stage1   # 新 Stage 1（描き手 P、stage1/）の run の置き場。この下に <run>/。レイアウトは stage1/util/run_paths.py（2026-11-11）
+  flow_checkpoints_dir: /workspace/runs/stage2      # 新 Stage 2（U + フロー）の run の置き場。この下に u/<run>/、v/<run>/（Stage 2 の実装が使う。Stage 1 は使わない）
+  pseudo_eid_dir: /workspace/DataSet/PseudoEID512   # 疑似 EID（bash start.sh generate の出力）。この下に <組>/k00, k01, …/<症例>/<スライス>.png と <組>/manifest.yaml
   
 PC1_new:                               # PC1 で新データ（DataSet_new。評価専用症例そのものを学習に使う Stage 1 評価用。2026-10-28）。学習は --use_eval_only_cases を付ける
   gpu_gen: 30
@@ -41,6 +47,9 @@ PC1_new:                               # PC1 で新データ（DataSet_new。評
   num_threads: 8
   tb_port: 6006
   stage2_tb_port: 6007
+  painter_checkpoints_dir: /workspace/runs/stage1   # 新 Stage 1（描き手 P、stage1/）の run の置き場。この下に <run>/。レイアウトは stage1/util/run_paths.py（2026-11-11）
+  flow_checkpoints_dir: /workspace/runs/stage2      # 新 Stage 2（U + フロー）の run の置き場。この下に u/<run>/、v/<run>/（Stage 2 の実装が使う。Stage 1 は使わない）
+  pseudo_eid_dir: /workspace/DataSet/PseudoEID512   # 疑似 EID（bash start.sh generate の出力）。この下に <組>/k00, k01, …/<症例>/<スライス>.png と <組>/manifest.yaml
 
 PC2:                                   # 研究室 Windows 機
   gpu_gen: 30                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
@@ -60,6 +69,9 @@ PC2:                                   # 研究室 Windows 機
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
   ablation_checkpoints_dir: /workspace/old/ablation/checkpoints   # アブレーション（old/ablation/<名前>/、bash old/start_ablation.sh）の run の保存先ルート。この下に <名前>/<run>/。Stage 1 / 2 は使わない（2026-10-27）
   ablation_tb_port: 6008   # アブレーションの TensorBoard のポート（Stage 1 の 6006、Stage 2 の 6007 とは別）
+  painter_checkpoints_dir: /workspace/runs/stage1   # 新 Stage 1（描き手 P、stage1/）の run の置き場。この下に <run>/。レイアウトは stage1/util/run_paths.py（2026-11-11）
+  flow_checkpoints_dir: /workspace/runs/stage2      # 新 Stage 2（U + フロー）の run の置き場。この下に u/<run>/、v/<run>/（Stage 2 の実装が使う。Stage 1 は使わない）
+  pseudo_eid_dir: /workspace/DataSet/PseudoEID512   # 疑似 EID（bash start.sh generate の出力）。この下に <組>/k00, k01, …/<症例>/<スライス>.png と <組>/manifest.yaml
 
 PC3:                                   # 研究室 Windows 機
   gpu_gen: 50                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
@@ -79,6 +91,9 @@ PC3:                                   # 研究室 Windows 機
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
   ablation_checkpoints_dir: /workspace/old/ablation/checkpoints   # アブレーション（old/ablation/<名前>/、bash old/start_ablation.sh）の run の保存先ルート。この下に <名前>/<run>/。Stage 1 / 2 は使わない（2026-10-27）
   ablation_tb_port: 6008   # アブレーションの TensorBoard のポート（Stage 1 の 6006、Stage 2 の 6007 とは別）
+  painter_checkpoints_dir: /workspace/runs/stage1   # 新 Stage 1（描き手 P、stage1/）の run の置き場。この下に <run>/。レイアウトは stage1/util/run_paths.py（2026-11-11）
+  flow_checkpoints_dir: /workspace/runs/stage2      # 新 Stage 2（U + フロー）の run の置き場。この下に u/<run>/、v/<run>/（Stage 2 の実装が使う。Stage 1 は使わない）
+  pseudo_eid_dir: /workspace/DataSet/PseudoEID512   # 疑似 EID（bash start.sh generate の出力）。この下に <組>/k00, k01, …/<症例>/<スライス>.png と <組>/manifest.yaml
 
 PC4:                                   # 研究室 Windows 機
   gpu_gen: 40                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
@@ -98,6 +113,9 @@ PC4:                                   # 研究室 Windows 機
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
   ablation_checkpoints_dir: /workspace/old/ablation/checkpoints   # アブレーション（old/ablation/<名前>/、bash old/start_ablation.sh）の run の保存先ルート。この下に <名前>/<run>/。Stage 1 / 2 は使わない（2026-10-27）
   ablation_tb_port: 6008   # アブレーションの TensorBoard のポート（Stage 1 の 6006、Stage 2 の 6007 とは別）
+  painter_checkpoints_dir: /workspace/runs/stage1   # 新 Stage 1（描き手 P、stage1/）の run の置き場。この下に <run>/。レイアウトは stage1/util/run_paths.py（2026-11-11）
+  flow_checkpoints_dir: /workspace/runs/stage2      # 新 Stage 2（U + フロー）の run の置き場。この下に u/<run>/、v/<run>/（Stage 2 の実装が使う。Stage 1 は使わない）
+  pseudo_eid_dir: /workspace/DataSet/PseudoEID512   # 疑似 EID（bash start.sh generate の出力）。この下に <組>/k00, k01, …/<症例>/<スライス>.png と <組>/manifest.yaml
 
 
 mac:                                   # 開発機（Docker、CPU）
@@ -118,3 +136,6 @@ mac:                                   # 開発機（Docker、CPU）
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
   ablation_checkpoints_dir: /workspace/old/ablation/checkpoints   # アブレーション（old/ablation/<名前>/、bash old/start_ablation.sh）の run の保存先ルート。この下に <名前>/<run>/。Stage 1 / 2 は使わない（2026-10-27）
   ablation_tb_port: 6008   # アブレーションの TensorBoard のポート（Stage 1 の 6006、Stage 2 の 6007 とは別）
+  painter_checkpoints_dir: /workspace/runs/stage1   # 新 Stage 1（描き手 P、stage1/）の run の置き場。この下に <run>/。レイアウトは stage1/util/run_paths.py（2026-11-11）
+  flow_checkpoints_dir: /workspace/runs/stage2      # 新 Stage 2（U + フロー）の run の置き場。この下に u/<run>/、v/<run>/（Stage 2 の実装が使う。Stage 1 は使わない）
+  pseudo_eid_dir: /workspace/DataSet/PseudoEID512   # 疑似 EID（bash start.sh generate の出力）。この下に <組>/k00, k01, …/<症例>/<スライス>.png と <組>/manifest.yaml

@@ -1,0 +1,5 @@
+# configs/shared.yaml — 新しい Stage 1 / Stage 2 で共有する値（2026-11-11。docs/plans/20261111_detail_design/RECONCILE.md #1）。
+# 各 Stage の schema（stage1/configs/schema.py の SHARED など）が、自分の使うキーだけ検査する。既定値は無い。
+brightness:
+  sigma_px_512: 16.0   # 明るさを平均する広さ σ_a（Gaussian の σ、512 の画素）。Stage 1 の錨（描くときだけ）と Stage 2 で同じ値を使う（1024 では 2 倍 = 32）。
+                       # 研究者が未決定の値（確認で 8 / 16 / 32 を並べる）。手がかりの粗さ σ_b の 2 倍以上であること（Stage 1 が起動時に検査）
