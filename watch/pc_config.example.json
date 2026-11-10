@@ -1,0 +1,14 @@
+{
+  "machine": "PC1",
+  "repo_dir": "C:/Users/<you>/Documents/SpicaV5",
+  "data_dir": "C:/Users/<you>/Documents/SpicaV5-watch-data",
+  "container": "spicav5",
+  "interval_s": 300,
+  "active_min": 30,
+  "extra_roots": [],
+  "codex_cmd": ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "-C", "{repo_dir}", "-o", "{out}", "-"],
+  "codex_timeout_s": 1800,
+  "discord": true,
+  "launch_shell": "wsl",
+  "git_bash": "C:/Program Files/Git/git-bash.exe"
+}
