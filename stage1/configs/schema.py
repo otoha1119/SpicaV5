@@ -246,6 +246,7 @@ Y_GENERATE = {
     "generate.k":          Key(int,   "--k",              "1 枚につき何通り（描き直しの乱数を変える）"),
     "generate.seed":       Key(int,   "--gen_seed",       "画像ごとの種の base"),
     "generate.name_suffix": Key(str,  "--name_suffix",    "組の名前の末尾"),
+    "redraw.use_eraser":   Key(bool,  "--use_eraser",     "false = 消し手 A を通さず、PCD そのものにノイズ s を足して E で描き直す（A が要るかの比較。素の SDEdit）"),
     "redraw.s_hu":         Key(float, "--s_hu",           "描き直しの出発点 s（HU）。0 = 描き直さず A の出力をそのまま書く"),
     "redraw.steps":        Key(int,   "--steps",          "描き直しの段数（s から 0 まで、Euler ancestral η = 1）"),
     "redraw.cue_blur_px":  Key(float, "--cue_blur_px",    "描き直しで E に渡す手がかり = A の出力をこの広さでぼかした絵"),

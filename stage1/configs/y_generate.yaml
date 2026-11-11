@@ -14,6 +14,7 @@ generate:
   name_suffix: ""
 
 redraw:
+  use_eraser: true         # false = A を通さない（PCD に直接ノイズ s を足して描き直す。比較用）
   s_hu: 100.0
   steps: 20
   cue_blur_px: 8.0

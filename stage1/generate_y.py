@@ -104,7 +104,8 @@ def main():
     hu, scale = hu_tuple(et), et["data.hu_scale"]
     bf16, cl = want_bf16(g["redraw.precision"], device), bool(et["optim.channels_last"])
     s = g["redraw.s_hu"] / scale
-    name = f"Y_{g['generate.run']}-{int(state['step']):07d}_s{g['redraw.s_hu']:g}_b{g['redraw.cue_blur_px']:g}{'_anc' if g['redraw.anchor'] else ''}"
+    head = f"Y_{g['generate.run']}-{int(state['step']):07d}" if g["redraw.use_eraser"] else f"Ynoeraser_E{e_step:07d}"
+    name = f"{head}_s{g['redraw.s_hu']:g}_b{g['redraw.cue_blur_px']:g}{'_anc' if g['redraw.anchor'] else ''}"
     name += f"_{g['generate.name_suffix']}" if g["generate.name_suffix"] else ""
     root = Path(machine["pseudo_eid_dir"])
     final, tmp = root / name, root / (name + ".tmp")
@@ -132,7 +133,7 @@ def main():
         chunk = jobs[i:i + bs]
         src = torch.from_numpy(np.stack([stored_to_x(read_stored(q), hu) for _, _, q in chunk]))[:, None].to(device)
         with torch.no_grad():
-            m = A(src)
+            m = A(src) if g["redraw.use_eraser"] else src
             if s > 0:
                 gens = [generator_of(device, g["generate.seed"], case, q.name, k) for k, case, q in chunk]
                 out = redraw(E, m, src, s, g["redraw.steps"], g["redraw.cue_blur_px"], shared["brightness.sigma_px_512"], g["redraw.anchor"],
@@ -146,7 +147,7 @@ def main():
         done = i + len(chunk)
         print(f"[generate_y] {done}/{len(jobs)} 枚、{(time.time() - t0) / done:.2f} s/枚", flush=True)
     manifest = {"name": name, "created": datetime.datetime.now(JST).isoformat(timespec="seconds"), "git_commit": git_commit(), "method": "type Y (eraser A + redraw by E)",
-                "a_run": g["generate.run"], "a_weight_dir": str(wdir), "a_step": int(state["step"]), "e_weight_dir": str(e_dir), "e_step": e_step,
+                "a_run": g["generate.run"] if g["redraw.use_eraser"] else None, "use_eraser": g["redraw.use_eraser"], "a_weight_dir": str(wdir), "a_step": int(state["step"]), "e_weight_dir": str(e_dir), "e_step": e_step,
                 "input_dir": str(input_dir), "cases": idx.cases, "n_slices": len(tasks), "k": g["generate.k"], "n_images": len(jobs),
                 "format": "1ch uint16 PNG, stored = HU + hu_offset", "brightness_sigma_px_512": shared["brightness.sigma_px_512"],
                 "generate": g, "sec_per_image": (time.time() - t0) / len(jobs)}
