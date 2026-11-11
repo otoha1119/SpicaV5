@@ -543,10 +543,13 @@ def audit_windows(cfg, verbose=False):
         return
     try:
         # スクリプトは標準入力で渡す。wsl.exe の引数に複数行のスクリプトを渡すと引数の解釈で壊れ、何も閉じずに黙って終わっていた（PC1 で 2026-11-11 に判明）
-        p = subprocess.run([shutil.which("wsl"), "--", "bash", "-s"], input=AUDIT_SNIPPET, capture_output=True, text=True, timeout=60)
-        out = (p.stdout or "").strip()
+        # バイト列で渡す（text=True だと Windows が改行を CRLF に変え、bash が $'\\r': command not found で落ちる。checkout で CRLF になった場合に備えて \\r も落とす。PC1 で 2026-11-11 に判明）
+        script = AUDIT_SNIPPET.replace("\r", "").encode("utf-8")
+        p = subprocess.run([shutil.which("wsl"), "--", "bash", "-s"], input=script, capture_output=True, timeout=60)
+        out = (p.stdout or b"").decode("utf-8", "replace").replace("\r", "").strip()
+        err = (p.stderr or b"").decode("utf-8", "replace").strip()
         if p.returncode != 0 or "candidates=" not in out:
-            print(f"[watch] ウィンドウの監査が動いていません（終了コード {p.returncode}）: {(p.stderr or '').strip()[-400:]}", flush=True)
+            print(f"[watch] ウィンドウの監査が動いていません（終了コード {p.returncode}）: {err[-400:]}", flush=True)
         if out and (verbose or not out.endswith("closed=0 orphans=0")):
             print(f"[watch] ウィンドウの監査:\n{out}", flush=True)
     except (subprocess.SubprocessError, OSError) as e:
