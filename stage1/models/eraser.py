@@ -55,5 +55,38 @@ class Eraser(nn.Module):
         return (m, wts) if return_weights else m
 
 
+class IsoEraser(Eraser):
+    """向きのないぼかしだけの消し手（2026-11-11 夕方、EXP-20261111-03 の 2 回目の調整）。
+    画素ごとに広さ σ(p) だけを選ぶ: w_p(q) ∝ exp(−|q − p|² / (2σ(p)²))（近傍 (2r+1)² で正規化）。σ(p) = r · sigmoid(logit)。
+    重みは p を中心に左右上下対称なので、明るい側を片側へ広げる・細い構造を動かすことができない（自由な重みの Eraser は 1 回目にそれをした）。
+    σ → 0 で恒等。初期値は logit = −center_bias（σ ≈ r · e^−center_bias、ほぼ恒等）。"""
+
+    def __init__(self, radius, width, depth, center_bias):
+        super().__init__(radius, width, depth, center_bias)
+        self.out = nn.Conv2d(width, 1, 1)
+        nn.init.zeros_(self.out.weight)
+        with torch.no_grad():
+            self.out.bias.fill_(-float(center_bias))
+        r = self.radius
+        yy, xx = torch.meshgrid(torch.arange(-r, r + 1.0), torch.arange(-r, r + 1.0), indexing="ij")
+        self.register_buffer("d2", (yy ** 2 + xx ** 2).reshape(1, -1, 1, 1), persistent=False)
+
+    def sigma_px(self, x):
+        return self.radius * torch.sigmoid(self.out(F.silu(self.blocks(self.stem(x.float())))))
+
+    def weights(self, x):
+        s = self.sigma_px(x).clamp_min(1e-3)
+        return torch.softmax(-self.d2 / (2.0 * s * s), dim=1)
+
+
 def build_eraser(cfg):
-    return Eraser(cfg["eraser.radius"], cfg["eraser.width"], cfg["eraser.depth"], cfg["eraser.center_bias"])
+    cls = {"free": Eraser, "isotropic": IsoEraser}[cfg["eraser.kind"]]
+    return cls(cfg["eraser.radius"], cfg["eraser.width"], cfg["eraser.depth"], cfg["eraser.center_bias"])
+
+
+def fill_legacy(cfg):
+    """eraser.kind が無い重み（2026-11-11 17:07 の run など、足す前に作ったもの）は free。足したら表示する。"""
+    if "eraser.kind" not in cfg:
+        cfg["eraser.kind"] = "free"
+        print("[eraser] 重みの設定に eraser.kind が無い（足す前の run）→ free として読む", flush=True)
+    return cfg

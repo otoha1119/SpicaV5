@@ -29,10 +29,11 @@ data:
   pcd_val_cases: [PCD-002]
 
 eraser:
+  kind: isotropic          # 1 回目（free）は明るい側を広げ細い骨を消した（EXP-20261111-03）。向きのないぼかしに縛る
   radius: 4                # 9×9 の近傍まで平均できる（上限）
   width: 32
   depth: 6
-  center_bias: 6.0         # 最初は中央の重み ≈ 0.83（ほぼ恒等）
+  center_bias: 2.2         # 最初はほぼ恒等。isotropic: σ = 4 × sigmoid(−2.2) ≈ 0.4 px（中央の重み ≈ 0.9。σ が小さすぎると softmax が飽和して勾配が 0 になる）。free（1 回目）は 6.0 で中央の重み ≈ 0.83
 
 dmd:
   sigma_lo_hu: 20.0        # 見比べは 20〜2,000 HU のノイズをかぶせた上だけ（研究者の手が残る点。設計書の「出発点 s」と同じ扱い）

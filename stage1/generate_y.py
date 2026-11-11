@@ -27,7 +27,7 @@ from diffusion.anchor import anchor, wide_mean  # noqa: E402
 from diffusion.cue import gaussian_blur  # noqa: E402
 from diffusion.edm import ancestral_step, karras_sigmas  # noqa: E402
 from generate import git_commit  # noqa: E402
-from models.eraser import build_eraser  # noqa: E402
+from models.eraser import build_eraser, fill_legacy  # noqa: E402
 from models.painter import denoise, load_ema, want_bf16  # noqa: E402
 from util.run_paths import JST, ckpt_dir  # noqa: E402
 from util.seeds import generator_of  # noqa: E402
@@ -90,7 +90,7 @@ def main():
         if not (wdir / "A.pth").is_file():
             raise ConfigError(f"A の重みがありません: {wdir}")
         state = torch.load(wdir / "state.pth", map_location="cpu", weights_only=False)
-        yc = validate("y(state)", dict(state["config"]), Y_TRAIN)
+        yc = validate("y(state)", fill_legacy(dict(state["config"])), Y_TRAIN)
         e_dir = ckpt_dir(Path(machine["painter_checkpoints_dir"]) / yc["init.e_run"], yc["init.e_tag"])
     except ConfigError as e:
         print(f"[generate_y] 設定エラー: {e}", file=sys.stderr)

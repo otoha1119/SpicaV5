@@ -40,7 +40,7 @@ from data.eid_dataset import EidPatchStream, load_full_x, resolve_split, worker_
 from diffusion.anchor import anchor, wide_mean  # noqa: E402
 from diffusion.cue import center_crop, gaussian_blur  # noqa: E402
 from diffusion.edm import ancestral_step, karras_sigmas, precond  # noqa: E402
-from models.eraser import build_eraser  # noqa: E402
+from models.eraser import build_eraser, fill_legacy  # noqa: E402
 from models.painter import _swap_dirs, denoise, load_ema, want_bf16  # noqa: E402
 from models.unet import build_net  # noqa: E402
 from util.run_paths import JST, LAUNCH_FILE, ckpt_dir, run_name, saved_tags  # noqa: E402
@@ -72,6 +72,7 @@ def check_values(c, shared, machine, e_train):
     for k in ("optim.batch_size", "optim.f_steps", "optim.max_steps", "data.patches_per_slice", "eraser.radius", "eraser.width", "eraser.depth",
               "log.print_steps", "log.preview_steps", "log.save_latest_steps", "log.save_weights_steps", "log.preview_steps_redraw"):
         if c[k] < 1: P.append(f"{k} ≥ 1")
+    if c["eraser.kind"] not in ("free", "isotropic"): P.append("eraser.kind は free | isotropic")
     if c["optim.compile_after_steps"] < 0: P.append("optim.compile_after_steps ≥ 0")
     if c["optim.precision"] not in PRECISIONS: P.append(f"optim.precision は {PRECISIONS}")
     if c["optim.compile_mode"] not in COMPILE_MODES: P.append(f"optim.compile_mode は {COMPILE_MODES}")
@@ -189,11 +190,14 @@ class Trainer:
             w["gap_hu"] += float((f - e).abs().mean()) * self.scale
             w["change_hu"] += float(((md - center_crop(big, M)) ** 2).mean().sqrt()) * self.scale
             w["center_w"] += float(center_crop(wts, M)[:, wts.shape[1] // 2].mean())
+            if hasattr(self.A, "sigma_px"):
+                w["sigma_px"] = w.get("sigma_px", 0.0) + float(center_crop(self.A.sigma_px(big), M).mean())
 
     def window_stats(self):
         w, n = self.win, max(self.win["n"], 1)
         return {"loss/a_dmd": w["loss_a"] / n, "loss/f_denoise": w["loss_f"] / n, "diag/grad_norm_a": w["grad_a"] / n, "diag/grad_norm_f": w["grad_f"] / n,
-                "diag/gap_f_minus_e_hu": w["gap_hu"] / n, "diag/a_change_rms_hu": w["change_hu"] / n, "diag/a_center_weight": w["center_w"] / n}
+                "diag/gap_f_minus_e_hu": w["gap_hu"] / n, "diag/a_change_rms_hu": w["change_hu"] / n, "diag/a_center_weight": w["center_w"] / n,
+                **({"diag/a_sigma_px_mean": w["sigma_px"] / n} if "sigma_px" in w else {})}
 
     # --- 途中経過 ---
     @torch.no_grad()
@@ -267,7 +271,7 @@ def main():
             if not all((sp.parent / k).is_file() for k in KINDS):
                 raise ConfigError(f"再開用の重みが揃っていません: {sp.parent}（保存済み: {saved_tags(run_dir)}）")
             state = torch.load(sp, map_location="cpu", weights_only=False)
-            c = validate("y(state)", dict(state["config"]), Y_TRAIN)
+            c = validate("y(state)", fill_legacy(dict(state["config"])), Y_TRAIN)
             frozen = {k: c[k] for k in c if k.startswith(("eraser.", "init."))}
             applied = apply_overrides(overrides, {"y": (c, Y_TRAIN), "shared": (shared, SHARED), "machine": (machine, MACHINE)})
             changed = [k for k in frozen if frozen[k] != c[k]]
