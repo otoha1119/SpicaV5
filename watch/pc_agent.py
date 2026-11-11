@@ -492,6 +492,15 @@ def handle_requests(repo, cfg):
         rid = fm.get("id", f.stem)
         if fm.get("machine") != cfg["machine"] or (repo.path / "responses" / f"{rid}.md").exists() or rid in jobs:
             continue
+        if rid in started and fm.get("kind") == "job" and job_root(cfg, rid).exists():
+            # job はもう起動している（作業場所がある）。再読み込みで jobs の記録だけ失われた。中断扱いにせず引き取って見守る
+            # （2026-11-12 PC3: 中断と返したので Mac が出し直し、同じ学習が 2 つ動いてメモリがあふれた）
+            jobs[rid] = {"started": started[rid], "commit": git(job_root(cfg, rid), "rev-parse", "HEAD").stdout.strip(), "kind": "job",
+                         "summary": fm.get("summary", ""), "command": fm.get("command", "")}
+            repo.write_state("jobs", jobs)
+            repo.commit_push(f"watch: {cfg['machine']} job {rid} を引き取り")
+            print(f"[watch] job {rid} は起動済みだったので引き取ります（中断扱いにしない）", flush=True)
+            continue
         if rid in started:   # 処理中に落ちた。やり直さず失敗として返す（二重起動を避ける）
             respond(repo, cfg, rid, fm, "エージェントが処理中に再起動しました。状態を確認してから依頼し直してください。", "failed",
                     f"{rid} は処理中にエージェントが再起動したため中断扱い")
@@ -503,6 +512,7 @@ def handle_requests(repo, cfg):
         try:
             if fm.get("kind") == "job":   # 応答は終わったときに check_jobs が書く
                 start_job(repo, cfg, rid, fm)
+                repo.commit_push(f"watch: {cfg['machine']} job {rid} 開始")   # jobs の記録をすぐ残す（再読み込みで失わない）
                 continue
             if fm.get("kind") == "stop":
                 n = stop(cfg, resolve_run(repo.path, cfg, need(fm, "run", f.name)))
