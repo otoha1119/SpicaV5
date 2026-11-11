@@ -27,10 +27,16 @@ def precond(sigma, sigma_data):
     return sigma_data * sigma_data / d2, s * sigma_data / d2.sqrt(), 1.0 / d2.sqrt()
 
 
-def draw_sigma(n, sigma_min, sigma_max, device, generator=None):
-    """学習時の σ（loguniform）。"""
-    u = torch.rand(n, device=device, generator=generator)
-    return torch.exp(math.log(sigma_min) + u * (math.log(sigma_max) - math.log(sigma_min)))
+def draw_sigma(n, sigma_min, sigma_max, device, generator=None, sampling="loguniform", p_mean=None, p_std=None):
+    """学習時の σ。loguniform: ln σ を [ln σ_min, ln σ_max] で一様。
+    lognormal: ln σ ~ N(p_mean, p_std²)（EDM の標準。Karras et al. 2022 の P_mean = −1.2、P_std = 1.2）。[σ_min, σ_max] で切る（描くときの範囲の外は練習しない）。"""
+    if sampling == "loguniform":
+        u = torch.rand(n, device=device, generator=generator)
+        return torch.exp(math.log(sigma_min) + u * (math.log(sigma_max) - math.log(sigma_min)))
+    if sampling == "lognormal":
+        z = torch.randn(n, device=device, generator=generator)
+        return torch.exp(p_mean + p_std * z).clamp(sigma_min, sigma_max)
+    raise ValueError(f"sigma_sampling: {sampling}")
 
 
 def stratified_sigma(n, sigma_min, sigma_max, generator):

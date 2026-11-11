@@ -52,7 +52,9 @@ diffusion:                 # EDM 型（Karras et al. 2022）。式の出典は s
   sigma_min: 0.002         # 2 HU 相当
   sigma_max: 40.0          # 40,000 HU 相当
   sigma_data: 0.5
-  sigma_sampling: loguniform
+  sigma_sampling: loguniform   # loguniform | lognormal（EDM の標準。--sigma_sampling lognormal）
+  p_mean: -1.2             # lognormal のときの ln σ の平均（EDM の標準。x = HU/1000 で中心 約 300 HU）
+  p_std: 1.2               # 同 標準偏差
 
 sample:                    # 学習中の途中経過の描画（本番は generate.yaml）
   steps: 40

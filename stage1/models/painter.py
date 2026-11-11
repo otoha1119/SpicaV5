@@ -142,7 +142,8 @@ class Painter:
         x0 = center_crop(big, m)
         cue = center_crop(gaussian_blur(big, blur_px), m) + noise_x[:, None, None, None] * torch.randn_like(x0)
         cue = cue * has.view(-1, 1, 1, 1)
-        sigma = draw_sigma(b, t["diffusion.sigma_min"], t["diffusion.sigma_max"], self.device)
+        sigma = draw_sigma(b, t["diffusion.sigma_min"], t["diffusion.sigma_max"], self.device, sampling=t["diffusion.sigma_sampling"],
+                           p_mean=t["diffusion.p_mean"], p_std=t["diffusion.p_std"])
         x = x0 + sigma.view(-1, 1, 1, 1) * torch.randn_like(x0)
         return x0, x, sigma, cue, blur_px, noise_x, has
 

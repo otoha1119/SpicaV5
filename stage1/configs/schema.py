@@ -67,7 +67,9 @@ TRAIN = {
     "diffusion.sigma_min":      Key(float, None, "σ の下端（x の単位。0.002 = 2 HU）"),
     "diffusion.sigma_max":      Key(float, None, "σ の上端（40 = 40,000 HU）"),
     "diffusion.sigma_data":     Key(float, None, "EDM の σ_data（0.5）"),
-    "diffusion.sigma_sampling": Key(str,   None, "学習時の σ の引き方: loguniform（ln σ を [ln σ_min, ln σ_max] で一様）"),
+    "diffusion.sigma_sampling": Key(str,   "--sigma_sampling", "学習時の σ の引き方: loguniform（ln σ を [ln σ_min, ln σ_max] で一様）| lognormal（ln σ ~ N(p_mean, p_std²)、EDM の標準。[σ_min, σ_max] で切る）"),
+    "diffusion.p_mean":         Key(float, "--p_mean",         "lognormal のときの ln σ の平均（EDM の標準 −1.2。x = HU/1000 で σ ≈ 300 HU）。loguniform では使わない"),
+    "diffusion.p_std":          Key(float, "--p_std",          "lognormal のときの ln σ の標準偏差（EDM の標準 1.2）"),
     # sample（学習中の途中経過の描画。設計書 F-1。本番の描画は generate.yaml）
     "sample.steps":     Key(int,   "--sample_steps",     "途中経過の描画の段数（40）"),
     "sample.eta":       Key(float, "--sample_eta",       "Euler ancestral の η（1.0。0 で決定的）"),
@@ -262,7 +264,7 @@ PRECISIONS = ("fp32", "bf16")
 COMPILE_MODES = ("max-autotune", "reduce-overhead", "default")
 GPU_GENS = (0, 30, 40, 50)
 FOLDS = ("haar1",)
-SIGMA_SAMPLINGS = ("loguniform",)
+SIGMA_SAMPLINGS = ("loguniform", "lognormal")
 UNLISTED = ("train", "error")
 DOMAINS = ("eid", "pcd")
 # 再開で変えられない train のキー（重みの意味が変わる）。MODEL は全部変えられない
@@ -508,6 +510,7 @@ def check_train_values(train, model, shared, machine):
     if not (0 < t["diffusion.sigma_min"] < t["diffusion.sigma_max"]): P.append("0 < diffusion.sigma_min < sigma_max")
     if t["diffusion.sigma_data"] <= 0: P.append("diffusion.sigma_data は正")
     if t["diffusion.sigma_sampling"] not in SIGMA_SAMPLINGS: P.append(f"diffusion.sigma_sampling は {SIGMA_SAMPLINGS}")
+    if t["diffusion.p_std"] <= 0: P.append("diffusion.p_std は正")
     if t["sample.steps"] < 1: P.append("sample.steps ≥ 1")
     if t["sample.eta"] < 0: P.append("sample.eta ≥ 0")
     if t["sample.rho"] <= 0: P.append("sample.rho は正")
