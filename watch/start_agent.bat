@@ -14,6 +14,8 @@ rem Prefer the Python launcher (py -3); fall back to python. "python" alone may 
 set "PY=python"
 where py >nul 2>nul && set "PY=py -3"
 :loop
+rem Update the watch code before each start (pc_agent also reloads itself when this file changes).
+git pull -q
 %PY% watch\pc_agent.py loop
 echo pc_agent exited with code %errorlevel%. Restarting in 30 s ...
 timeout /t 30
