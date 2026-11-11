@@ -10,8 +10,11 @@ if not exist watch\pc_config.json (
   exit /b 1
 )
 title spica-watch pc_agent
+rem Prefer the Python launcher (py -3); fall back to python. "python" alone may be the Microsoft Store alias.
+set "PY=python"
+where py >nul 2>nul && set "PY=py -3"
 :loop
-python watch\pc_agent.py loop
+%PY% watch\pc_agent.py loop
 echo pc_agent exited with code %errorlevel%. Restarting in 30 s ...
 timeout /t 30
 goto loop
