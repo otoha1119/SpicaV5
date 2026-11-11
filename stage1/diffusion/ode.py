@@ -13,7 +13,7 @@
 import torch
 
 from diffusion.anchor import anchor
-from diffusion.edm import karras_sigmas
+from diffusion.edm import ancestral_step, karras_sigmas
 
 
 def _slope(denoise, x, s, cond, anchor_m, anchor_px):
@@ -24,12 +24,16 @@ def _slope(denoise, x, s, cond, anchor_m, anchor_px):
     return (x - x0) / s, x0
 
 
-def _walk(denoise, x, sig, cond, heun, anchor_m, anchor_px):
+def _walk(denoise, x, sig, cond, heun, anchor_m, anchor_px, eta=0.0, gens=None):
     for i in range(len(sig) - 1):
         s, s2 = sig[i], sig[i + 1]
         d, x0 = _slope(denoise, x, s, cond, anchor_m, anchor_px)
         if s2 == 0:
             return x0
+        if eta > 0:  # 帰りだけ: 各段で新しい乱数を混ぜる（Euler ancestral。sampler.py と同じ式）。Heun は使わない
+            down, up = ancestral_step(s, s2, eta)
+            x = x0 + (down / s) * (x - x0) + up * torch.stack([torch.randn(x.shape[1:], generator=g, device=x.device) for g in gens])
+            continue
         x_e = x + (s2 - s) * d
         if heun:
             d2, _ = _slope(denoise, x_e, s2, cond, anchor_m, anchor_px)
@@ -47,7 +51,7 @@ def encode(denoise, src, cond, steps, rho, sigma_min, sigma_max, heun):
 
 
 @torch.no_grad()
-def decode(denoise, z, cond, steps, rho, sigma_min, sigma_max, heun, anchor_m=None, anchor_px=0.0):
-    """ノイズ z → 絵。"""
+def decode(denoise, z, cond, steps, rho, sigma_min, sigma_max, heun, anchor_m=None, anchor_px=0.0, eta=0.0, gens=None):
+    """ノイズ z → 絵。eta > 0 なら各段で新しい乱数を混ぜる（0 = 乱数なしの ODE。1 = 描き手の普通の描き方と同じ混ぜ方で、z の情報は早い段で失われる）。"""
     down = karras_sigmas(steps, sigma_min, sigma_max, rho, z.device).tolist()  # σ_max … σ_min, 0
-    return _walk(denoise, z, down, cond, heun, anchor_m, anchor_px)
+    return _walk(denoise, z, down, cond, heun, anchor_m, anchor_px, eta=eta, gens=gens)

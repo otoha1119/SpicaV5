@@ -27,5 +27,6 @@ ode:
   steps: 50
   heun: true
   rho: 7.0
+  decode_eta: 0.0          # 帰りで新しい乱数を混ぜる度合い（0 = 乱数なし）。乱数なしだと PCD のノイズの粒の位置が疑似 EID に引き継がれる（EXP-20261111-02）
   batch: 4
   precision: fp32          # 往復の誤差を見てから bf16 にする

@@ -185,6 +185,7 @@ BRIDGE = {
     "ode.steps":           Key(int,   "--steps",        "行き・帰りそれぞれの段数"),
     "ode.heun":            Key(bool,  "--heun",         "true = Heun（2 次。1 段に 2 回通す）、false = Euler"),
     "ode.rho":             Key(float, "--rho",          "Karras の配分 ρ（7）"),
+    "ode.decode_eta":      Key(float, "--decode_eta",   "帰りの各段で新しい乱数を混ぜる度合い（Euler ancestral の η）。0 = 乱数なし（行きのノイズ z がそのまま絵を決める）"),
     "ode.batch":           Key(int,   "--batch",        "まとめて通す枚数"),
     "ode.precision":       Key(str,   "--precision",    "U-Net 本体の精度 fp32 | bf16（往復の誤差を見て選ぶ）"),
     "bridge.seed":         Key(int,   "--gen_seed",     "cue.noise_hu > 0 のときの乱数の種"),
@@ -474,6 +475,7 @@ def check_bridge_values(br, shared, machine):
     if br["cue.blur_px"] < 0 or br["cue.noise_hu"] < 0: P.append("cue.blur_px / cue.noise_hu ≥ 0")
     if br["ode.steps"] < 2: P.append("ode.steps ≥ 2")
     if br["ode.rho"] <= 0: P.append("ode.rho は正")
+    if br["ode.decode_eta"] < 0: P.append("ode.decode_eta ≥ 0")
     if br["ode.batch"] < 1: P.append("ode.batch ≥ 1")
     if br["ode.precision"] not in PRECISIONS: P.append(f"ode.precision は {PRECISIONS}")
     _check_machine(machine, P)

@@ -37,7 +37,7 @@ SAME = ("data.hu_offset", "data.hu_min", "data.hu_max", "data.hu_scale", "cue.bl
 def group_name(br, enc_step, dec_step):
     cue = f"b{br['cue.blur_px']:.1f}_c{int(round(br['cue.noise_hu'])):03d}" if br["cue.use"] else "nocue"
     name = (f"bridge_{br['bridge.enc_run']}-{enc_step:07d}_to_{br['bridge.dec_run']}-{dec_step:07d}_{cue}"
-            f"_n{br['ode.steps']}{'h' if br['ode.heun'] else 'e'}{'_anc' if br['anchor.decode'] else ''}")
+            f"_n{br['ode.steps']}{'h' if br['ode.heun'] else 'e'}{'_anc' if br['anchor.decode'] else ''}{'_eta%g' % br['ode.decode_eta'] if br['ode.decode_eta'] > 0 else ''}")
     return name + (f"_{br['bridge.name_suffix']}" if br["bridge.name_suffix"] else "")
 
 
@@ -110,7 +110,9 @@ def run(br, shared, machine, enc_dir, dec_dir, device):
         cond = (cue, blur, noise, has)
         z = encode(enc_fn, src, cond, steps, rho, s_min, s_max, heun)
         m = wide_mean(src, sigma_a) if br["anchor.decode"] else None
-        out = decode(dec_fn, z, cond, steps, rho, s_min, s_max, heun, anchor_m=m, anchor_px=sigma_a)
+        eta = br["ode.decode_eta"]
+        gens = [generator_of(device, br["bridge.seed"], case, p.name, 1) for case, p in chunk] if eta > 0 else None
+        out = decode(dec_fn, z, cond, steps, rho, s_min, s_max, heun, anchor_m=m, anchor_px=sigma_a, eta=eta, gens=gens)
         if not bool(torch.isfinite(out).all()):
             raise RuntimeError(f"出力に NaN / Inf があります（{chunk[0][1]} を含む batch）。--precision fp32 で試す")
         zn = z / s_max
@@ -136,7 +138,7 @@ def run(br, shared, machine, enc_dir, dec_dir, device):
         "input_dir": str(input_dir), "n_cases": idx.n_cases, "cases": idx.cases, "n_slices": len(tasks), "k": 1, "n_images": len(tasks),
         "image_hw": list(size), "format": "1ch uint16 PNG, stored = HU + hu_offset", "hu_offset": hu[0], "hu_clip": [hu[1], hu[2]],
         "cue": {"use": br["cue.use"], "blur_px": br["cue.blur_px"], "noise_hu": br["cue.noise_hu"]}, "anchor_decode": br["anchor.decode"], "brightness_sigma_px_512": sigma_a,
-        "ode": {"steps": steps, "solver": "heun" if heun else "euler", "rho": rho, "sigma_min": s_min, "sigma_max": s_max, "precision": "bf16" if bf16 else "fp32", "batch": bs},
+        "ode": {"steps": steps, "solver": "heun" if heun else "euler", "rho": rho, "decode_eta": br["ode.decode_eta"], "sigma_min": s_min, "sigma_max": s_max, "precision": "bf16" if bf16 else "fp32", "batch": bs},
         "check": {"z_std_mean": mean("z_std"), "z_neighbor_corr_mean": mean("z_neighbor_corr"), "out_minus_in_rms_hu_mean": mean("out_minus_in_rms_hu"), "per_slice": rows},
         "sec_per_image": (time.time() - t0) / len(tasks), "bridge": br,
     }
