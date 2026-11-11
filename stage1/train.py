@@ -97,7 +97,9 @@ def main():
     painter = Painter(train, model, shared, machine, device)
     if a.resume_state:
         painter.resume(a.resume_state)
-    info = {"split_file": split["split_file"], "n_train_cases": len(split["train"]), "n_val_cases": len(split["val"]), "n_test_cases_unread": len(split["test"]),
+    elif train["init.run"]:
+        painter.init_from(ckpt_dir(Path(machine["painter_checkpoints_dir"]) / train["init.run"], train["init.tag"]))
+    info = {"domain": train["data.domain"], "init_run": train["init.run"], "init_tag": train["init.tag"], "split_file": split["split_file"], "n_train_cases": len(split["train"]), "n_val_cases": len(split["val"]), "n_test_cases_unread": len(split["test"]),
             "n_train_slices": sum(len(v) for v in split["train_slices"].values()), "n_val_slices": sum(len(v) for v in split["val_slices"].values()),
             "unlisted_cases_added_to_train": split["unlisted"], "eval_only_dropped": split["eval_only_dropped"],
             "train_cases": split["train"], "val_cases": split["val"], "n_params": painter.n_params, "start_step": painter.step, "device": str(device)}

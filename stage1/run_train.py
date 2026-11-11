@@ -77,15 +77,34 @@ def check_on_disk(train, machine):
     missing = [f"{k}: {p}" for k in ("log.eid_slices", "log.pcd_slices") for p in train[k] if not Path(p).is_file()]
     if missing:
         raise ConfigError("途中経過のパネルに使うスライスがありません: " + "; ".join(missing) + "（そのマシンに無いものは --eid_slices / --pcd_slices で外す）")
-    learned = [p for p in train["log.eid_slices"] if Path(p).parent.name in set(split["train"])]
+    shown = train["log.eid_slices"] + (train["log.pcd_slices"] if train["data.domain"] == "pcd" else [])
+    learned = [p for p in shown if Path(p).parent.name in set(split["train"])]
     if learned:
-        raise ConfigError(f"log.eid_slices に、学習に使う症例（train 側）のスライスがあります: {learned}（val / test 側か評価専用の症例にする）")
+        raise ConfigError(f"途中経過のスライスに、学習に使う症例（train 側）のものがあります: {learned}（val / test 側か評価専用の症例にする）")
+
+
+def check_init(train, model, machine):
+    """init.run の重みがあるか、形と「重みの意味を決める設定」が今回の実効設定と同じか（run フォルダを作る前に止める）。"""
+    if not train["init.run"]:
+        return
+    import torch
+
+    wdir = ckpt_dir(Path(machine["painter_checkpoints_dir"]) / train["init.run"], train["init.tag"])
+    missing = [k for k in CKPT_KINDS if not (wdir / k).is_file()]
+    if missing:
+        raise ConfigError(f"init.run の重みが揃っていません: {wdir} に {missing} が無い")
+    saved = torch.load(wdir / "state.pth", map_location="cpu", weights_only=True)["config"]
+    diff = [k for k in FROZEN_ON_RESUME if saved["train"][k] != train[k]] + [f"model.{k}" for k in model if saved["model"][k] != model[k]]
+    if diff:
+        raise ConfigError(f"init.run の重みと今回の設定で、重みの意味を決める値が違います: {diff}")
+    check_weights_match(wdir / "ema.pth", model, train)
 
 
 def prepare_new(train, model, shared, machine, overrides, now):
     applied = apply_overrides(overrides, sections(train, model, shared, machine))
     check_train_values(train, model, shared, machine)
     check_on_disk(train, machine)
+    check_init(train, model, machine)
     name = run_name(now)
     run_dir = Path(machine["painter_checkpoints_dir"]) / name
     if run_dir.exists():

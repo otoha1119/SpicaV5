@@ -1,0 +1,31 @@
+# stage1/configs/bridge.yaml — 型 X の疑似 EID の作成（bash start.sh bridge → run_bridge.py）。唯一の正は configs/schema.py の BRIDGE。
+# 2 つの描き手を同じノイズでつなぐ: 行き（enc の描き手で 絵 → ノイズ）→ 帰り（dec の描き手で ノイズ → 絵）。乱数を使わない確率流 ODE。
+# 出力: <pseudo_eid_dir>/<組>/k00/<症例>/<スライス>.png と <組>/manifest.yaml（確認用の数字つき）。既にある組には書かない。
+# 組の名前 = bridge_<enc_run>-<step>_to_<dec_run>-<step>_<条件>_n<段数><h|e>[_anc][_<name_suffix>]
+bridge:
+  enc_run: ""              # --enc_run <PCD の描き手の run>
+  enc_tag: latest
+  dec_run: ""              # --dec_run <実 EID の描き手の run>。enc と同じにすると往復の確認
+  dec_tag: latest
+  input_dir: ""            # 空 = machines.yaml の pcd_dir
+  cases: []                # [] = 全症例。--cases PCD-002
+  slices: []               # [] = 絞らない。--slices PCD-002-236.png
+  slice_step: 1
+  max_slices: 0            # 症例ごとの上限（0 = 全部）
+  name_suffix: ""
+  seed: 1234               # cue.noise_hu > 0 のときだけ使う
+
+cue:                       # 条件の絵（行きと帰りで同じもの）。役目は明るさと大きな配置を運ぶこと。細かい形はノイズが運ぶ
+  use: true
+  blur_px: 8.0             # 学習で練習した幅の粗い側の端（cue.blur_max_px）
+  noise_hu: 0.0
+
+anchor:
+  decode: false            # true = 帰りの各段で広い平均を入力に合わせ直す
+
+ode:
+  steps: 50
+  heun: true
+  rho: 7.0
+  batch: 4
+  precision: fp32          # 往復の誤差を見てから bf16 にする

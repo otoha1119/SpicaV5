@@ -49,7 +49,12 @@ TRAIN = {
     "data.hu_scale":          Key(float, None,                  "x = HU ÷ hu_scale（1000）。線形 1 本"),
     "data.split_file":        Key(str,   "--split_file",        "実 EID の症例分割（リポジトリ直下からの相対パス。configs/splits/eid_v5.yaml）。train だけで学習、val は損失の監視、test は読まない"),
     "data.unlisted_cases":    Key(str,   "--unlisted_cases",    "分割ファイルに無い症例（分割を作った後に増えた症例。評価専用は別に除外済み）の扱い: train（学習に入れる。数を表示して記録）| error"),
+    "data.domain":            Key(str,   "--domain",            "学習する絵: eid（実 EID。machines の eid_dir と分割ファイル）| pcd（PCD512。machines の pcd_dir。型 X の「PCD の描き手」。分割ファイルは使わず data.pcd_val_cases を val にする）"),
+    "data.pcd_val_cases":     Key(list,  "--pcd_val_cases",     "data.domain: pcd のとき val に回す症例（学習に使わない。途中経過の PCD スライスの症例はここに入れる）。eid のときは使わない"),
     "data.stats_patches":     Key(int,   "--stats_patches",     "学習の最初にこの数のパッチで x の平均・標準偏差を測って表示・記録する（確認用。設定には使わない）。0 で測らない"),
+    # init（型 X: PCD の描き手を、実 EID の描き手の重みから始める）
+    "init.run":            Key(str,   "--init_run",        "この run の重み（EMA）を net と EMA の両方に読んでから学習を始める。空文字 = 最初から。再開のときは使わない（重みは再開元のもの）"),
+    "init.tag":            Key(str,   "--init_tag",        "init.run の重みの tag: latest | best | step 番号"),
     # cue（設計書 E-2）
     "cue.drop_prob":       Key(float, "--cue_drop_prob",   "手がかりを隠す確率（0.10）"),
     "cue.blur_zero_prob":  Key(float, "--blur_zero_prob",  "σ_b = 0（ぼかさない）の確率（0.15）"),
@@ -159,12 +164,39 @@ GENERATE = {
     "sample.compile_mode":   Key(str,   "--compile_mode", "max-autotune | reduce-overhead | default"),
 }
 
+# ---------------------------------------------------------------------------
+# stage1/configs/bridge.yaml — 型 X の疑似 EID の作成（run_bridge.py）。2 つの描き手を同じノイズでつなぐ
+# ---------------------------------------------------------------------------
+BRIDGE = {
+    "bridge.enc_run":      Key(str,   "--enc_run",      "行き（絵 → ノイズ）に使う run。PCD → 疑似 EID なら PCD の描き手。yaml は空にして --enc_run で渡す"),
+    "bridge.enc_tag":      Key(str,   "--enc_tag",      "その重み: latest | best | step 番号"),
+    "bridge.dec_run":      Key(str,   "--dec_run",      "帰り（ノイズ → 絵）に使う run。PCD → 疑似 EID なら実 EID の描き手。enc と同じにすると往復の確認（元の絵に戻るはず）"),
+    "bridge.dec_tag":      Key(str,   "--dec_tag",      "その重み: latest | best | step 番号"),
+    "bridge.input_dir":    Key(str,   "--input_dir",    "入力の PNG フォルダ（<症例>/<スライス>.png、512）。空文字なら machines.yaml の pcd_dir"),
+    "bridge.cases":        Key(list,  "--cases",        "この症例だけ作る（[] で全部）"),
+    "bridge.slices":       Key(list,  "--slices",       "このファイル名だけ作る（[] で絞らない。例 PCD-002-236.png）"),
+    "bridge.slice_step":   Key(int,   "--slice_step",   "症例ごとに何枚おきに作るか（1 = 全部）"),
+    "bridge.max_slices":   Key(int,   "--max_slices",   "症例ごとの上限枚数（0 で全部）"),
+    "bridge.name_suffix":  Key(str,   "--name_suffix",  "組の名前の末尾に付ける文字列（空文字で無し）"),
+    "cue.use":             Key(bool,  "--use_cue",      "粗くした絵を条件に渡す（行きと帰りで同じもの）。false = 条件なし"),
+    "cue.blur_px":         Key(float, "--blur_px",      "条件の絵の粗さ σ_b（画素）。型 X では細かい形はノイズが運ぶので、粗い側に倒す"),
+    "cue.noise_hu":        Key(float, "--noise_hu",     "条件の絵に足すノイズ σ_c（HU）。0 = 足さない（足すと乱数が入る。画像ごとの種で固定）"),
+    "anchor.decode":       Key(bool,  "--anchor_decode", "帰りの各段で、広い平均を入力に合わせ直す（明るさの錨。σ_a は shared の brightness.sigma_px_512）"),
+    "ode.steps":           Key(int,   "--steps",        "行き・帰りそれぞれの段数"),
+    "ode.heun":            Key(bool,  "--heun",         "true = Heun（2 次。1 段に 2 回通す）、false = Euler"),
+    "ode.rho":             Key(float, "--rho",          "Karras の配分 ρ（7）"),
+    "ode.batch":           Key(int,   "--batch",        "まとめて通す枚数"),
+    "ode.precision":       Key(str,   "--precision",    "U-Net 本体の精度 fp32 | bf16（往復の誤差を見て選ぶ）"),
+    "bridge.seed":         Key(int,   "--gen_seed",     "cue.noise_hu > 0 のときの乱数の種"),
+}
+
 PRECISIONS = ("fp32", "bf16")
 COMPILE_MODES = ("max-autotune", "reduce-overhead", "default")
 GPU_GENS = (0, 30, 40, 50)
 FOLDS = ("haar1",)
 SIGMA_SAMPLINGS = ("loguniform",)
 UNLISTED = ("train", "error")
+DOMAINS = ("eid", "pcd")
 # 再開で変えられない train のキー（重みの意味が変わる）。MODEL は全部変えられない
 FROZEN_ON_RESUME = ("data.hu_offset", "data.hu_min", "data.hu_max", "data.hu_scale", "cue.blur_max_px",
                     "diffusion.sigma_min", "diffusion.sigma_max", "diffusion.sigma_data", "diffusion.sigma_sampling")
@@ -398,6 +430,9 @@ def check_train_values(train, model, shared, machine):
     if not t["data.split_file"]: P.append("data.split_file を指定")
     if t["data.unlisted_cases"] not in UNLISTED: P.append(f"data.unlisted_cases は {UNLISTED}")
     if t["data.stats_patches"] < 0: P.append("data.stats_patches ≥ 0")
+    if t["data.domain"] not in DOMAINS: P.append(f"data.domain は {DOMAINS}")
+    if t["data.domain"] == "pcd" and not t["data.pcd_val_cases"]: P.append("data.domain: pcd のときは data.pcd_val_cases に 1 症例以上")
+    if not (t["init.tag"] in ("latest", "best") or t["init.tag"].isdigit()): P.append("init.tag は latest | best | step 番号")
     for k in ("cue.drop_prob", "cue.blur_zero_prob", "cue.noise_zero_prob"):
         if not (0.0 <= t[k] <= 1.0): P.append(f"{k} は [0, 1]")
     if not (0 < t["cue.blur_min_px"] <= t["cue.blur_max_px"]): P.append("0 < cue.blur_min_px ≤ cue.blur_max_px")
@@ -426,6 +461,25 @@ def check_train_values(train, model, shared, machine):
     for c in t["log.preview_cues"]:
         b, _c = parse_cue(c)
         check_anchor(shared["brightness.sigma_px_512"], b, f"log.preview_cues {c}")
+
+
+def check_bridge_values(br, shared, machine):
+    P = []
+    tag_ok = lambda t: t in ("latest", "best") or t.isdigit()
+    if not br["bridge.enc_run"] or not br["bridge.dec_run"]: P.append("bridge.enc_run / bridge.dec_run（run 名）を --enc_run / --dec_run で指定")
+    if not tag_ok(br["bridge.enc_tag"]) or not tag_ok(br["bridge.dec_tag"]): P.append("bridge.enc_tag / dec_tag は latest | best | step 番号")
+    if br["bridge.slice_step"] < 1: P.append("bridge.slice_step ≥ 1")
+    if br["bridge.max_slices"] < 0: P.append("bridge.max_slices ≥ 0（0 で全部）")
+    if br["bridge.seed"] < 0: P.append("bridge.seed ≥ 0")
+    if br["cue.blur_px"] < 0 or br["cue.noise_hu"] < 0: P.append("cue.blur_px / cue.noise_hu ≥ 0")
+    if br["ode.steps"] < 2: P.append("ode.steps ≥ 2")
+    if br["ode.rho"] <= 0: P.append("ode.rho は正")
+    if br["ode.batch"] < 1: P.append("ode.batch ≥ 1")
+    if br["ode.precision"] not in PRECISIONS: P.append(f"ode.precision は {PRECISIONS}")
+    _check_machine(machine, P)
+    _raise("bridge values", P)
+    if br["cue.use"] and br["anchor.decode"]:
+        check_anchor(shared["brightness.sigma_px_512"], br["cue.blur_px"], "bridge")
 
 
 def check_generate_values(gen, shared, machine):

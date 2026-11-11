@@ -29,6 +29,17 @@ def split_path(train):
 def resolve_split(train, machine, cache_dir):
     """分割ファイルとディスクを突き合わせる。戻り値 dict: index（train の CaseIndex）, train / val / test / unlisted（症例名）, val_index, eval_only_dropped。
     食い違いは RuntimeError（起動器が run フォルダを作る前に呼ぶ）。"""
+    if train["data.domain"] == "pcd":  # 型 X の PCD の描き手: machines の pcd_dir、val は data.pcd_val_cases、残りが train
+        full = CaseIndex(machine["pcd_dir"], cache_dir=cache_dir, drop_eval_only=True)
+        va = sorted(train["data.pcd_val_cases"])
+        missing = [c for c in va if c not in full.slices]
+        if missing:
+            raise RuntimeError(f"data.pcd_val_cases にあって {machine['pcd_dir']} に無い症例があります: {missing}")
+        tr = sorted(set(full.disk_cases) - set(va))
+        if not tr:
+            raise RuntimeError(f"{machine['pcd_dir']}: val を除くと学習に使う症例が 0 です")
+        return {"split_file": "(data.pcd_val_cases)", "train": tr, "val": va, "test": [], "unlisted": [], "eval_only_dropped": full.eval_only_dropped,
+                "train_slices": {c: full.slices[c] for c in tr}, "val_slices": {c: full.slices[c] for c in va}}
     sp = split_path(train)
     if not sp.is_file():
         raise RuntimeError(f"症例分割ファイルがありません: {sp}")

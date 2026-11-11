@@ -21,6 +21,8 @@
 #   bash start.sh PC1 resume 2026_1112_0030             # その run の latest から再開
 #   bash start.sh PC1 resume 2026_1112_0030 150000 --max_steps 300000 --max_hours 48
 #   bash start.sh PC1 generate --run 2026_1112_0030 --tag latest --blur_px 2 --noise_hu 50 --k 2
+#   bash start.sh PC1 --domain pcd --init_run 2026_1111_0517 --max_steps 4000   # 型 X: PCD の描き手（実 EID の描き手の重みから PCD512 で学ぶ）
+#   bash start.sh PC1 bridge --enc_run <PCD の描き手> --dec_run <実 EID の描き手>  # 型 X: PCD → ノイズ → 疑似 EID
 #   bash start.sh PC1 best 2026_1112_0030 150000        # weights/step_0150000/ を best/ に写す
 #   bash start.sh PC1 tb                                # 全 run を並べた TensorBoard
 #   bash start.sh PC1 build | shell | down
@@ -74,6 +76,7 @@ while [ $# -gt 0 ]; do
     down)  ACTION=down; shift ;;
     tb)    ACTION=tb; shift ;;
     generate) ACTION=generate; shift ;;
+    bridge) ACTION=bridge; shift ;;
     resume)
       shift
       [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start] resume には run 名が必要です: bash start.sh resume yyyy_mmdd_HHMM [latest|best|<step>]" >&2; exit 2; }
@@ -241,6 +244,7 @@ case "$ACTION" in
   tb)    "${COMPOSE[@]}" exec -T spicav5 mkdir -p "$CHECKPOINTS_DIR"; start_tensorboard ;;
   shell) exec_it spicav5 bash ;;
   generate) exec_it spicav5 python stage1/run_generate.py "${CFG[@]}" --generate stage1/configs/generate.yaml -- "$@" ;;
+  bridge) exec_it spicav5 python stage1/run_bridge.py "${CFG[@]}" --bridge stage1/configs/bridge.yaml -- "$@" ;;
   best)
     [ $# -eq 0 ] || { echo "[start] best に --flag は付けられません: $*" >&2; exit 2; }
     exec_it spicav5 python stage1/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --tag "$BEST_TAG" ;;

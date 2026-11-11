@@ -81,3 +81,10 @@
 
 - 明るさの錨 x̂0 + (G(y) − G(x̂0)) は、Gaussian が「2 回掛けても同じ」ではないので、**1 回では σ_a の広さの平均を完全には一致させない**（残り = (G − G²)(y − x̂0)。σ_a よりずっと広い成分はほぼ一致）。合成データの smoke（ほとんど学習していない重み、絵と元の差 平均 114 HU）で、出力と入力の広い平均の差は σ_a = 16 で平均 1.7〜1.8 HU、σ = 32 で 0.1 HU。`diag/check_*_wide_mean_diff_hu` はこの残りを見ている
 - 画像ごとの乱数源で、batch の組み方を変えても同じ絵になる（CPU の smoke で最大 1 HU = 丸めの差）
+
+## 6. 型 X（2 つの描き手を同じノイズでつなぐ。2026-11-11、`diffusion/ode.py`・`bridge.py`）
+
+- 確率流 ODE `dx/dσ = (x − D(x; σ)) / σ` と Heun の 2 次の解き方は EDM（Karras et al. 2022, arXiv:2206.00364、Algorithm 1 の決定的な場合）。σ の並びは描くときと同じ Karras の配分。行きは同じ式を σ_min → σ_max の向きに解く
+- 片方の領域のモデルで行き、もう片方で帰りにつなぐ形は DDIB（Su, Song, Meng, Ermon. "Dual Diffusion Implicit Bridges for Image-to-Image Translation", ICLR 2023, arXiv:2203.08382）。**公式実装との照合はしていない**（論文の手順を EDM の式に書き直したもの）
+- DDIB と違う点（ここで決めたこと）: (1) 2 つのモデルを独立に学ばず、PCD の描き手を実 EID の描き手の重みから始める（PCD が約 18 症例しか無いため。ノイズの空間での形の表し方をそろえる狙い）。(2) 粗くした絵を条件として行きと帰りの両方に渡す。(3) 行きの始点に σ_min のノイズを足さない。(4) 256 のパッチで学び 512 全体で解く
+- 提案（`docs/plans/20261111_detail_design/stage1_redesign_ideas/persona_diffusion.md`）では PCD 側は「小さな差分（アダプタ）」だが、実装は全部の重みの短い学習し直し。差分の大きさは学習の長さで見る

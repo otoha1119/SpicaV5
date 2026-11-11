@@ -31,7 +31,13 @@ data:
   hu_scale: 1000.0         # x = HU ÷ 1000
   split_file: configs/splits/eid_v5.yaml   # train だけで学習、val は損失の監視、test は読まない（log.eid_slices の表示だけ例外）
   unlisted_cases: train    # 分割ファイルに無い症例は学習に入れる（数を表示して dataset_info.yaml に記録）。評価専用（configs/eval_only.yaml）は常に除外
+  domain: eid              # eid = 実 EID（描き手 P）| pcd = PCD512（型 X の「PCD の描き手」。--domain pcd --init_run <実 EID の run> で起動する）
+  pcd_val_cases: [PCD-002] # domain: pcd のとき val に回す症例（学習に使わない）。途中経過の PCD スライス（log.pcd_slices）の症例を入れる
   stats_patches: 2000      # 最初の 2,000 パッチで x の平均・標準偏差を測って記録（確認用）
+
+init:                      # 型 X: PCD の描き手は実 EID の描き手の重みから始める（--init_run <run> --init_tag latest）
+  run: ""                  # 空 = 最初から
+  tag: latest
 
 cue:                       # 手がかり = Gaussian ぼかし(元の絵, σ_b) + σ_c × 白色ノイズ。サンプルごとに独立にくじ（設計書 E-2）
   drop_prob: 0.10          # 手がかりを隠す

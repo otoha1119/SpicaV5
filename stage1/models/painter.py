@@ -255,6 +255,13 @@ class Painter:
         torch.save(self._state(), tmp / "state.pth")
         return _swap_dirs(tmp, final, old)
 
+    def init_from(self, weight_dir):
+        """別の run の EMA の重みを net と EMA の両方に読む（型 X: PCD の描き手を実 EID の描き手から始める）。optimizer・step は新規のまま。"""
+        sd = torch.load(Path(weight_dir) / "ema.pth", map_location=self.device, weights_only=True)
+        self.net.load_state_dict(sd)
+        self.ema.load_state_dict(sd)
+        print(f"[init] {weight_dir} の EMA の重みから始める", flush=True)
+
     def resume(self, state_path):
         """重みディレクトリ（state.pth のある所）から net / ema / optimizer / 乱数 / 進み具合を復元する。lr・betas は今の実効値を再適用。"""
         d = Path(state_path).parent

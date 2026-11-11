@@ -19,6 +19,20 @@ bash start.sh PC1 tb | build | shell | down
 コンテナ `spicav5`（旧コードと同じ compose）が起動済みなら exec だけ行う。コンテナの中では
 `python stage1/run_train.py …` → 設定を検証 → `runs/stage1/<run>/launch.yaml` → `python stage1/train.py --run_dir /workspace/runs/stage1/<run> --launch …` を exec。
 
+## 型 X: PCD の描き手を足して、同じノイズでつなぐ（2026-11-11、ブランチ 029。試行中）
+
+粗くした PCD を手がかりに描く作り方（generate）では、粗さが弱いと PCD の鋭さが通り抜け、強いと構造が変わる。型 X は PCD を学習に入れる別の作り方。
+
+1. PCD の描き手を学習する（実 EID の描き手の重みから始め、PCD512 だけで同じ損失）:
+   `bash start.sh PC1 --domain pcd --init_run <実 EID の run> --max_steps 4000 --lr 0.0001 --warmup_steps 200 --ema_decay 0.999`
+   val は `data.pcd_val_cases`（学習に使わない）。途中経過の PCD スライスの症例はここに入れる
+2. 疑似 EID を作る（PCD → PCD の描き手でノイズまで巻き戻す → 同じノイズから実 EID の描き手で描く。乱数なし）:
+   `bash start.sh PC1 bridge --enc_run <PCD の描き手> --dec_run <実 EID の描き手> [--enc_tag 2000 --cases PCD-002 --blur_px 8 --anchor_decode true]`
+   出力は `<pseudo_eid_dir>/bridge_…/k00/<症例>/<スライス>.png` と `manifest.yaml`（Stage 2 が読む置き方と同じ）
+3. 往復の確認（元の絵に戻るはず）: `--enc_run` と `--dec_run` を同じ run にする
+
+設定は `configs/bridge.yaml`（正は schema の BRIDGE）。manifest の `check` に、ノイズ z の標準偏差（1 に近いはず）・隣の画素との相関（0 に近いはず）・出力 − 入力の RMS が残る。式は `diffusion/ode.py`、出典は UPSTREAM.md の 6。
+
 ## 設定（既定値は無い。欠けたキー・未知のキー・型違いは起動前にエラー。正は `configs/schema.py`）
 
 | ファイル | 中身 |
