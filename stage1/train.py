@@ -90,6 +90,8 @@ def main():
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     torch.backends.cudnn.benchmark = True
+    if device.type == "cuda":  # 専用メモリの上限。Windows（WSL）は超えると共有メモリにあふれて極端に遅くなるので、その前に OOM で止める
+        torch.cuda.set_per_process_memory_fraction(train["optim.max_gpu_mem_fraction"], device)
     if a.require_cuda and device.type != "cuda":
         raise RuntimeError("machines.yaml の gpu_gen ≠ 0 なのに CUDA が使えません（gpu_gen: 0 のマシン定義なら cpu で動く）")
 

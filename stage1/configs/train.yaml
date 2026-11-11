@@ -15,6 +15,7 @@ optim:
   compile: true            # 学習の U-Net 本体を torch.compile。false で切れる
   compile_mode: max-autotune   # 落ちたら default に下げる（--compile_mode default）
   compile_after_steps: 20  # 最初の 20 step は compile せずに回して scalar をすぐ出す。21 step 目に compile（初回は数分）
+  max_gpu_mem_fraction: 0.85   # 専用 GPU メモリの 85 % を上限に（超えたら OOM。共有メモリにあふれさせない）
   channels_last: true
   fp32_top_level: false    # diag/bf16_val_ratio/bin0 が 1.2 を超えるなら true（最上段を FP32）
   max_steps: 250000        # 36 時間と早いほうで止まり、latest を保存して正常終了

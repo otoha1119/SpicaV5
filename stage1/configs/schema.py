@@ -34,6 +34,7 @@ TRAIN = {
     "optim.compile":             Key(bool,  "--compile",             "CUDA で学習の U-Net 本体を torch.compile する（CPU では無効）。val・途中経過の描画は compile しない EMA"),
     "optim.compile_mode":        Key(str,   "--compile_mode",        "torch.compile の mode: max-autotune（設計書）| reduce-overhead | default。PC で max-autotune が落ちたら default に下げる"),
     "optim.compile_after_steps": Key(int,   "--compile_after_steps", "この起動の最初の N step は compile せずに回す（最初の scalar をすぐ出すため。compile は N + 1 step 目に始まり、初回は数分かかる）。0 で最初から"),
+    "optim.max_gpu_mem_fraction": Key(float, "--max_gpu_mem_fraction", "PyTorch が使ってよい専用 GPU メモリの割合の上限（0〜1）。超えたら共有メモリにあふれず OOM で止まる（Windows はあふれると極端に遅くなる。PC3 で 2026-11-12 に確認）"),
     "optim.channels_last":       Key(bool,  "--channels_last",       "U-Net を channels_last にする"),
     "optim.fp32_top_level":      Key(bool,  "--fp32_top_level",      "true で最上段（幅 base_ch の段）の ResBlock を FP32 で計算する（bf16 で弱い σ の帯の val が悪いとき。設計書 C-4）"),
     "optim.max_steps":           Key(int,   "--max_steps",           "学習の上限 step（250,000）。max_hours と早いほうで止まり latest を保存して正常終了する"),
@@ -488,6 +489,7 @@ def check_train_values(train, model, shared, machine):
     if t["optim.precision"] not in PRECISIONS: P.append(f"optim.precision は {PRECISIONS}")
     if t["optim.compile_mode"] not in COMPILE_MODES: P.append(f"optim.compile_mode は {COMPILE_MODES}")
     if t["optim.compile_after_steps"] < 0: P.append("optim.compile_after_steps ≥ 0")
+    if not (0.0 < t["optim.max_gpu_mem_fraction"] <= 1.0): P.append("optim.max_gpu_mem_fraction は (0, 1]")
     if t["optim.max_steps"] < 1: P.append("optim.max_steps ≥ 1")
     if t["optim.max_hours"] <= 0: P.append("optim.max_hours は正")
     if t["optim.seed"] < 0: P.append("optim.seed ≥ 0")
