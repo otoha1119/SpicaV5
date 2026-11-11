@@ -233,11 +233,11 @@ class PatchStream(IterableDataset):
 
 def worker_init(_worker_id):
     """worker は SIGTERM を無視する（監視ツールは train*.py の全プロセスに SIGTERM を送る。worker が先に死ぬと main が latest を保存する前に DataLoader のエラーで落ちる）。
-    OpenCV のスレッドは 1 に（worker の数だけ並列なので）。"""
+    OpenCV の内部スレッドは使わない（worker の数だけ並列なので）。"""
     import signal
     import cv2
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    cv2.setNumThreads(1)
+    cv2.setNumThreads(0)  # スレッドプールを作らない（ct_io.py の冒頭と同じ理由。fork 後の停止を避ける）
 
 
 def fixed_val_patches(pd, patch, margin, n, seed):

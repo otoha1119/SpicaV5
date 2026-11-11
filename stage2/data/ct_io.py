@@ -15,6 +15,11 @@ import time
 from pathlib import Path
 
 import cv2
+
+# OpenCV の内部スレッドを使わない。main プロセスで cv2.resize（固定の val パッチやパネルの bicubic 補間）を呼んでスレッドプールが出来たあとに
+# DataLoader の worker を fork すると、worker 側の最初の cv2.resize が futex で止まる（PC1 で 2026-11-11 に発生。U の学習が step 1 に進まず、親と全 worker が待機）。
+# import の時点で 0 にしておけば、どのプロセスでもスレッドプールを作らない（並列は worker の数で取る）。
+cv2.setNumThreads(0)
 import numpy as np
 
 INTERP_FLAGS = {"nearest": cv2.INTER_NEAREST, "bilinear": cv2.INTER_LINEAR, "bicubic": cv2.INTER_CUBIC, "area": cv2.INTER_AREA, "lanczos": cv2.INTER_LANCZOS4}
