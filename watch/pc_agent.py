@@ -188,6 +188,31 @@ def stop(cfg, run_dir):
     return len(pids)
 
 
+def ensure_jobs_excluded(src):
+    """学習リポジトリの .git/info/exclude に /.watch_jobs/ を足す（研究者の .gitignore は触らない）。"""
+    exclude = Path(src) / ".git" / "info" / "exclude"
+    lines = exclude.read_text(encoding="utf-8").splitlines() if exclude.is_file() else []
+    if f"/{JOBS_DIR}/" not in lines:
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        exclude.write_text("\n".join(lines + [f"/{JOBS_DIR}/"]) + "\n", encoding="utf-8")
+
+
+def open_wsl_window(cfg, name, script):
+    """新しいコンソールで WSL の bash にスクリプトを走らせる。スクリプトはファイルに書いて渡す。
+    wsl.exe の引数に bash -c '<文字列>' で渡すと、wsl が引数を 1 行にまとめて外側のシェルに読ませるので $rc・$t などが先に展開されて壊れる
+    （PC1 で 2026-11-11 に判明: launch が `case in 0|...` の構文エラーで、run の起動が黙って失敗していた）。"""
+    repo = Path(cfg["repo_dir"])
+    ensure_jobs_excluded(repo)
+    d = repo / JOBS_DIR / "_win"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"{name}.sh"
+    f.write_bytes(script.replace("\r", "").encode("utf-8"))
+    wsl = shutil.which("wsl")
+    if wsl is None:
+        raise WatchError("wsl.exe が PATH にありません（launch_shell: wsl）")
+    subprocess.Popen([wsl, "--cd", str(repo), "--", "env", WINDOW_MARK, "bash", f"{JOBS_DIR}/_win/{name}.sh"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+
+
 def launch(cfg, command):
     """学習を裏で起動する。Windows は新しいウィンドウ（start.sh が端末を要るため）、それ以外は nohup。
     Windows のシェルは pc_config の launch_shell: wsl（研究者がふだん VS Code のターミナルで打つ `bash` = WSL と同じ）| git_bash。"""
@@ -204,10 +229,7 @@ def launch(cfg, command):
                 f"case $rc in 0|130|137|143) ;; *) echo '[watch] 失敗したので {FAIL_WINDOW_KEEP_S // 60} 分だけウィンドウを残します'; sleep {FAIL_WINDOW_KEEP_S};; esac; "   # 130/137/143 = 止められた（監視の stop・Ctrl-C）は閉じる
                 f"echo '[watch] 30 秒後に閉じます'; sleep 30; exit 0")
         if shell == "wsl":
-            wsl = shutil.which("wsl")
-            if wsl is None:
-                raise WatchError("wsl.exe が PATH にありません（launch_shell: wsl）")
-            subprocess.Popen([wsl, "--cd", str(repo), "--", "env", WINDOW_MARK, "bash", "-c", tail], creationflags=subprocess.CREATE_NEW_CONSOLE)
+            open_wsl_window(cfg, f"launch_{now_stamp()}", tail + "\n")
         elif shell == "git_bash":
             gb = Path(need(cfg, "git_bash", str(PC_CONFIG)))
             if not gb.is_file():
@@ -275,11 +297,7 @@ def start_job(repo, cfg, rid, fm):
     root = job_root(cfg, rid)
     if root.exists():
         raise WatchError(f"{root} が既にあります")
-    exclude = src / ".git" / "info" / "exclude"   # 研究者の .gitignore は触らない
-    lines = exclude.read_text(encoding="utf-8").splitlines() if exclude.is_file() else []
-    if f"/{JOBS_DIR}/" not in lines:
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        exclude.write_text("\n".join(lines + [f"/{JOBS_DIR}/"]) + "\n", encoding="utf-8")
+    ensure_jobs_excluded(src)
     commit = fm.get("commit") or "HEAD"   # 指定が無ければ、いま学習が使っているコード
     if fm.get("commit"):
         git(src, "fetch", "-q", "origin", timeout=300)
@@ -323,9 +341,8 @@ def open_job_window(cfg, rid, summary):
             f"case \"$rc\" in ''|0|130|137|143) ;; *) echo '[watch] 失敗したので {FAIL_WINDOW_KEEP_S // 60} 分だけウィンドウを残します（ログは {log}）'; sleep {FAIL_WINDOW_KEEP_S};; esac; "
             f"echo '[watch] 30 秒後に閉じます'; sleep 30; exit 0")
     try:
-        subprocess.Popen([shutil.which("wsl"), "--cd", str(Path(cfg["repo_dir"])), "--", "env", WINDOW_MARK, "bash", "-c", tail],
-                         creationflags=subprocess.CREATE_NEW_CONSOLE)
-    except OSError as e:
+        open_wsl_window(cfg, f"job_{rid}", tail + "\n")
+    except (OSError, WatchError) as e:
         print(f"[watch] job のログ表示ウィンドウを開けませんでした（job は続行）: {e}", flush=True)
 
 
