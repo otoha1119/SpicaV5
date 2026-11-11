@@ -235,6 +235,27 @@ def fine_stats(x, ref, scale):
     return float(hx.std()) * scale, float((hx0 * hr0).sum() / (hx0.norm() * hr0.norm()).clamp_min(1e-12))
 
 
+def save_panel(path, imgs, labels, scale, zoom):
+    """見やすい途中経過（8bit、表示は HU −1400〜3000 = stored 0〜4400）。上段 = 全体、下段 = 拡大（zoom = (x, y, size, 倍率)）。下に名前。"""
+    from PIL import Image, ImageDraw
+    to8 = lambda a: (np.clip((a[0, 0].float().cpu().numpy() * scale + 1400.0) / 4400.0, 0, 1) * 255).astype(np.uint8)
+    zx, zy, zs, zk = zoom
+    tops = [to8(a) for a in imgs]
+    h, w = tops[0].shape
+    zooms = [np.kron(t[zy:zy + zs, zx:zx + zs], np.ones((zk, zk), dtype=np.uint8)) for t in tops]
+    pad, th, zh = 6, 22, zs * zk
+    W = pad + len(imgs) * (max(w, zh) + pad)
+    canvas = Image.new("L", (W, pad + h + pad + zh + th), 255)
+    dr = ImageDraw.Draw(canvas)
+    for i, (t, z, lab) in enumerate(zip(tops, zooms, labels)):
+        x0 = pad + i * (max(w, zh) + pad)
+        canvas.paste(Image.fromarray(t), (x0, pad))
+        canvas.paste(Image.fromarray(z), (x0, pad + h + pad))
+        dr.text((x0, pad + h + pad + zh + 4), lab, fill=0)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(path)
+
+
 def save(tr, run_dir, tag, config):
     final = ckpt_dir(run_dir, tag)
     tmp, old = final.with_name(final.name + ".tmp"), final.with_name(final.name + ".old")
@@ -332,6 +353,7 @@ def main():
     loader = torch.utils.data.DataLoader(EidPatchStream(split["train_slices"], ds_cfg, tr.hu, start_step=tr.step), batch_size=c["optim.batch_size"],
                                          num_workers=machine["num_threads"], pin_memory=device.type == "cuda", drop_last=True, worker_init_fn=worker_init)
     prev = [(Path(pth), load_full_x(pth, tr.hu).to(device)) for pth in c["log.pcd_slices"]]
+    zoom = (266, 222, 72, 4)  # 途中経過の拡大（PCD-002-236 のステント。stage1/configs/train.yaml の pcd_zoom と同じ所）
     term = {"sig": None}
 
     def on_term(signum, _f):
@@ -382,15 +404,21 @@ def main():
                 for pth, x in prev:
                     m = tr.A(x)
                     vals = {"val/a_change_rms_hu": float(((m - x) ** 2).mean().sqrt()) * tr.scale}
+                    redraws = {}
                     sd, corr = fine_stats(m, x, tr.scale)
                     vals["val/m_flat_fine_sd_hu"], vals["val/m_fine_corr_pcd"] = sd, corr
                     write_png(out_dir / f"{pth.stem}__m.png", x_to_stored(m[0, 0].float().cpu().numpy(), tr.hu))
                     for s in c["log.preview_s_hu"]:
                         g = torch.Generator(device=device); g.manual_seed(0)
                         r = tr.redraw(m, x, float(s) / tr.scale, c["log.preview_steps_redraw"], gen=g)
+                        redraws[s] = r
                         sd, corr = fine_stats(r, x, tr.scale)
                         vals[f"val/s{s}_flat_fine_sd_hu"], vals[f"val/s{s}_fine_corr_pcd"] = sd, corr
                         write_png(out_dir / f"{pth.stem}__s{s}.png", x_to_stored(r[0, 0].float().cpu().numpy(), tr.hu))
+                    panel = [x, m]
+                    for s in c["log.preview_s_hu"]:
+                        panel.append(redraws[s])
+                    save_panel(run_dir / "preview" / pth.stem / f"step_{step:07d}.png", panel, ["PCD", "A(PCD)"] + [f"s{s}" for s in c["log.preview_s_hu"]], tr.scale, zoom)
                     for k, v in vals.items():
                         if math.isfinite(v):
                             writer.add_scalar(k, v, step)
