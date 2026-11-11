@@ -59,8 +59,11 @@ class Monitor:
         self.items = [(kind, i, Path(p), load_full_x(p, hu).to(device)) for kind, key in (("eid", "log.eid_slices"), ("pcd", "log.pcd_slices")) for i, p in enumerate(train[key])]
 
     # --- 文字と scalar ---
+    echo = staticmethod(lambda msg: print(msg, flush=True))  # tqdm を使うときは bar.write に差し替える（バーを崩さない）
+    last_loss, last_sec = float("nan"), float("nan")      # 進捗バーの表示用（直近の窓の損失と秒/step）
+
     def write(self, msg):
-        print(msg, flush=True)
+        self.echo(msg)
         self.log.write(msg + "\n")
         self.log.flush()
 
@@ -90,6 +93,7 @@ class Monitor:
                    f"{sec:.3f} s/step {vals['diag/imgs_per_sec']:.1f} img/s data {vals['diag/data_time_frac'] * 100:.0f}% | {hours:.2f} h")
         painter.reset_window()
         self.t_window, self.t_data, self.n_window = time.time(), 0.0, 0
+        self.last_loss, self.last_sec = vals["loss/train"], sec
         return sec
 
     def log_val(self, step, vals):

@@ -138,6 +138,12 @@ def main():
     stats_left, s_n, s_sum, s_sq = t["data.stats_patches"], 0, 0.0, 0.0
     local, reason, first_compiled_step = 0, None, None
     it = iter(loader)
+    bar = None
+    if t["log.tqdm"]:
+        from tqdm import tqdm
+        bar = tqdm(total=max_steps, initial=painter.step, unit="step", dynamic_ncols=True, mininterval=5.0, smoothing=0.05,
+                   desc=f"E {run_dir.name}（batch {bs}）", file=sys.stdout)
+        monitor.echo = bar.write  # ログの行はバーを崩さずに出す
     while True:
         if painter.step >= max_steps:
             reason = f"optim.max_steps {max_steps} に達した"
@@ -170,6 +176,10 @@ def main():
             sys.exit(3)
         step = painter.step
         painter.elapsed = elapsed0 + time.time() - t_start
+        if bar is not None:
+            bar.update(1)
+            if step % t["log.print_steps"] == 0:
+                bar.set_postfix_str(f"loss {monitor.last_loss:.4f}  {bs / max(monitor.last_sec, 1e-9):.0f} 枚/秒  {painter.elapsed / 3600:.1f} h", refresh=False)
         monitor.tick(t1 - t0)
         if local <= 5 or local == first_compiled_step or (first_compiled_step and local == first_compiled_step + 1):
             note = "（compile 込み）" if local == first_compiled_step else ""
@@ -213,6 +223,8 @@ def main():
             monitor.write(f"[save] step {step} → latest")
         monitor.t_window += time.time() - t_side  # 絵・val・保存の時間は sec_per_step に入れない
 
+    if bar is not None:
+        bar.close()
     painter.elapsed = elapsed0 + time.time() - t_start
     saved = painter.save(run_dir, "latest") if local > 0 else True
     write_info()

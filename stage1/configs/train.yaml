@@ -64,6 +64,7 @@ sample:                    # 学習中の途中経過の描画（本番は gener
   precision: bf16
 
 log:
+  tqdm: true               # ターミナルに進捗バー（全体の step・残り時間・損失・枚/秒）
   print_steps: 100
   steps_per_epoch: 10000
   train_patch_steps: 500

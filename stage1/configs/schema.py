@@ -77,6 +77,7 @@ TRAIN = {
     "sample.rho":       Key(float, "--sample_rho",       "Karras の配分 ρ（7）"),
     "sample.precision": Key(str,   "--sample_precision", "途中経過の描画の U-Net 本体の精度 fp32 | bf16（設計書 F-1: ネットの中は bf16、ほかは FP32）"),
     # log（設計書 G-2・G-3）
+    "log.tqdm":                Key(bool,  "--tqdm",                "ターミナルに tqdm の進捗バーを出す（全体の step、残り時間、損失、枚/秒）。ログの行はバーを崩さずに出す"),
     "log.print_steps":         Key(int,   "--print_steps",         "scalar・loss_log.txt の間隔（step）。100。最初は 1, 2, 4, …, 64 step 目にも出す"),
     "log.steps_per_epoch":     Key(int,   "--steps_per_epoch",     "表示の区切り（10,000 step = 1 epoch 相当）"),
     "log.train_patch_steps":   Key(int,   "--train_patch_steps",   "TensorBoard preview/train_patch の間隔（step）。500"),
