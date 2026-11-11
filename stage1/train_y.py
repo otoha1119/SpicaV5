@@ -44,6 +44,7 @@ from models.eraser import build_eraser, fill_legacy  # noqa: E402
 from models.painter import _swap_dirs, denoise, load_ema, want_bf16  # noqa: E402
 from models.unet import build_net  # noqa: E402
 from util.run_paths import JST, LAUNCH_FILE, ckpt_dir, run_name, saved_tags  # noqa: E402
+from run_train import other_trainings  # noqa: E402
 
 KINDS = ("A.pth", "F.pth", "state.pth")
 
@@ -276,10 +277,15 @@ def main():
     p.add_argument("--shared", required=True)
     p.add_argument("--machines", required=True)
     p.add_argument("--resume", default=None, metavar="RUN")
+    p.add_argument("--allow_concurrent", action="store_true", help="ほかの学習が同じコンテナで動いていても起動する（既定は止める）")
     p.add_argument("overrides", nargs=argparse.REMAINDER)
     a = p.parse_args()
     overrides = a.overrides[1:] if a.overrides and a.overrides[0] == "--" else a.overrides
     now = datetime.datetime.now(JST)
+    others = other_trainings()
+    if others and not a.allow_concurrent:
+        print("[train_y] 設定エラー: このコンテナでほかの学習が動いています。止めてから起動するか --allow_concurrent: " + "; ".join(f"pid {pid}: {cmd}" for pid, cmd in others), file=sys.stderr)
+        sys.exit(2)
     try:
         shared = validate_shared("shared", load_yaml(a.shared), SHARED)
         machines = load_yaml(a.machines)

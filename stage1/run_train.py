@@ -56,6 +56,35 @@ def start_tensorboard(run_dir, port):
     print(f"[run_train] TensorBoard: http://localhost:{port} → {tb_dir}（この run だけ。全 run は bash start.sh tb）", flush=True)
 
 
+TRAINING_MARKERS = ("stage1/train.py", "stage1/train_y.py", "stage2/train_u.py", "stage2/train_v.py", "train_y.py")
+
+
+def other_trainings():
+    """このコンテナで動いている、ほかの学習のプロセス（pid, コマンド）。DataLoader の worker は親と同じコマンドなので親だけ数える。"""
+    me, found = os.getpid(), []
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return found
+    pids = {}
+    for d in proc.glob("[0-9]*"):
+        try:
+            argv = (d / "cmdline").read_bytes().split(b"\0")
+            if not argv or not Path(argv[0].decode("utf-8", "replace")).name.startswith("python"):
+                continue   # python そのものだけ（job を包む bash -c '... python stage1/train.py ...' は数えない）
+            cmd = b" ".join(argv).decode("utf-8", "replace").strip()
+            ppid = int((d / "stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        pids[int(d.name)] = (cmd, ppid)
+    for pid, (cmd, ppid) in pids.items():
+        if pid == me or not any(m in cmd for m in TRAINING_MARKERS):
+            continue
+        if ppid in pids and pids[ppid][0] == cmd:   # worker
+            continue
+        found.append((pid, cmd[:160]))
+    return found
+
+
 def load_yaml(path):
     path = Path(path)
     if not path.is_file():
@@ -185,11 +214,17 @@ def main():
     p.add_argument("--machines", required=True)
     p.add_argument("--resume", default=None, metavar="RUN")
     p.add_argument("--resume_tag", default="latest", help="latest | best | step 番号")
+    p.add_argument("--allow_concurrent", action="store_true", help="ほかの学習が同じコンテナで動いていても起動する（既定は止める。GPU は 1 つずつ。2026-11-12 PC3 で同じ学習が 2 つ動いてメモリがあふれた）")
     p.add_argument("overrides", nargs=argparse.REMAINDER, help="'--' の後に上書き（schema のフラグのみ）")
     a = p.parse_args()
     overrides = a.overrides[1:] if a.overrides and a.overrides[0] == "--" else a.overrides
 
     now = datetime.datetime.now(JST)
+    others = other_trainings()
+    if others and not a.allow_concurrent:
+        print("[run_train] 設定エラー: このコンテナでほかの学習が動いています（同じ GPU で 2 つ動かすとメモリがあふれる）。止めてから起動するか、並べるなら --allow_concurrent: "
+              + "; ".join(f"pid {pid}: {cmd}" for pid, cmd in others), file=sys.stderr)
+        sys.exit(2)
     try:
         train = validate("train", load_yaml(a.train), TRAIN)
         model = validate("model", load_yaml(a.model), MODEL)
