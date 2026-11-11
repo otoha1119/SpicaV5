@@ -28,8 +28,8 @@ from common import (HERE, DataRepo, WatchError, discord_post, discord_token, git
 
 PC_CONFIG = HERE / "pc_config.json"
 REQUEST_POLL_S = 60   # 依頼の確認間隔（git の pull だけなので軽い）。数値の書き出しは pc_config の interval_s ごと
-FAIL_WINDOW_KEEP_S = 1800   # 失敗した起動 / job の表示ウィンドウを残す時間（原因を読む猶予）。過ぎたら閉じる（研究者の指示 2026-11-09: 仕事が終われば必ず閉じる）
-WINDOW_AUDIT_S = 1800       # pc_agent が自分の開いたウィンドウを監査する間隔。何もしていない残骸（子プロセス無し）を閉じる
+FAIL_WINDOW_KEEP_S = 60     # 失敗した起動 / job の表示ウィンドウを残す時間。失敗の中身は応答（responses/）と run / job のログに残るので、窓は 1 分で閉じる（研究者の指示 2026-11-11: 溜めない・最小化で残さない・必ず閉じる。旧 30 分）
+WINDOW_AUDIT_S = 300        # pc_agent が自分の開いたウィンドウを監査する間隔。仕事が終わった残骸を閉じる（旧 30 分。依頼・job の処理の直後にも 1 回かける）
 WINDOW_MARK = "SPICA_WATCH_WIN=1"   # pc_agent が開いた bash の環境変数の印（監査はこの印のある bash だけを対象にする。研究者の端末は触らない）
 KEYS = ["machine", "repo_dir", "data_dir", "container", "interval_s", "active_min", "codex_cmd", "codex_timeout_s",
         "discord", "launch_shell", "git_bash"]
@@ -497,10 +497,12 @@ def hard_stops(repo, cfg, data):
 # ---------------------------------------------------------------- ウィンドウの監査・自己再読み込み
 
 AUDIT_SNIPPET = r"""
-# 1) pc_agent が開いた印付きの bash（SPICA_WATCH_WIN=1）で子プロセスが無いもの
+# 1) pc_agent が開いた印付きの bash（SPICA_WATCH_WIN=1）で、仕事をしている子孫が無いもの
 # 2) wsl が直接起動した `bash -c ...`（親が PID 1 かセッションリーダー、ログインシェルではない）で、
-#    子孫が bash / sleep / tail / printf だけのもの = 仕事が終わった表示ウィンドウ（印の無い旧版の窓も拾う）
+#    子孫が bash / sleep / printf だけのもの = 仕事が終わった表示ウィンドウ（印の無い旧版の窓も拾う）
+# 3) 印付きの窓の bash が先に死んで取り残された tail / sleep（親が PID 1）。これが残ると窓が閉じない
 # 研究者の端末（ログインシェル -bash、VS Code の node 配下の bash、子に本物の処理があるもの）は触らない
+# tail は「job が走っている間のログ表示」なので仕事中として扱う（2026-11-11 修正: 以前は暇とみなして bash だけを止め、tail -F が残って窓が永久に閉じなかった）
 k=0; n=0
 desc() { local p=$1 c; for c in $(pgrep -P $p); do echo $c; desc $c; done; }
 for p in $(pgrep -x bash); do
@@ -512,20 +514,29 @@ for p in $(pgrep -x bash); do
   [ $marked = 1 ] || [ $wslspawn = 1 ] || continue
   n=$((n+1))
   busy=0
-  for c in $(desc $p); do
+  ds=$(desc $p)
+  for c in $ds; do
     cn=$(ps -o comm= -p $c 2>/dev/null)
-    case "$cn" in bash|sleep|tail|printf|"") ;; *) busy=1;; esac
+    case "$cn" in bash|sleep|printf|"") ;; *) busy=1;; esac
   done
   [ $busy = 0 ] || continue
   if [ $marked = 0 ] && [ -z "$(pgrep -P $p)" ]; then case "$cmd" in "bash -c "*) ;; *) continue;; esac; fi
   echo "close idle window bash pid=$p marked=$marked etimes=$(ps -o etimes= -p $p | tr -d ' ') cmd=${cmd:0:80}"
+  for c in $ds; do kill $c 2>/dev/null; done        # 子孫（sleep など）を先に止める。残ると窓が閉じない
   kill -HUP $p 2>/dev/null && k=$((k+1))
 done
-echo "candidates=$n closed=$k"
+o=0
+for p in $(pgrep -x tail; pgrep -x sleep); do
+  [ "$(ps -o ppid= -p $p 2>/dev/null | tr -d ' ')" = "1" ] || continue
+  tr '\0' '\n' < /proc/$p/environ 2>/dev/null | grep -qx 'SPICA_WATCH_WIN=1' || continue
+  echo "kill orphan pid=$p cmd=$(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | cut -c1-80)"
+  kill $p 2>/dev/null && o=$((o+1))
+done
+echo "candidates=$n closed=$k orphans=$o"
 """
 
 
-def audit_windows(cfg):
+def audit_windows(cfg, verbose=False):
     """pc_agent が開いた表示ウィンドウ（印 SPICA_WATCH_WIN=1 の bash）のうち、子プロセスを持たない = 何もしていない残骸を閉じる。
     Windows + launch_shell wsl のときだけ。研究者の端末（印なし）は触らない。研究者の指示 2026-11-09「たまに監査して使ってないなら消す」。"""
     if platform.system() != "Windows" or cfg.get("launch_shell") != "wsl" or shutil.which("wsl") is None:
@@ -533,7 +544,7 @@ def audit_windows(cfg):
     try:
         p = subprocess.run([shutil.which("wsl"), "--", "bash", "-c", AUDIT_SNIPPET], capture_output=True, text=True, timeout=60)
         out = (p.stdout or "").strip()
-        if out and not out.endswith("closed=0"):
+        if out and (verbose or not out.endswith("closed=0 orphans=0")):
             print(f"[watch] ウィンドウの監査:\n{out}", flush=True)
     except (subprocess.SubprocessError, OSError) as e:
         print(f"[watch] ウィンドウの監査に失敗（続行）: {e}", flush=True)
@@ -579,8 +590,11 @@ def loop(cfg):
                 repo.commit_push(f"watch: {cfg['machine']} status ({len(changed)} run)")
                 hard_stops(repo, cfg, data)
                 repo.commit_push(f"watch: {cfg['machine']} autostop")
+            n_resp = len(list((repo.path / "responses").glob("*.md")))
             handle_requests(repo, cfg)
             check_jobs(repo, cfg)
+            if len(list((repo.path / "responses").glob("*.md"))) != n_resp:
+                last_audit = 0.0   # 依頼や job が 1 つ片付いた直後は、すぐに 1 回監査する（残った窓を次の 5 分まで待たせない）
             if time.time() - last_audit >= WINDOW_AUDIT_S:
                 last_audit = time.time()
                 audit_windows(cfg)
@@ -595,6 +609,7 @@ def main():
     sub.add_parser("loop")
     sub.add_parser("export")
     sub.add_parser("running")
+    sub.add_parser("audit")   # 表示ウィンドウの監査を 1 回だけかける（溜まった窓を今すぐ閉じる）
     sub.add_parser("jobs")
     s = sub.add_parser("stop")
     s.add_argument("run", help="run 名（status から一意に決まるとき）か、コンテナ内の run ディレクトリ")
@@ -611,6 +626,8 @@ def main():
             repo = DataRepo(cfg["data_dir"], need(shared_config(), "data_branch", "watch/config.json"))
             for rid, info in repo.read_state("jobs").items():
                 print(rid, info["started"], info["command"])
+        elif a.cmd == "audit":
+            audit_windows(cfg, verbose=True)
         elif a.cmd == "running":
             for pid, cmd in running(cfg):
                 print(pid, cmd)

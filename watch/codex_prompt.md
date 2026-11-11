@@ -18,6 +18,13 @@
 - 依頼に無い実験を始めること、データ・checkpoint・run ディレクトリを消すこと
 - 会社の GitHub organization のリポジトリに触れること（origin は otoha1119/SpicaV5 だけ）
 
+## ウィンドウを残さない（研究者の指示 2026-11-09、2026-11-11 に再度。必ず守る）
+- **新しいウィンドウを開かない。** コマンドは、いま動いている自分のシェルの中で実行する。`start`、`Start-Process`（`-NoNewWindow` なしのもの）、`wt`、`cmd /c start`、`wsl` を別ウィンドウで開く書き方を使わない
+- **最小化して残さない。** `-WindowStyle Minimized` / `Hidden`、`start /min` を使わない。待つ必要があるときは、自分のシェルの中で待つ
+- 学習の起動は `<pc_agent> launch -- …` だけ（pc_agent が窓を 1 つ開き、終われば自分で閉じる）。それ以外の方法で学習や長い処理を起動しない
+- **報告の直前に `<pc_agent> audit` を 1 回実行する**（仕事が終わった表示ウィンドウと、取り残された tail / sleep を閉じる）。そのうえで、この依頼の中で自分が開いてしまったウィンドウやプロセスが残っていれば、閉じてから報告する
+- 触らないもの: 研究者の端末（VS Code のターミナル、手で開いた PowerShell / WSL）、pc_agent 自身のウィンドウ（タイトル `spica-watch pc_agent`）、いま学習・job が動いているウィンドウ
+
 ## 手順
 1. `<pc_agent> running` で学習中のプロセスを確認する
 2. 依頼に `stop_first` があれば `<pc_agent> stop <run>` で止める
