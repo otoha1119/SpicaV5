@@ -42,11 +42,11 @@ def load_yaml(path):
 
 
 @torch.no_grad()
-def redraw(E, m, src, s, steps, cue_blur, anchor_px, use_anchor, sigma_min, sd, bf16, cl, gens):
+def redraw(E, m, src, s, steps, cue_blur, anchor_px, use_anchor, sigma_min, sd, bf16, cl, gens, cue_from=None):
     b, d = m.shape[0], m.device
     rn = lambda: torch.stack([torch.randn(m.shape[1:], generator=g, device=d) for g in gens])
     blur, noise0, has = torch.full((b,), cue_blur, device=d), torch.zeros(b, device=d), torch.ones(b, device=d, dtype=torch.bool)
-    cue = gaussian_blur(m, cue_blur)
+    cue = gaussian_blur(m if cue_from is None else cue_from, cue_blur)
     wm = wide_mean(src, anchor_px)
     sig = karras_sigmas(steps, sigma_min, s, 7.0, d)
     x = m + s * rn()
@@ -81,6 +81,7 @@ def main():
         apply_overrides(overrides, {"y_generate": (g, Y_GENERATE), "shared": (shared, SHARED), "machine": (machine, MACHINE)})
         P = []
         if not g["generate.run"]: P.append("generate.run を --run で指定")
+        if g["redraw.cycles"] < 1: P.append("redraw.cycles ≥ 1")
         if g["generate.k"] < 1 or g["generate.slice_step"] < 1 or g["redraw.steps"] < 1 or g["redraw.batch"] < 1: P.append("k / slice_step / steps / batch ≥ 1")
         if g["generate.max_slices"] < 0 or g["redraw.s_hu"] < 0 or g["redraw.cue_blur_px"] <= 0: P.append("max_slices ≥ 0、s_hu ≥ 0、cue_blur_px は正")
         if g["redraw.precision"] not in PRECISIONS: P.append(f"redraw.precision は {PRECISIONS}")
@@ -106,6 +107,7 @@ def main():
     s = g["redraw.s_hu"] / scale
     head = f"Y_{g['generate.run']}-{int(state['step']):07d}" if g["redraw.use_eraser"] else f"Ynoeraser_E{e_step:07d}"
     name = f"{head}_s{g['redraw.s_hu']:g}_b{g['redraw.cue_blur_px']:g}{'_anc' if g['redraw.anchor'] else ''}"
+    name += f"_cyc{g['redraw.cycles']}" if g["redraw.cycles"] > 1 else ""
     name += f"_{g['generate.name_suffix']}" if g["generate.name_suffix"] else ""
     root = Path(machine["pseudo_eid_dir"])
     final, tmp = root / name, root / (name + ".tmp")
@@ -135,9 +137,11 @@ def main():
         with torch.no_grad():
             m = A(src) if g["redraw.use_eraser"] else src
             if s > 0:
-                gens = [generator_of(device, g["generate.seed"], case, q.name, k) for k, case, q in chunk]
-                out = redraw(E, m, src, s, g["redraw.steps"], g["redraw.cue_blur_px"], shared["brightness.sigma_px_512"], g["redraw.anchor"],
-                             et["diffusion.sigma_min"], et["diffusion.sigma_data"], bf16, cl, gens)
+                out = m
+                for c in range(g["redraw.cycles"]):  # 往復ごとに別の乱数源（1 往復目は従来と同じ種）
+                    gens = [generator_of(device, g["generate.seed"], case, q.name, k, *([c] if c else [])) for k, case, q in chunk]
+                    out = redraw(E, out, src, s, g["redraw.steps"], g["redraw.cue_blur_px"], shared["brightness.sigma_px_512"], g["redraw.anchor"],
+                                 et["diffusion.sigma_min"], et["diffusion.sigma_data"], bf16, cl, gens, cue_from=m)
             else:
                 out = m
         if not bool(torch.isfinite(out).all()):
