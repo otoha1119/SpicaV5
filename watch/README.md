@@ -39,6 +39,21 @@ Discord: #watch-log（やり取りの履歴・改良内容の md）、#watch-cal
    確認だけなら `python watch/pc_agent.py export`（push しない）、`python watch/pc_agent.py running`
    Windows では `watch\start_agent.bat` をダブルクリックでもよい（落ちたら 30 秒後に起動し直す。ログイン時に自動で起動するなら、`Win+R` → `shell:startup` にこの bat のショートカットを置く）
 
+## ウィンドウと job の片付け（Windows。全部の学習 PC で共通。2026-11-12 に整理）
+
+研究者の指示（2026-11-09、11-11）:「ターミナルを溜めない・最小化で残さない・必ず閉じる」。どの PC でも、pc_config の `launch_shell: wsl` なら次が働く（コードは pc_agent.py で共通。PC ごとの設定は要らない）。
+
+| 仕組み | 中身 | 場所 |
+|---|---|---|
+| 表示ウィンドウの自己終了 | job のログ窓・launch の窓は、終わると 30 秒後に自分で閉じる。失敗したときだけ 1 分残す（`FAIL_WINDOW_KEEP_S`）。閉じられても終了コード 0 で終わる（0 以外だと Windows Terminal がタブを残す） | `open_job_window`、`launch` |
+| スクリプトはファイルで渡す | 窓に流すスクリプトは `<repo>/.watch_jobs/_win/*.sh` に書いて `wsl -- bash <file>` で渡す（`bash -c` の文字列だと wsl が `$rc` などを先に展開して壊れた） | `open_wsl_window` |
+| 監査 | 5 分ごと + 依頼・job の直後に、印（環境変数 `SPICA_WATCH_WIN=1`）の付いた bash のうち仕事の終わったものと、取り残された tail / sleep を閉じる。研究者の端末（印なし）は触らない。手で走らせるなら `python watch/pc_agent.py audit` | `audit_windows` |
+| job の作業場所 | job ごとの worktree（`<repo>/.watch_jobs/<id>/`）は終了時に `git worktree remove` で消す。出力は `data_dir/.local/jobs/<id>/` に残す | `finish_job` |
+| Codex の規則 | 新しいウィンドウを開かない・最小化で残さない・報告の直前に audit | `codex_prompt.md` |
+| 自分の入れ替え | pc_agent.py が更新されたら自分を再実行する。起動用の bat（`start_agent.bat`）は起動のたびに git pull する | `self_reload_if_updated`、`start_agent.bat` |
+
+注意: pc_agent のプロセスが古いまま常駐していると、上の直しは効かない（PC1 で 11/05 起動の古いプロセスが 11/11 まで残り、job の窓が溜まった）。直しが効いていないときは、pc_agent の起動時刻を確かめる。
+
 ## Mac のセットアップ（初回だけ。済み）
 
 ```bash
