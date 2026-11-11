@@ -197,7 +197,7 @@ def ensure_jobs_excluded(src):
         exclude.write_text("\n".join(lines + [f"/{JOBS_DIR}/"]) + "\n", encoding="utf-8")
 
 
-def open_wsl_window(cfg, name, script):
+def open_wsl_window(cfg, name, script, maximize=False):
     """新しいコンソールで WSL の bash にスクリプトを走らせる。スクリプトはファイルに書いて渡す。
     wsl.exe の引数に bash -c '<文字列>' で渡すと、wsl が引数を 1 行にまとめて外側のシェルに読ませるので $rc・$t などが先に展開されて壊れる
     （PC1 で 2026-11-11 に判明: launch が `case in 0|...` の構文エラーで、run の起動が黙って失敗していた）。"""
@@ -210,7 +210,13 @@ def open_wsl_window(cfg, name, script):
     wsl = shutil.which("wsl")
     if wsl is None:
         raise WatchError("wsl.exe が PATH にありません（launch_shell: wsl）")
-    subprocess.Popen([wsl, "--cd", str(repo), "--", "env", WINDOW_MARK, "bash", f"{JOBS_DIR}/_win/{name}.sh"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+    si = None
+    if maximize:  # 学習の窓は最大化で開く（研究者の指示 2026-11-12）
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 3  # SW_MAXIMIZE
+    subprocess.Popen([wsl, "--cd", str(repo), "--", "env", WINDOW_MARK, "bash", f"{JOBS_DIR}/_win/{name}.sh"], creationflags=subprocess.CREATE_NEW_CONSOLE,
+                     startupinfo=si)
 
 
 def launch(cfg, command):
@@ -229,7 +235,7 @@ def launch(cfg, command):
                 f"case $rc in 0|130|137|143) ;; *) echo '[watch] 失敗したので {FAIL_WINDOW_KEEP_S // 60} 分だけウィンドウを残します'; sleep {FAIL_WINDOW_KEEP_S};; esac; "   # 130/137/143 = 止められた（監視の stop・Ctrl-C）は閉じる
                 f"echo '[watch] 30 秒後に閉じます'; sleep 30; exit 0")
         if shell == "wsl":
-            open_wsl_window(cfg, f"launch_{now_stamp()}", tail + "\n")
+            open_wsl_window(cfg, f"launch_{now_stamp()}", tail + "\n", maximize=True)
         elif shell == "git_bash":
             gb = Path(need(cfg, "git_bash", str(PC_CONFIG)))
             if not gb.is_file():
@@ -321,11 +327,16 @@ def start_job(repo, cfg, rid, fm):
     jobs[rid] = {"started": now_iso(), "commit": git(root, "rev-parse", "HEAD").stdout.strip(), "kind": "job",
                  "summary": fm.get("summary", ""), "command": fm["command"]}
     repo.write_state("jobs", jobs)
-    open_job_window(cfg, rid, fm.get("summary", ""))
+    open_job_window(cfg, rid, fm.get("summary", ""), fm.get("command", ""))
     post(cfg, "log", f"[{cfg['machine']}] job {rid} を開始: {fm.get('summary', '')}")
 
 
-def open_job_window(cfg, rid, summary):
+def is_training_command(command):
+    """job のコマンドが学習の起動か（学習の窓は最大化で開く）。"""
+    return any(k in (command or "") for k in ("run_train.py", "train_y.py", "train_u.py", "train_v.py"))
+
+
+def open_job_window(cfg, rid, summary, command=""):
     """Windows では job のログを流す見るだけのウィンドウを開く（閉じても job は止まらない。job 本体は裏の docker exec）。"""
     if platform.system() != "Windows" or cfg.get("launch_shell") != "wsl" or shutil.which("wsl") is None:
         return
@@ -341,7 +352,7 @@ def open_job_window(cfg, rid, summary):
             f"case \"$rc\" in ''|0|130|137|143) ;; *) echo '[watch] 失敗したので {FAIL_WINDOW_KEEP_S // 60} 分だけウィンドウを残します（ログは {log}）'; sleep {FAIL_WINDOW_KEEP_S};; esac; "
             f"echo '[watch] 30 秒後に閉じます'; sleep 30; exit 0")
     try:
-        open_wsl_window(cfg, f"job_{rid}", tail + "\n")
+        open_wsl_window(cfg, f"job_{rid}", tail + "\n", maximize=is_training_command(command))
     except (OSError, WatchError) as e:
         print(f"[watch] job のログ表示ウィンドウを開けませんでした（job は続行）: {e}", flush=True)
 
