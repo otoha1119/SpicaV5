@@ -250,6 +250,7 @@ Y_GENERATE = {
     "redraw.s_hu":         Key(float, "--s_hu",           "描き直しの出発点 s（HU）。0 = 描き直さず A の出力をそのまま書く"),
     "redraw.cycles":       Key(int,   "--cycles",         "描き直しを何往復くり返すか（1 往復 = ノイズ s を足して E で 0 まで描く。2 往復目以降は前の往復の出力に新しいノイズ s を足す。手がかりと錨は最初の入力のまま）"),
     "redraw.s_list_hu":    Key(list,  "--s_list_hu",      "往復ごとの s（HU）の並び（例 300,100,50,30）。空なら s_hu を cycles 回。並びを使うときは cycles は 1 にする"),
+    "redraw.steps_list":   Key(list,  "--steps_list",     "往復ごとの段数の並び（s_list_hu と同じ長さ）。空なら全部の往復で redraw.steps"),
     "redraw.steps":        Key(int,   "--steps",          "描き直しの段数（s から 0 まで、Euler ancestral η = 1）"),
     "redraw.cue_blur_px":  Key(float, "--cue_blur_px",    "描き直しで E に渡す手がかり = A の出力をこの広さでぼかした絵"),
     "redraw.anchor":       Key(bool,  "--anchor",         "各段で広い平均を入力の PCD に合わせ直す（σ_a は shared）"),
