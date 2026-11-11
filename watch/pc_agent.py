@@ -202,7 +202,7 @@ def launch(cfg, command):
         # 正常終了なら 30 秒後に閉じる（ウィンドウが溜まらないように）。失敗したときだけ残して原因を読めるようにする
         tail = (f"{line}; rc=$?; echo; echo '[watch] 終了コード' $rc; "
                 f"case $rc in 0|130|137|143) ;; *) echo '[watch] 失敗したので {FAIL_WINDOW_KEEP_S // 60} 分だけウィンドウを残します'; sleep {FAIL_WINDOW_KEEP_S};; esac; "   # 130/137/143 = 止められた（監視の stop・Ctrl-C）は閉じる
-                f"echo '[watch] 30 秒後に閉じます'; sleep 30")
+                f"echo '[watch] 30 秒後に閉じます'; sleep 30; exit 0")
         if shell == "wsl":
             wsl = shutil.which("wsl")
             if wsl is None:
@@ -312,13 +312,16 @@ def open_job_window(cfg, rid, summary):
     if platform.system() != "Windows" or cfg.get("launch_shell") != "wsl" or shutil.which("wsl") is None:
         return
     log = f"{JOBS_DIR}/{rid}/_out/job.log"
-    tail = (f"printf '\\033]0;job {rid}\\007'; echo '[watch] job {rid}: {shlex.quote(summary)[1:-1]}'; "
+    # 監査（audit_windows）が HUP で閉じたときも終了コード 0 で終える。0 以外で終わると Windows Terminal はタブを
+    # 「プロセスはコード 129 で終了しました」のまま残す（PC1 で job タブが溜まった原因。2026-11-11）
+    tail = (f"trap 'kill $t 2>/dev/null; exit 0' HUP TERM INT; "
+            f"printf '\\033]0;job {rid}\\007'; echo '[watch] job {rid}: {shlex.quote(summary)[1:-1]}'; "
             f"echo '[watch] ログを表示しているだけです。このウィンドウを閉じても job は止まりません。正常に終われば自動で閉じます'; echo; "
             f"tail -n +1 -F {log} 2>/dev/null & t=$!; "
             f"while [ ! -f {JOBS_DIR}/{rid}/_out/exit_code ] && [ -d {JOBS_DIR}/{rid} ]; do sleep 5; done; "
             f"rc=$(cat {JOBS_DIR}/{rid}/_out/exit_code 2>/dev/null); sleep 2; kill $t 2>/dev/null; echo; echo \"[watch] job 終了（終了コード ${{rc:-不明}}）\"; "
             f"case \"$rc\" in ''|0|130|137|143) ;; *) echo '[watch] 失敗したので {FAIL_WINDOW_KEEP_S // 60} 分だけウィンドウを残します（ログは {log}）'; sleep {FAIL_WINDOW_KEEP_S};; esac; "
-            f"echo '[watch] 30 秒後に閉じます'; sleep 30")
+            f"echo '[watch] 30 秒後に閉じます'; sleep 30; exit 0")
     try:
         subprocess.Popen([shutil.which("wsl"), "--cd", str(Path(cfg["repo_dir"])), "--", "env", WINDOW_MARK, "bash", "-c", tail],
                          creationflags=subprocess.CREATE_NEW_CONSOLE)
@@ -523,7 +526,7 @@ for p in $(pgrep -x bash); do
   if [ $marked = 0 ] && [ -z "$(pgrep -P $p)" ]; then case "$cmd" in "bash -c "*) ;; *) continue;; esac; fi
   echo "close idle window bash pid=$p marked=$marked etimes=$(ps -o etimes= -p $p | tr -d ' ') cmd=${cmd:0:80}"
   for c in $ds; do kill $c 2>/dev/null; done        # 子孫（sleep など）を先に止める。残ると窓が閉じない
-  kill -HUP $p 2>/dev/null && k=$((k+1))
+  kill -HUP $p 2>/dev/null && k=$((k+1))   # 窓の bash は HUP を受けると終了コード 0 で終わる（open_job_window の trap）。0 以外だとタブが残る
 done
 o=0
 for p in $(pgrep -x tail; pgrep -x sleep); do
