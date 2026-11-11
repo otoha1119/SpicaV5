@@ -79,8 +79,51 @@ class IsoEraser(Eraser):
         return torch.softmax(-self.d2 / (2.0 * s * s), dim=1)
 
 
+class SteeredEraser(IsoEraser):
+    """縁に沿った向きのぼかし（2026-11-12 夜、EXP-20261112-01 の調整 4c）。画素ごとに 2 つの広さ σ_u, σ_v と向き θ を選ぶ Gaussian の重み:
+      w_p(q) ∝ exp(−½ (d_u² / σ_u² + d_v² / σ_v²)),  d = q − p,  d_u = d を θ 方向へ射影, d_v = 直交方向
+    重みは p について点対称（w(d) = w(−d)）なので、平均の中心は動かない（1 回目の自由な重みのように明るい側を片側へ広げることはできない）。
+    向きのないぼかし（isotropic）は σ_u = σ_v の特別な場合。
+    根拠（分析 job 032423）: 向きのないぼかしでは、縁の上で「PCD の粒を消す」と「縁を太らせない」が両立せず、縁の幅が 5.6 px（実 EID 4.5）に広がった。
+    縁に沿う向きにだけ広く平均すれば、粒を消しつつ縁を横切る向きのぼけを小さくできる（steering kernel: Takeda, Farsiu, Milanfar, IEEE TIP 2007）。
+    向きは (c, s) = (cos 2θ, sin 2θ) を正規化せずに出し、|(c, s)| < 1 の分は向きのない平均に近づく（c = s = 0 で d_u² = d_v² = |d|²/2）。
+    初期値: logit σ_u, σ_v = −center_bias ± 0.3（r = 4、center_bias 2.2 で 0.52 / 0.30 px。ほぼ恒等）、c = s = 0。
+    σ_u = σ_v だと向きの勾配が 0 になり（d_u² と d_v² の重みが同じ）、向きのないぼかしの中から出られないので、少しだけ違えて始める。"""
+
+    def __init__(self, radius, width, depth, center_bias):
+        super().__init__(radius, width, depth, center_bias)
+        self.out = nn.Conv2d(width, 4, 1)   # logit σ_u, logit σ_v, c, s
+        nn.init.zeros_(self.out.weight)
+        with torch.no_grad():
+            self.out.bias.zero_()
+            self.out.bias[0] = -float(center_bias) + 0.3   # σ_u と σ_v を少しだけ違えて始める。同じだと向き (c, s) の勾配が 0 で、向きのないぼかしから出られない
+            self.out.bias[1] = -float(center_bias) - 0.3
+        r = self.radius
+        yy, xx = torch.meshgrid(torch.arange(-r, r + 1.0), torch.arange(-r, r + 1.0), indexing="ij")
+        self.register_buffer("dxx", (xx * xx).reshape(1, -1, 1, 1), persistent=False)
+        self.register_buffer("dyy", (yy * yy).reshape(1, -1, 1, 1), persistent=False)
+        self.register_buffer("dxy", (xx * yy).reshape(1, -1, 1, 1), persistent=False)
+
+    def params(self, x):
+        o = self.out(F.silu(self.blocks(self.stem(x.float()))))
+        su = (self.radius * torch.sigmoid(o[:, 0:1])).clamp_min(1e-3)
+        sv = (self.radius * torch.sigmoid(o[:, 1:2])).clamp_min(1e-3)
+        n = torch.sqrt(o[:, 2:3] ** 2 + o[:, 3:4] ** 2 + 1e-2)   # |(c, s)| < 1（柔らかい正規化。0 付近でも勾配が有限）
+        return su, sv, o[:, 2:3] / n, o[:, 3:4] / n
+
+    def sigma_px(self, x):
+        su, sv, _, _ = self.params(x)
+        return torch.sqrt(su * sv)
+
+    def weights(self, x):
+        su, sv, c, s = self.params(x)
+        du2 = 0.5 * (1 + c) * self.dxx + 0.5 * (1 - c) * self.dyy + s * self.dxy
+        dv2 = 0.5 * (1 - c) * self.dxx + 0.5 * (1 + c) * self.dyy - s * self.dxy
+        return torch.softmax(-0.5 * (du2 / (su * su) + dv2 / (sv * sv)), dim=1)
+
+
 def build_eraser(cfg):
-    cls = {"free": Eraser, "isotropic": IsoEraser}[cfg["eraser.kind"]]
+    cls = {"free": Eraser, "isotropic": IsoEraser, "steered": SteeredEraser}[cfg["eraser.kind"]]
     return cls(cfg["eraser.radius"], cfg["eraser.width"], cfg["eraser.depth"], cfg["eraser.center_bias"])
 
 

@@ -219,7 +219,7 @@ Y_TRAIN = {
     "data.margin":         Key(int,   "--margin",         "パッチの余白（reflect で広げて切る。A の近傍と手がかりのぼかしが端で欠けないように）"),
     "data.patches_per_slice": Key(int, "--patches_per_slice", "1 スライスから切るパッチ数"),
     "data.pcd_val_cases":  Key(list,  "--pcd_val_cases",  "学習に使わない PCD の症例（途中経過のスライスはここから）"),
-    "eraser.kind":         Key(str,   "--eraser_kind",    "free = 近傍の重みを自由に選ぶ（足して 1）| isotropic = 画素ごとに広さだけ選べる向きのないぼかし（左右上下対称）"),
+    "eraser.kind":         Key(str,   "--eraser_kind",    "free = 近傍の重みを自由に選ぶ（足して 1）| isotropic = 画素ごとに広さだけ選べる向きのないぼかし（左右上下対称）| steered = 画素ごとに 2 つの広さと向きを選べる Gaussian（点対称。縁に沿ってだけ広く平均できる）"),
     "eraser.radius":       Key(int,   "--radius",         "A が平均できる近傍の半径（上限。ぼかし量ではない）"),
     "eraser.width":        Key(int,   "--eraser_width",   "A の CNN の幅"),
     "eraser.depth":        Key(int,   "--eraser_depth",   "A の CNN の ResBlock の数（dilation 1, 2, 4, 8 の繰り返し）"),
