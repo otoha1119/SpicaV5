@@ -16,6 +16,7 @@ generate:
 redraw:
   use_eraser: true         # false = A を通さない（PCD に直接ノイズ s を足して描き直す。比較用）
   s_hu: 100.0
+  s_list_hu: []            # 往復ごとに s を変える並び（例 --s_list_hu 300,100,50,30）。空なら s_hu を cycles 回
   cycles: 1                # 描き直しの往復の回数（くり返すほど PCD の粒が入れ替わる見込み。比較用）
   steps: 20
   cue_blur_px: 8.0

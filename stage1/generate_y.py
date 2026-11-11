@@ -82,6 +82,12 @@ def main():
         P = []
         if not g["generate.run"]: P.append("generate.run を --run で指定")
         if g["redraw.cycles"] < 1: P.append("redraw.cycles ≥ 1")
+        try:
+            s_list = [float(v) for v in g["redraw.s_list_hu"]]
+        except ValueError:
+            s_list = None
+            P.append("redraw.s_list_hu は数の並び")
+        if s_list and (g["redraw.cycles"] != 1 or any(v <= 0 for v in s_list)): P.append("redraw.s_list_hu を使うときは cycles = 1、各 s > 0")
         if g["generate.k"] < 1 or g["generate.slice_step"] < 1 or g["redraw.steps"] < 1 or g["redraw.batch"] < 1: P.append("k / slice_step / steps / batch ≥ 1")
         if g["generate.max_slices"] < 0 or g["redraw.s_hu"] < 0 or g["redraw.cue_blur_px"] <= 0: P.append("max_slices ≥ 0、s_hu ≥ 0、cue_blur_px は正")
         if g["redraw.precision"] not in PRECISIONS: P.append(f"redraw.precision は {PRECISIONS}")
@@ -104,9 +110,11 @@ def main():
     et = e_cfg["train"]
     hu, scale = hu_tuple(et), et["data.hu_scale"]
     bf16, cl = want_bf16(g["redraw.precision"], device), bool(et["optim.channels_last"])
-    s = g["redraw.s_hu"] / scale
+    s_seq = [v / scale for v in s_list] if s_list else [g["redraw.s_hu"] / scale] * g["redraw.cycles"]
+    s = s_seq[0]
     head = f"Y_{g['generate.run']}-{int(state['step']):07d}" if g["redraw.use_eraser"] else f"Ynoeraser_E{e_step:07d}"
-    name = f"{head}_s{g['redraw.s_hu']:g}_b{g['redraw.cue_blur_px']:g}{'_anc' if g['redraw.anchor'] else ''}"
+    s_tag = ("sl" + "-".join(f"{v:g}" for v in s_list)) if s_list else f"s{g['redraw.s_hu']:g}"
+    name = f"{head}_{s_tag}_b{g['redraw.cue_blur_px']:g}{'_anc' if g['redraw.anchor'] else ''}"
     name += f"_cyc{g['redraw.cycles']}" if g["redraw.cycles"] > 1 else ""
     name += f"_{g['generate.name_suffix']}" if g["generate.name_suffix"] else ""
     root = Path(machine["pseudo_eid_dir"])
@@ -138,9 +146,9 @@ def main():
             m = A(src) if g["redraw.use_eraser"] else src
             if s > 0:
                 out = m
-                for c in range(g["redraw.cycles"]):  # 往復ごとに別の乱数源（1 往復目は従来と同じ種）
+                for c, s_c in enumerate(s_seq):  # 往復ごとに別の乱数源（1 往復目は従来と同じ種）。s は往復ごとに s_seq の値
                     gens = [generator_of(device, g["generate.seed"], case, q.name, k, *([c] if c else [])) for k, case, q in chunk]
-                    out = redraw(E, out, src, s, g["redraw.steps"], g["redraw.cue_blur_px"], shared["brightness.sigma_px_512"], g["redraw.anchor"],
+                    out = redraw(E, out, src, s_c, g["redraw.steps"], g["redraw.cue_blur_px"], shared["brightness.sigma_px_512"], g["redraw.anchor"],
                                  et["diffusion.sigma_min"], et["diffusion.sigma_data"], bf16, cl, gens, cue_from=m)
             else:
                 out = m
