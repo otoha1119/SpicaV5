@@ -1,0 +1,50 @@
+# stage1/configs/y.yaml — 型 Y の学習（bash start.sh PC1 y [--flag value]）。唯一の正は configs/schema.py の Y_TRAIN。既定値は無い。
+# 消し手 A（近くの画素の重みつき平均だけ）を PCD512 で学ぶ。A の出力を「強めのノイズをかぶせた上で」実 EID の描き手 E と疑似側の物差し F に見せ、
+# 2 つの答えの差（DMD 型、判別器なし）で A を動かす。F は A の出力を追う普通の拡散の学習。PCD との画素の一致は使わない。
+# 設計の出典: docs/plans/20261111_detail_design/stage1_redesign_ideas/persona_skeptic.md 案 1。式の出典は stage1/UPSTREAM.md の 7。
+init:
+  e_run: "2026_1111_0517"  # 実 EID の描き手（53,498 step で停止したもの）
+  e_tag: latest
+
+optim:
+  lr_a: 0.0001
+  lr_f: 0.00005            # F は E から始めて追うだけ（E の学習の lr 2e-4 より小さく）
+  beta1: 0.0               # DMD の実装と同じく β1 = 0（2 つの部品が互いを追うので慣性を持たせない）
+  beta2: 0.99
+  batch_size: 8
+  grad_clip: 1.0
+  f_steps: 1
+  precision: bf16
+  compile: true
+  compile_mode: max-autotune
+  compile_after_steps: 20
+  max_steps: 6000
+  max_hours: 3.0
+  seed: 1234
+
+data:
+  patch_size: 256
+  margin: 32               # ≥ 3 × cue_blur_px かつ ≥ radius
+  patches_per_slice: 4
+  pcd_val_cases: [PCD-002]
+
+eraser:
+  radius: 4                # 9×9 の近傍まで平均できる（上限）
+  width: 32
+  depth: 6
+  center_bias: 6.0         # 最初は中央の重み ≈ 0.83（ほぼ恒等）
+
+dmd:
+  sigma_lo_hu: 20.0        # 見比べは 20〜2,000 HU のノイズをかぶせた上だけ（研究者の手が残る点。設計書の「出発点 s」と同じ扱い）
+  sigma_hi_hu: 2000.0
+  cue_blur_px: 8.0         # E の学習の上端（cue.blur_max_px）
+
+log:
+  print_steps: 50
+  preview_steps: 500
+  save_latest_steps: 500
+  save_weights_steps: 1000
+  pcd_slices:
+    - /workspace/DataSet/PCD512_v2/PCD-002/PCD-002-236.png
+  preview_s_hu: ["50", "100"]
+  preview_steps_redraw: 20

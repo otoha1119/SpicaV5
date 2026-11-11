@@ -1,0 +1,22 @@
+# stage1/configs/y_generate.yaml — 型 Y の疑似 EID の作成（bash start.sh PC1 ygen --run <型 Y の run> [--flag value]）。唯一の正は schema の Y_GENERATE。
+# 手順: PCD → 消し手 A → m。m に強さ s のノイズを足し、実 EID の描き手 E で s から 0 まで描き直す（Euler ancestral、毎段に新しい乱数）。
+# 出力: <pseudo_eid_dir>/<組>/k00…/<症例>/<スライス>.png と manifest.yaml。組の名前 = Y_<run>-<step>_s<s>_b<cue>[_anc][_<suffix>]
+generate:
+  run: ""
+  tag: latest
+  input_dir: ""
+  cases: []
+  slices: []
+  slice_step: 1
+  max_slices: 0
+  k: 1
+  seed: 1234
+  name_suffix: ""
+
+redraw:
+  s_hu: 100.0
+  steps: 20
+  cue_blur_px: 8.0
+  anchor: true
+  batch: 4
+  precision: bf16

@@ -191,6 +191,68 @@ BRIDGE = {
     "bridge.seed":         Key(int,   "--gen_seed",     "cue.noise_hu > 0 のときの乱数の種"),
 }
 
+# ---------------------------------------------------------------------------
+# stage1/configs/y.yaml — 型 Y の学習（train_y.py）。消し手 A（PCD を入力）と疑似側の物差し F。実 EID の描き手 E は固定
+# ---------------------------------------------------------------------------
+Y_TRAIN = {
+    "init.e_run":          Key(str,   "--e_run",          "実 EID の描き手 E の run（固定。F もこの EMA の重みから始める）"),
+    "init.e_tag":          Key(str,   "--e_tag",          "その重み: latest | best | step 番号"),
+    "optim.lr_a":          Key(float, "--lr_a",           "消し手 A の AdamW の学習率"),
+    "optim.lr_f":          Key(float, "--lr_f",           "物差し F の AdamW の学習率"),
+    "optim.beta1":         Key(float, "--beta1",          "AdamW β1"),
+    "optim.beta2":         Key(float, "--beta2",          "AdamW β2"),
+    "optim.batch_size":    Key(int,   "--batch_size",     "batch（PCD のパッチ数）"),
+    "optim.grad_clip":     Key(float, "--grad_clip",      "勾配ノルムのクリップ（A・F それぞれ）"),
+    "optim.f_steps":       Key(int,   "--f_steps",        "A を 1 回更新するあいだに F を何回更新するか（DMD は 1、DMD2 は 5）"),
+    "optim.precision":     Key(str,   "--precision",      "E・F の U-Net 本体の精度 fp32 | bf16（A・損失・ぼかしは常に FP32）"),
+    "optim.compile":       Key(bool,  "--compile",        "F の学習の U-Net 本体を torch.compile（E の推論は compile しない）"),
+    "optim.compile_mode":  Key(str,   "--compile_mode",   "max-autotune | reduce-overhead | default"),
+    "optim.compile_after_steps": Key(int, "--compile_after_steps", "最初の N step は compile せずに回す"),
+    "optim.max_steps":     Key(int,   "--max_steps",      "上限 step（A の更新回数）"),
+    "optim.max_hours":     Key(float, "--max_hours",      "上限時間（再開をまたいだ累計）"),
+    "optim.seed":          Key(int,   "--seed",           "乱数 seed"),
+    "data.patch_size":     Key(int,   "--patch_size",     "PCD のパッチの一辺（E の学習と同じ 256）"),
+    "data.margin":         Key(int,   "--margin",         "パッチの余白（reflect で広げて切る。A の近傍と手がかりのぼかしが端で欠けないように）"),
+    "data.patches_per_slice": Key(int, "--patches_per_slice", "1 スライスから切るパッチ数"),
+    "data.pcd_val_cases":  Key(list,  "--pcd_val_cases",  "学習に使わない PCD の症例（途中経過のスライスはここから）"),
+    "eraser.radius":       Key(int,   "--radius",         "A が平均できる近傍の半径（上限。ぼかし量ではない）"),
+    "eraser.width":        Key(int,   "--eraser_width",   "A の CNN の幅"),
+    "eraser.depth":        Key(int,   "--eraser_depth",   "A の CNN の ResBlock の数（dilation 1, 2, 4, 8 の繰り返し）"),
+    "eraser.center_bias":  Key(float, "--center_bias",    "初期値で中央の画素に与える logit（大きいほど最初は恒等に近い）"),
+    "dmd.sigma_lo_hu":     Key(float, "--sigma_lo_hu",    "見比べのノイズの下端（HU）。この強さのノイズをかぶせた上でだけ E と F を比べる"),
+    "dmd.sigma_hi_hu":     Key(float, "--sigma_hi_hu",    "同上端（HU）。[lo, hi] を対数一様"),
+    "dmd.cue_blur_px":     Key(float, "--cue_blur_px",    "E・F に渡す手がかり = A の出力をこの広さでぼかした絵（明るさの配置をそろえて比べる。E の学習の上端以下）"),
+    "log.print_steps":     Key(int,   "--print_steps",    "scalar の間隔"),
+    "log.preview_steps":   Key(int,   "--preview_steps",  "途中経過（val のスライス全体を A に通す + 描き直し、確認の数字）の間隔"),
+    "log.save_latest_steps": Key(int, "--save_latest_steps", "latest/ の保存間隔"),
+    "log.save_weights_steps": Key(int, "--save_weights_steps", "weights/step_NNNNNNN/ の保存間隔"),
+    "log.pcd_slices":      Key(list,  "--pcd_slices",     "途中経過に使う PCD のスライス（コンテナ内の絶対パス。val の症例）"),
+    "log.preview_s_hu":    Key(list,  "--preview_s_hu",   "途中経過の描き直しの出発点 s（HU）の並び（文字列のリスト）"),
+    "log.preview_steps_redraw": Key(int, "--preview_redraw_steps", "途中経過の描き直しの段数"),
+}
+
+# ---------------------------------------------------------------------------
+# stage1/configs/y_generate.yaml — 型 Y の疑似 EID の作成（generate_y.py）
+# ---------------------------------------------------------------------------
+Y_GENERATE = {
+    "generate.run":        Key(str,   "--run",            "型 Y の run（A を読む。E は run の launch の init.e_run）"),
+    "generate.tag":        Key(str,   "--tag",            "A の重み: latest | step 番号"),
+    "generate.input_dir":  Key(str,   "--input_dir",      "入力（<症例>/<スライス>.png）。空文字なら machines の pcd_dir"),
+    "generate.cases":      Key(list,  "--cases",          "[] で全部"),
+    "generate.slices":     Key(list,  "--slices",         "[] で絞らない"),
+    "generate.slice_step": Key(int,   "--slice_step",     "何枚おき"),
+    "generate.max_slices": Key(int,   "--max_slices",     "症例ごとの上限（0 で全部）"),
+    "generate.k":          Key(int,   "--k",              "1 枚につき何通り（描き直しの乱数を変える）"),
+    "generate.seed":       Key(int,   "--gen_seed",       "画像ごとの種の base"),
+    "generate.name_suffix": Key(str,  "--name_suffix",    "組の名前の末尾"),
+    "redraw.s_hu":         Key(float, "--s_hu",           "描き直しの出発点 s（HU）。0 = 描き直さず A の出力をそのまま書く"),
+    "redraw.steps":        Key(int,   "--steps",          "描き直しの段数（s から 0 まで、Euler ancestral η = 1）"),
+    "redraw.cue_blur_px":  Key(float, "--cue_blur_px",    "描き直しで E に渡す手がかり = A の出力をこの広さでぼかした絵"),
+    "redraw.anchor":       Key(bool,  "--anchor",         "各段で広い平均を入力の PCD に合わせ直す（σ_a は shared）"),
+    "redraw.batch":        Key(int,   "--batch",          "まとめて通す枚数"),
+    "redraw.precision":    Key(str,   "--precision",      "fp32 | bf16"),
+}
+
 PRECISIONS = ("fp32", "bf16")
 COMPILE_MODES = ("max-autotune", "reduce-overhead", "default")
 GPU_GENS = (0, 30, 40, 50)

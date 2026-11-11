@@ -23,6 +23,8 @@
 #   bash start.sh PC1 generate --run 2026_1112_0030 --tag latest --blur_px 2 --noise_hu 50 --k 2
 #   bash start.sh PC1 --domain pcd --init_run 2026_1111_0517 --max_steps 4000   # 型 X: PCD の描き手（実 EID の描き手の重みから PCD512 で学ぶ）
 #   bash start.sh PC1 bridge --enc_run <PCD の描き手> --dec_run <実 EID の描き手>  # 型 X: PCD → ノイズ → 疑似 EID
+#   bash start.sh PC1 y [--max_steps 6000]                # 型 Y: 消し手 A を学ぶ（stage1/configs/y.yaml）。再開は bash start.sh PC1 y resume <run>
+#   bash start.sh PC1 ygen --run <型 Y の run> --s_hu 100 # 型 Y: PCD → A → E で描き直し → 疑似 EID
 #   bash start.sh PC1 best 2026_1112_0030 150000        # weights/step_0150000/ を best/ に写す
 #   bash start.sh PC1 tb                                # 全 run を並べた TensorBoard
 #   bash start.sh PC1 build | shell | down
@@ -77,6 +79,8 @@ while [ $# -gt 0 ]; do
     tb)    ACTION=tb; shift ;;
     generate) ACTION=generate; shift ;;
     bridge) ACTION=bridge; shift ;;
+    y) ACTION=y; shift ;;
+    ygen) ACTION=ygen; shift ;;
     resume)
       shift
       [ $# -gt 0 ] && [[ "$1" != --* ]] || { echo "[start] resume には run 名が必要です: bash start.sh resume yyyy_mmdd_HHMM [latest|best|<step>]" >&2; exit 2; }
@@ -245,6 +249,11 @@ case "$ACTION" in
   shell) exec_it spicav5 bash ;;
   generate) exec_it spicav5 python stage1/run_generate.py "${CFG[@]}" --generate stage1/configs/generate.yaml -- "$@" ;;
   bridge) exec_it spicav5 python stage1/run_bridge.py "${CFG[@]}" --bridge stage1/configs/bridge.yaml -- "$@" ;;
+  y)
+    Y_ARGS=("${CFG[@]}" --config stage1/configs/y.yaml)
+    if [ -n "$RESUME" ]; then Y_ARGS+=(--resume "$RESUME"); fi
+    exec_it spicav5 python stage1/train_y.py "${Y_ARGS[@]}" -- "$@" ;;
+  ygen) exec_it spicav5 python stage1/generate_y.py "${CFG[@]}" --config stage1/configs/y_generate.yaml -- "$@" ;;
   best)
     [ $# -eq 0 ] || { echo "[start] best に --flag は付けられません: $*" >&2; exit 2; }
     exec_it spicav5 python stage1/mark_best.py --machine "$MACHINE" --machines configs/machines.yaml --run "$BEST_RUN" --tag "$BEST_TAG" ;;

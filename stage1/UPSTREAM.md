@@ -88,3 +88,11 @@
 - 片方の領域のモデルで行き、もう片方で帰りにつなぐ形は DDIB（Su, Song, Meng, Ermon. "Dual Diffusion Implicit Bridges for Image-to-Image Translation", ICLR 2023, arXiv:2203.08382）。**公式実装との照合はしていない**（論文の手順を EDM の式に書き直したもの）
 - DDIB と違う点（ここで決めたこと）: (1) 2 つのモデルを独立に学ばず、PCD の描き手を実 EID の描き手の重みから始める（PCD が約 18 症例しか無いため。ノイズの空間での形の表し方をそろえる狙い）。(2) 粗くした絵を条件として行きと帰りの両方に渡す。(3) 行きの始点に σ_min のノイズを足さない。(4) 256 のパッチで学び 512 全体で解く
 - 提案（`docs/plans/20261111_detail_design/stage1_redesign_ideas/persona_diffusion.md`）では PCD 側は「小さな差分（アダプタ）」だが、実装は全部の重みの短い学習し直し。差分の大きさは学習の長さで見る
+
+## 7. 型 Y（消し手 A + DMD 型の見比べ。2026-11-11、`models/eraser.py`・`train_y.py`・`generate_y.py`）
+
+- A の損失は DMD（Yin et al., "One-step Diffusion with Distribution Matching Distillation", CVPR 2024）の分布合わせの勾配: 生成物 x にノイズ σ をかぶせた y について、∇_x KL ≈ (D_fake(y) − D_real(y))（x̂0 の差。σ² の係数は正規化で消える）。正規化はサンプルごとに mean|x − D_real(y)| で割る（論文の式 (8) の重み）。実装は ½‖x − sg(x − g)‖² の形で、∂/∂x = g。**公式実装との照合はしていない**（論文の式を EDM の x̂0 の形で書き直したもの）
+- 生成器の入力をノイズでなく元の領域の画像にする unpaired 変換は RDMD（Rakitin et al., arXiv:2406.14762, 2024）。RDMD は入力と出力の対応を transport cost の罰で保つが、ここでは罰を置かず A の作り（重みつき平均だけ）で代える
+- 画素ごとに重みを予測して平均する作りは KPN（Mildenhall et al., "Burst Denoising with Kernel Prediction Networks", CVPR 2018）
+- 決めたこと: 見比べの σ を [20, 2000] HU に限る（PCD のノイズの細かい違いを F・E が直接見比べない）。E・F の両方に、A の出力を 8 px でぼかした絵を手がかりとして渡す。F は E の EMA から始める。Adam の β1 = 0（DMD の実装に合わせた。**論文の付録との照合はしていない**）
+- 描き直しは SDEdit（Meng et al., ICLR 2022）と同じ: 強さ s のノイズを足して s から描く
