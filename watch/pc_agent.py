@@ -349,9 +349,19 @@ def open_job_window(cfg, rid, summary):
 def finish_job(repo, cfg, rid, info, exit_code):
     root = job_root(cfg, rid)
     out = root / "_out"
-    keep = Path(cfg["data_dir"]) / ".local" / "jobs" / rid   # PC に残す全出力（画像を含む）
-    if out.is_dir():
-        shutil.copytree(out, keep, dirs_exist_ok=True)
+    keep = Path(cfg["data_dir"]) / ".local" / "jobs" / rid   # PC に残す出力（画像を含む。blobs/ は除く）
+    copy_errors = []
+    # 1 ファイルずつ写し、失敗しても止まらない。blobs/ は大きいので写さず _out から直接 push する
+    # （PC1 で 2026-11-12、90 MB のかけらの copytree が Errno 22 で落ち、ループが毎回そこで止まって依頼も処理されなくなった）
+    for f in sorted(out.rglob("*")) if out.is_dir() else []:
+        rel = f.relative_to(out)
+        if not f.is_file() or rel.parts[0] == "blobs":
+            continue
+        try:
+            (keep / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, keep / rel)
+        except OSError as e:
+            copy_errors.append(f"{rel.as_posix()}: {e}")
     res = repo.path / "results" / rid
     sent, skipped = [], []
     for f in sorted(keep.rglob("*")) if keep.is_dir() else []:
@@ -364,7 +374,10 @@ def finish_job(repo, cfg, rid, info, exit_code):
             sent.append(rel.as_posix())
         elif f.name != "job.log":
             skipped.append(rel.as_posix())
-    blobs, refused = push_blobs(repo, rid, keep / "blobs")
+    try:
+        blobs, refused = push_blobs(repo, rid, out / "blobs")
+    except (subprocess.SubprocessError, OSError, WatchError) as e:
+        blobs, refused = [], [f"blob の push に失敗: {e}"]
     log = keep / "job.log"
     tail = "\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-JOB_LOG_TAIL:]) if log.is_file() else "（ログなし）"
     git(Path(cfg["repo_dir"]), "worktree", "remove", "--force", str(root), check=False, timeout=300)
@@ -373,7 +386,8 @@ def finish_job(repo, cfg, rid, info, exit_code):
             f"- 開始 {info['started']} → 終了 {now_iso()}\n- 結果（watch-data の results/{rid}/）: {', '.join(sent) or 'なし'}\n"
             f"- 使い捨てブランチ watch-blob/{rid}（mac.py fetch-blobs {rid}）: {', '.join(blobs) or 'なし'}"
             f"{'（送らなかったもの: ' + ', '.join(refused) + '）' if refused else ''}\n"
-            f"- PC にだけ残したもの（{keep}）: {', '.join(skipped[:30]) or 'なし'}{' ほか' if len(skipped) > 30 else ''}\n\n"
+            f"- PC にだけ残したもの（{keep}）: {', '.join(skipped[:30]) or 'なし'}{' ほか' if len(skipped) > 30 else ''}\n"
+            f"{'- 写せなかったもの: ' + '; '.join(copy_errors[:10]) + chr(10) if copy_errors else ''}\n"
             f"## ログの末尾\n\n```\n{tail}\n```\n\nRESULT: {'ok' if ok else 'failed'}\n")
     respond(repo, cfg, rid, {"kind": "job", "run": ""}, body, "ok" if ok else "failed",
             f"job {rid} {'終了' if ok else '失敗（終了コード ' + exit_code + '）'}: {info['summary']}")
