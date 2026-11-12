@@ -117,8 +117,31 @@ PC4:                                   # 研究室 Windows 機
   flow_checkpoints_dir: /workspace/runs/stage2      # 新 Stage 2（U + フロー）の run の置き場。この下に u/<run>/、v/<run>/（Stage 2 の実装が使う。Stage 1 は使わない）
   pseudo_eid_dir: /workspace/DataSet/PseudoEID512   # 疑似 EID（bash start.sh generate の出力）。この下に <組>/k00, k01, …/<症例>/<スライス>.png と <組>/manifest.yaml
 
+PC5:                                   # 研究室 Windows 機（2026-11-12 追加）。Docker Desktop なし: WSL2 の Ubuntu に Docker Engine + NVIDIA Container Toolkit。
+                                       # start.sh・監視（pc_agent）とも Ubuntu の中で実行する。リポジトリは ~/SpicaV5、データは Ubuntu の中（元は C:/Users/user/Documents/DataSet）
+  gpu_gen: 50                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
+  gpu_name: RTX 5060 Ti 16GB
+  host_data_root: /home/user/DataSet   # Ubuntu の中（ext4）。/mnt/c 経由は遅いのでコピーして使う
+  container_data_root: /workspace/DataSet
+  pcd_dir: /workspace/DataSet/PCD512_v2   # 直下に症例フォルダ。論文の z 側 (A)
+  eid_dir: /workspace/DataSet/EID_v5      # 論文の x 側 (B)
+  pcd1024_dir: /workspace/DataSet/PCD1024_v1         # Stage 2 の教師（PCD512_v2 と同一患者・同一スキャンの 1024 再構成、1ch uint16）
+  eidlike1024_dir: /workspace/DataSet/EIDlike1024_v1   # 旧 Stage 2 の学習入力。PC5 には無い（2026-11-12 時点）
+  eid1024_dir: /workspace/DataSet/EID1024_v1           # 実 EID の 1024。PC5 には無い（2026-11-12 時点）
+  stage2_checkpoints_dir: /workspace/old/stage2/checkpoints   # 旧 Stage 2 の run の保存先
+  align_meta: /workspace/DataSet/align_meta.yaml   # sampling=aligned のときだけ存在を検査。PC5 には無い（2026-11-12 時点）
+  checkpoints_dir: /workspace/old/stage1/checkpoints   # 旧 Stage 1 の run の保存先
+  num_threads: 12                      # nproc = 16
+  tb_port: 6006            # TensorBoard（ホスト:コンテナ 同番号で公開）
+  stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート
+  ablation_checkpoints_dir: /workspace/old/ablation/checkpoints   # 旧アブレーションの run の保存先ルート
+  ablation_tb_port: 6008   # アブレーションの TensorBoard のポート
+  painter_checkpoints_dir: /workspace/runs/stage1   # 新 Stage 1（描き手 P、stage1/）の run の置き場。この下に <run>/
+  flow_checkpoints_dir: /workspace/runs/stage2      # 新 Stage 2（U + フロー）の run の置き場。この下に u/<run>/、v/<run>/
+  pseudo_eid_dir: /workspace/DataSet/PseudoEID512   # 疑似 EID（bash start.sh generate の出力）。この下に <組>/k00, k01, …/<症例>/<スライス>.png と <組>/manifest.yaml
 
-mac:                                   # 開発機（Docker、CPU）
+
+mac:                                # 開発機（Docker、CPU）
   gpu_gen: 0
   gpu_name: Apple M4 (CPU)
   host_data_root: /Volumes/OTO-SSD/DataSet   # SpicaV3 と同じ外付け SSD
