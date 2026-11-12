@@ -251,6 +251,7 @@ Y_GENERATE = {
     "generate.seed":       Key(int,   "--gen_seed",       "画像ごとの種の base"),
     "generate.name_suffix": Key(str,  "--name_suffix",    "組の名前の末尾"),
     "redraw.use_eraser":   Key(bool,  "--use_eraser",     "false = 消し手 A を通さず、PCD そのものにノイズ s を足して E で描き直す（A が要るかの比較。素の SDEdit）"),
+    "redraw.a_sigma_scale": Key(float, "--a_sigma_scale", "消し手 A のぼかしの広さ σ(p) を推論時に何倍にするか（1 = 学習のまま。向きのないぼかしの run だけ）。描き直しを 400 HU から始めると粒の入れ替えは描き直しが担い、A は鋭さだけを決める（EXP-20261112-01）"),
     "redraw.s_hu":         Key(float, "--s_hu",           "描き直しの出発点 s（HU）。0 = 描き直さず A の出力をそのまま書く"),
     "redraw.cycles":       Key(int,   "--cycles",         "描き直しを何往復くり返すか（1 往復 = ノイズ s を足して E で 0 まで描く。2 往復目以降は前の往復の出力に新しいノイズ s を足す。手がかりと錨は最初の入力のまま）"),
     "redraw.s_list_hu":    Key(list,  "--s_list_hu",      "往復ごとの s（HU）の並び（例 300,100,50,30）。空なら s_hu を cycles 回。並びを使うときは cycles は 1 にする"),

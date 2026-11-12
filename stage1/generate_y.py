@@ -93,6 +93,7 @@ def main():
             st_list = None
             P.append("redraw.steps_list は整数の並び")
         if st_list and (len(st_list) != len(s_list or []) or any(v < 1 for v in st_list)): P.append("redraw.steps_list は s_list_hu と同じ長さで、各 1 以上")
+        if g["redraw.a_sigma_scale"] <= 0: P.append("redraw.a_sigma_scale は正")
         if s_list and (g["redraw.cycles"] != 1 or any(v <= 0 for v in s_list)): P.append("redraw.s_list_hu を使うときは cycles = 1、各 s > 0")
         if g["generate.k"] < 1 or g["generate.slice_step"] < 1 or g["redraw.steps"] < 1 or g["redraw.batch"] < 1: P.append("k / slice_step / steps / batch ≥ 1")
         if g["generate.max_slices"] < 0 or g["redraw.s_hu"] < 0 or g["redraw.cue_blur_px"] <= 0: P.append("max_slices ≥ 0、s_hu ≥ 0、cue_blur_px は正")
@@ -104,6 +105,8 @@ def main():
             raise ConfigError(f"A の重みがありません: {wdir}")
         state = torch.load(wdir / "state.pth", map_location="cpu", weights_only=False)
         yc = validate("y(state)", fill_legacy(dict(state["config"])), Y_TRAIN)
+        if g["redraw.a_sigma_scale"] != 1.0 and yc["eraser.kind"] != "isotropic":
+            raise ConfigError(f"redraw.a_sigma_scale ≠ 1 は eraser.kind: isotropic の run だけ（この run は {yc['eraser.kind']}）")
         e_dir = ckpt_dir(Path(machine["painter_checkpoints_dir"]) / yc["init.e_run"], yc["init.e_tag"])
     except ConfigError as e:
         print(f"[generate_y] 設定エラー: {e}", file=sys.stderr)
@@ -112,6 +115,10 @@ def main():
     A = build_eraser(yc).to(device)
     A.load_state_dict(torch.load(wdir / "A.pth", map_location=device, weights_only=True))
     A.eval()
+    k_sig = float(g["redraw.a_sigma_scale"])
+    if k_sig != 1.0:   # A のぼかしの広さを推論時に k 倍（向きのないぼかしだけ）。描き直しを強く始めると粒の入れ替えは描き直しが担い、A は鋭さだけを決める（EXP-20261112-01）
+        _sig = A.sigma_px
+        A.sigma_px = lambda x, _o=_sig, _k=k_sig: _o(x) * _k
     E, e_cfg, e_step = load_ema(e_dir, device)
     et = e_cfg["train"]
     hu, scale = hu_tuple(et), et["data.hu_scale"]
@@ -122,7 +129,8 @@ def main():
     head = f"Y_{g['generate.run']}-{int(state['step']):07d}" if g["redraw.use_eraser"] else f"Ynoeraser_E{e_step:07d}"
     s_tag = ("sl" + "-".join(f"{v:g}" for v in s_list)) if s_list else f"s{g['redraw.s_hu']:g}"
     s_tag += ("_st" + "-".join(str(v) for v in st_list)) if st_list else ""
-    name = f"{head}_{s_tag}_b{g['redraw.cue_blur_px']:g}{'_anc' if g['redraw.anchor'] else ''}"
+    a_tag = "" if k_sig == 1.0 else f"_ax{k_sig:g}"
+    name = f"{head}{a_tag}_{s_tag}_b{g['redraw.cue_blur_px']:g}{'_anc' if g['redraw.anchor'] else ''}"
     name += f"_cyc{g['redraw.cycles']}" if g["redraw.cycles"] > 1 else ""
     name += f"_{g['generate.name_suffix']}" if g["generate.name_suffix"] else ""
     root = Path(machine["pseudo_eid_dir"])

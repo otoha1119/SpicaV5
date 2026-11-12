@@ -15,6 +15,7 @@ generate:
 
 redraw:
   use_eraser: true         # false = A を通さない（PCD に直接ノイズ s を足して描き直す。比較用）
+  a_sigma_scale: 1.0       # A のぼかしの広さを推論時に何倍にするか（向きのないぼかしだけ。例 0.5 = ImageCAS 並みの鋭さ、0.35 = 病院 EID 並み、EXP-20261112-01）
   s_hu: 100.0
   s_list_hu: []            # 往復ごとに s を変える並び（例 --s_list_hu 300,100,50,30）。空なら s_hu を cycles 回
   steps_list: []           # 往復ごとの段数（例 --steps_list 20,10,5,3,1,1）。空なら steps
