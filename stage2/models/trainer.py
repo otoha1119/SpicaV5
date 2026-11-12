@@ -164,6 +164,11 @@ class Trainer:
         self.ema.load_state_dict(torch.load(d / f"{self.NET_NAME}_ema.pth", map_location=self.device, weights_only=True))
         state = torch.load(state_path, map_location="cpu", weights_only=True)
         self.opt.load_state_dict(state["optimizer"])
+        for g in self.opt.param_groups:   # パラメータの形を変えた層（V の LayerNorm2d: (1, ch, 1, 1) → (ch,)）の optimizer の状態を、今の形に合わせる（要素数が同じときだけ）
+            for prm in g["params"]:
+                for k, val in self.opt.state.get(prm, {}).items():
+                    if torch.is_tensor(val) and val.dim() > 0 and val.shape != prm.shape and val.numel() == prm.numel():
+                        self.opt.state[prm][k] = val.reshape(prm.shape)
         for g in self.opt.param_groups:
             g["lr"], g["betas"], g["weight_decay"] = self.lr, self.betas, self.weight_decay
         rng = state["rng"]

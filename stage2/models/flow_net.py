@@ -45,17 +45,30 @@ def sinusoid(v, dim, max_period=10000.0):
 
 
 class LayerNorm2d(nn.Module):
+    """画素ごと（チャンネル方向）の LayerNorm。weight・bias は (ch,) で持ち、使うときに (1, ch, 1, 1) に並べる。
+    (1, ch, 1, 1) のまま持つと、channels_last + torch.compile（inductor）で backward が落ちる
+    （CompiledFunctionBackward returned an invalid gradient: got [ch] but expected [1, ch, 1, 1]。PC3・torch 2.10 で切り分け済み。
+    bf16 の有無・compile の mode には依らず、aot_eager では通る = inductor 側の不具合。2026-11-13、EXP-20261112-01）。
+    前の形で保存した重み（2026-11-13 までの V）は読み込むときに (ch,) に直す。"""
+
     def __init__(self, ch, eps=1e-5):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(1, ch, 1, 1))
-        self.bias = nn.Parameter(torch.zeros(1, ch, 1, 1))
+        self.weight = nn.Parameter(torch.ones(ch))
+        self.bias = nn.Parameter(torch.zeros(ch))
         self.eps = eps
+
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        for k in ("weight", "bias"):
+            v = state_dict.get(prefix + k)
+            if v is not None and v.dim() == 4:
+                state_dict[prefix + k] = v.reshape(-1)
+        super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def forward(self, x):
         x = x.float()
         m = x.mean(dim=1, keepdim=True)
         d = x - m
-        return d * torch.rsqrt(d.square().mean(dim=1, keepdim=True) + self.eps) * self.weight + self.bias
+        return d * torch.rsqrt(d.square().mean(dim=1, keepdim=True) + self.eps) * self.weight.view(1, -1, 1, 1) + self.bias.view(1, -1, 1, 1)
 
 
 class Embed(nn.Module):
