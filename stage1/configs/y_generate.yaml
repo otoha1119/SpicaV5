@@ -4,6 +4,8 @@
 generate:
   run: ""
   tag: latest
+  e_run: ""                # 描き直しの E。空なら A の学習に使った E（init.e_run）
+  e_tag: latest
   input_dir: ""
   cases: []
   slices: []

@@ -242,6 +242,8 @@ Y_TRAIN = {
 Y_GENERATE = {
     "generate.run":        Key(str,   "--run",            "型 Y の run（A を読む。E は run の launch の init.e_run）"),
     "generate.tag":        Key(str,   "--tag",            "A の重み: latest | step 番号"),
+    "generate.e_run":      Key(str,   "--e_run",          "描き直しの E の run。空文字なら A の学習に使った E（run の launch の init.e_run）。E を学習し直したあと、同じ A で新しい E を使うとき（EXP-20261112-01）"),
+    "generate.e_tag":      Key(str,   "--e_tag",          "generate.e_run の重み: latest | step 番号（e_run が空なら使わない）"),
     "generate.input_dir":  Key(str,   "--input_dir",      "入力（<症例>/<スライス>.png）。空文字なら machines の pcd_dir"),
     "generate.cases":      Key(list,  "--cases",          "[] で全部"),
     "generate.slices":     Key(list,  "--slices",         "[] で絞らない"),

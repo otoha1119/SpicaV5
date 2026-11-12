@@ -107,7 +107,10 @@ def main():
         yc = validate("y(state)", fill_legacy(dict(state["config"])), Y_TRAIN)
         if g["redraw.a_sigma_scale"] != 1.0 and yc["eraser.kind"] != "isotropic":
             raise ConfigError(f"redraw.a_sigma_scale ≠ 1 は eraser.kind: isotropic の run だけ（この run は {yc['eraser.kind']}）")
-        e_dir = ckpt_dir(Path(machine["painter_checkpoints_dir"]) / yc["init.e_run"], yc["init.e_tag"])
+        e_run, e_tag = (g["generate.e_run"], g["generate.e_tag"]) if g["generate.e_run"] else (yc["init.e_run"], yc["init.e_tag"])
+        e_dir = ckpt_dir(Path(machine["painter_checkpoints_dir"]) / e_run, e_tag)
+        if not (e_dir / "ema.pth").is_file():
+            raise ConfigError(f"E の重みがありません: {e_dir}")
     except ConfigError as e:
         print(f"[generate_y] 設定エラー: {e}", file=sys.stderr)
         sys.exit(2)
@@ -129,7 +132,7 @@ def main():
     head = f"Y_{g['generate.run']}-{int(state['step']):07d}" if g["redraw.use_eraser"] else f"Ynoeraser_E{e_step:07d}"
     s_tag = ("sl" + "-".join(f"{v:g}" for v in s_list)) if s_list else f"s{g['redraw.s_hu']:g}"
     s_tag += ("_st" + "-".join(str(v) for v in st_list)) if st_list else ""
-    a_tag = "" if k_sig == 1.0 else f"_ax{k_sig:g}"
+    a_tag = ("" if k_sig == 1.0 else f"_ax{k_sig:g}") + (f"_E{g['generate.e_run']}-{e_step:07d}" if g["generate.e_run"] else "")
     name = f"{head}{a_tag}_{s_tag}_b{g['redraw.cue_blur_px']:g}{'_anc' if g['redraw.anchor'] else ''}"
     name += f"_cyc{g['redraw.cycles']}" if g["redraw.cycles"] > 1 else ""
     name += f"_{g['generate.name_suffix']}" if g["generate.name_suffix"] else ""
@@ -152,7 +155,7 @@ def main():
     if not jobs:
         print(f"[generate_y] エラー: 作る対象がありません: {input_dir}", file=sys.stderr)
         sys.exit(1)
-    print(f"[generate_y] {name}: A {wdir}（step {state['step']}）、E {e_dir}（step {e_step}）、{len(tasks)} 枚 × K {g['generate.k']}、s {g['redraw.s_hu']:g} HU、{g['redraw.steps']} 段", flush=True)
+    print(f"[generate_y] {name}: A {wdir}（step {state['step']}）、E {e_dir}（step {e_step}）、{len(tasks)} 枚 × K {g['generate.k']}、描き直し {s_tag}（HU・段）、A の σ × {k_sig:g}", flush=True)
     tmp.mkdir(parents=True)
     t0, bs = time.time(), g["redraw.batch"]
     for i in range(0, len(jobs), bs):
