@@ -143,6 +143,7 @@ case "$GPU_GEN" in
   *) echo "[start2] gpu_gen=$GPU_GEN は未対応 (30 / 40 / 50 / 0)" >&2; exit 1 ;;
 esac
 COMPOSE=("docker" "compose" "-f" "$ROOT/docker/compose.$GEN.yaml" "-p" "spicav5")
+source "$ROOT/docker/extra_mounts.sh"   # machines.yaml の host_runs_root / host_outputs_root（PC5 だけパス、ほかは none = 今までどおり）。COMPOSE に -f を足し check_extra_mounts を定義する（2026-11-12）
 export HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT TB_PORT_STAGE2 TB_PORT_ABLATION SPICA_MACHINE="$MACHINE"
 echo "[start2] machine=$MACHINE gpu_gen=$GPU_GEN -> $GEN | mount $HOST_DATA_ROOT -> $CONTAINER_DATA_ROOT | action=$ACTION ${BUILD:+(rebuild)}${KIND:+ kind=$KIND}${RESUME:+ resume=$RESUME tag=$RESUME_TAG}${BEST_RUN:+ run=$BEST_RUN tag=$BEST_TAG}"
 MY_TB_PORT="$TB_PORT_STAGE2"   # この起動口が使う TensorBoard のポート（Stage 2 専用。Stage 1 の tb_port の TensorBoard には触らない）
@@ -183,6 +184,7 @@ if container_running; then
     exit 2
   fi
   check_container
+  check_extra_mounts   # runs/・outputs/ をリポジトリの外に置くマシン（PC5）で、マウントが今回の指定と違えば止める（docker/extra_mounts.sh）
   echo "[start2] コンテナ spicav5 は起動済み（中の処理は触らない。マシン名・イメージは今回の指定と一致）。up は呼ばず exec だけ行う"
   if ! port_published "$MY_TB_PORT"; then
     echo "[start2] 注意: 起動中のコンテナはポート $MY_TB_PORT を公開していません（compose の設定を変えた後に down していない）。処理は動くが TensorBoard はホストから見えない。中の処理が終わってから bash start2.sh down → 起動し直してください"

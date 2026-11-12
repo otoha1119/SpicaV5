@@ -1,0 +1,6 @@
+# docker/compose.mount_outputs.yaml — outputs/ をリポジトリの外に置くマシン用（2026-11-12、PC5）。
+# machines.yaml の host_outputs_root がパスのときだけ、起動 sh（docker/extra_mounts.sh）が compose.<gen>.yaml に -f で重ねる。none のマシンは使わない。
+services:
+  spicav5:
+    volumes:
+      - ${HOST_OUTPUTS_ROOT:?configs/machines.yaml の host_outputs_root が未設定 (start.sh から起動すること)}:/workspace/outputs
