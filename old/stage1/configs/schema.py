@@ -134,6 +134,9 @@ MACHINE = {
     "painter_checkpoints_dir": Key(str, None,       "新 Stage 1（描き手 P）の run の置き場。旧 Stage 1 は使わない"),
     "flow_checkpoints_dir": Key(str, None,          "新 Stage 2（U + フロー）の run の置き場。旧 Stage 1 は使わない"),
     "pseudo_eid_dir":      Key(str, None,                "疑似 EID の置き場（新 Stage 1 の generate の出力）。旧 Stage 1 は使わない"),
+    # 起動 sh（docker/extra_mounts.sh）だけが読む。runs/・outputs/ をリポジトリの外に置くマシン（PC5）用。none = 追加マウントなし（2026-11-12）
+    "host_runs_root":      Key(str, None,                "runs/ のホスト側の置き場（none = リポジトリの中）。起動 sh が /workspace/runs にマウントする。旧 Stage 1 は使わない"),
+    "host_outputs_root":   Key(str, None,                "outputs/ のホスト側の置き場（none = リポジトリの中）。起動 sh が /workspace/outputs にマウントする。旧 Stage 1 は使わない"),
 }
 
 # ---------------------------------------------------------------------------
