@@ -5,6 +5,8 @@
 # 推論（bash start.sh infer）もここの gpu_gen で Docker とデバイス（0 → cpu、それ以外 → cuda）を決める。重みと入力のパスは infer_stage1.sh に書く。
 # host_data_root → container_data_root が Docker 起動時のマウント（start.sh が使う。詳細は Docker の項で別途）。
 # host_data_root は Windows 機なら D:/DataSet のようにホスト表記で書く（WSL から起動したときは start.sh が /mnt/d/DataSet に変換する）。ホストに無ければ start.sh がエラーで止める。
+# 【2026-11-12 追加】host_runs_root / host_outputs_root（全マシン必須、既定値なし）: none = runs/・outputs/ はリポジトリの中のまま（今までどおり）。
+#   ホストのパスを書くと、起動 sh（docker/extra_mounts.sh）がそこをコンテナの /workspace/runs・/workspace/outputs にマウントする（今は PC5 だけ D ドライブ）。
 
 PC1:                                   # 研究室 Windows 機
   gpu_gen: 30                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
@@ -25,6 +27,8 @@ PC1:                                   # 研究室 Windows 機
   ablation_checkpoints_dir: /workspace/old/ablation/checkpoints   # アブレーション（old/ablation/<名前>/、bash old/start_ablation.sh）の run の保存先ルート。この下に <名前>/<run>/。Stage 1 / 2 は使わない（2026-10-27）
   ablation_tb_port: 6008   # アブレーションの TensorBoard のポート（Stage 1 の 6006、Stage 2 の 6007 とは別）
   
+  host_runs_root: none     # none = runs/ はリポジトリの中のまま（追加マウントなし）。パスを書くとそこを /workspace/runs にマウント（docker/extra_mounts.sh、2026-11-12）
+  host_outputs_root: none  # none = outputs/ はリポジトリの中のまま。パスを書くとそこを /workspace/outputs にマウント
 PC1_new:                               # PC1 で新データ（DataSet_new。評価専用症例そのものを学習に使う Stage 1 評価用。2026-10-28）。学習は --use_eval_only_cases を付ける
   gpu_gen: 30
   gpu_name: RTX 3090
@@ -41,6 +45,8 @@ PC1_new:                               # PC1 で新データ（DataSet_new。評
   num_threads: 8
   tb_port: 6006
   stage2_tb_port: 6007
+  host_runs_root: none     # none = runs/ はリポジトリの中のまま（追加マウントなし）。パスを書くとそこを /workspace/runs にマウント（docker/extra_mounts.sh、2026-11-12）
+  host_outputs_root: none  # none = outputs/ はリポジトリの中のまま。パスを書くとそこを /workspace/outputs にマウント
 
 PC2:                                   # 研究室 Windows 機
   gpu_gen: 30                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
@@ -60,6 +66,8 @@ PC2:                                   # 研究室 Windows 機
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
   ablation_checkpoints_dir: /workspace/old/ablation/checkpoints   # アブレーション（old/ablation/<名前>/、bash old/start_ablation.sh）の run の保存先ルート。この下に <名前>/<run>/。Stage 1 / 2 は使わない（2026-10-27）
   ablation_tb_port: 6008   # アブレーションの TensorBoard のポート（Stage 1 の 6006、Stage 2 の 6007 とは別）
+  host_runs_root: none     # none = runs/ はリポジトリの中のまま（追加マウントなし）。パスを書くとそこを /workspace/runs にマウント（docker/extra_mounts.sh、2026-11-12）
+  host_outputs_root: none  # none = outputs/ はリポジトリの中のまま。パスを書くとそこを /workspace/outputs にマウント
 
 PC3:                                   # 研究室 Windows 機
   gpu_gen: 50                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
@@ -79,6 +87,8 @@ PC3:                                   # 研究室 Windows 機
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
   ablation_checkpoints_dir: /workspace/old/ablation/checkpoints   # アブレーション（old/ablation/<名前>/、bash old/start_ablation.sh）の run の保存先ルート。この下に <名前>/<run>/。Stage 1 / 2 は使わない（2026-10-27）
   ablation_tb_port: 6008   # アブレーションの TensorBoard のポート（Stage 1 の 6006、Stage 2 の 6007 とは別）
+  host_runs_root: none     # none = runs/ はリポジトリの中のまま（追加マウントなし）。パスを書くとそこを /workspace/runs にマウント（docker/extra_mounts.sh、2026-11-12）
+  host_outputs_root: none  # none = outputs/ はリポジトリの中のまま。パスを書くとそこを /workspace/outputs にマウント
 
 PC4:                                   # 研究室 Windows 機
   gpu_gen: 40                          # 30 | 40 | 50 | 0(CPU)。起動する compose の選択に使う
@@ -98,6 +108,8 @@ PC4:                                   # 研究室 Windows 機
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
   ablation_checkpoints_dir: /workspace/old/ablation/checkpoints   # アブレーション（old/ablation/<名前>/、bash old/start_ablation.sh）の run の保存先ルート。この下に <名前>/<run>/。Stage 1 / 2 は使わない（2026-10-27）
   ablation_tb_port: 6008   # アブレーションの TensorBoard のポート（Stage 1 の 6006、Stage 2 の 6007 とは別）
+  host_runs_root: none     # none = runs/ はリポジトリの中のまま（追加マウントなし）。パスを書くとそこを /workspace/runs にマウント（docker/extra_mounts.sh、2026-11-12）
+  host_outputs_root: none  # none = outputs/ はリポジトリの中のまま。パスを書くとそこを /workspace/outputs にマウント
 
 PC5:                                   # 研究室 Windows 機（2026-11-12 追加）。Docker Desktop なし: WSL2 の Ubuntu に Docker Engine + NVIDIA Container Toolkit。
                                        # start.sh・監視（pc_agent）とも Ubuntu の中で実行する。リポジトリは ~/SpicaV5、データは Ubuntu の中（元は C:/Users/user/Documents/DataSet）
@@ -118,9 +130,8 @@ PC5:                                   # 研究室 Windows 機（2026-11-12 追�
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート
   ablation_checkpoints_dir: /workspace/old/ablation/checkpoints   # 旧アブレーションの run の保存先ルート
   ablation_tb_port: 6008   # アブレーションの TensorBoard のポート
-  painter_checkpoints_dir: /workspace/runs/stage1   # 新 Stage 1（描き手 P、stage1/）の run の置き場。この下に <run>/
-  flow_checkpoints_dir: /workspace/runs/stage2      # 新 Stage 2（U + フロー）の run の置き場。この下に u/<run>/、v/<run>/
-  pseudo_eid_dir: /workspace/DataSet/PseudoEID512   # 疑似 EID（bash start.sh generate の出力）。この下に <組>/k00, k01, …/<症例>/<スライス>.png と <組>/manifest.yaml
+  host_runs_root: D:/SpicaV5/runs        # runs/（重み・TensorBoard・preview）を D ドライブに置き、コンテナの /workspace/runs にマウントする（docker/extra_mounts.sh。2026-11-12、研究者の指定）
+  host_outputs_root: D:/SpicaV5/outputs  # outputs/（推論の出力）も D ドライブ。どちらも WSL では /mnt/d/... に変換。フォルダは先に作っておく
 
 
 mac:                                # 開発機（Docker、CPU）
@@ -141,3 +152,5 @@ mac:                                # 開発機（Docker、CPU）
   stage2_tb_port: 6007     # Stage 2 の TensorBoard のポート（Stage 1 と別。同じマシンで両 Stage を同時に学習しても互いの TensorBoard を止めない）
   ablation_checkpoints_dir: /workspace/old/ablation/checkpoints   # アブレーション（old/ablation/<名前>/、bash old/start_ablation.sh）の run の保存先ルート。この下に <名前>/<run>/。Stage 1 / 2 は使わない（2026-10-27）
   ablation_tb_port: 6008   # アブレーションの TensorBoard のポート（Stage 1 の 6006、Stage 2 の 6007 とは別）
+  host_runs_root: none     # none = runs/ はリポジトリの中のまま（追加マウントなし）。パスを書くとそこを /workspace/runs にマウント（docker/extra_mounts.sh、2026-11-12）
+  host_outputs_root: none  # none = outputs/ はリポジトリの中のまま。パスを書くとそこを /workspace/outputs にマウント

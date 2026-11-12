@@ -141,6 +141,7 @@ case "$GPU_GEN" in
   *) echo "[start_ablation] gpu_gen=$GPU_GEN は未対応 (30 / 40 / 50 / 0)" >&2; exit 1 ;;
 esac
 COMPOSE=("docker" "compose" "-f" "$ROOT/docker/compose.$GEN.yaml" "-p" "spicav5")
+source "$ROOT/docker/extra_mounts.sh"   # machines.yaml の host_runs_root / host_outputs_root（PC5 だけパス、ほかは none = 今までどおり）。COMPOSE に -f を足し check_extra_mounts を定義する（2026-11-12）
 export HOST_DATA_ROOT CONTAINER_DATA_ROOT TB_PORT TB_PORT_STAGE2 TB_PORT_ABLATION SPICA_MACHINE="$MACHINE"
 CHECKPOINTS_DIR="$ABL_CKPT/$ABLATION"   # この ablation の全 run（tb の logdir）
 echo "[start_ablation] ablation=${ABLATION:-(none)} machine=$MACHINE gpu_gen=$GPU_GEN -> $GEN | mount $HOST_DATA_ROOT -> $CONTAINER_DATA_ROOT | action=$ACTION ${BUILD:+(rebuild)}${RESUME:+ resume=$RESUME tag=$RESUME_TAG}"
@@ -179,6 +180,7 @@ if container_running; then
     exit 2
   fi
   check_container
+  check_extra_mounts   # runs/・outputs/ をリポジトリの外に置くマシン（PC5）で、マウントが今回の指定と違えば止める（docker/extra_mounts.sh）
   echo "[start_ablation] コンテナ spicav5 は起動済み（中の処理は触らない。マシン名・イメージは今回の指定と一致）。up は呼ばず exec だけ行う"
   if ! port_published "$TB_PORT_ABLATION"; then
     echo "[start_ablation] 注意: 起動中のコンテナはポート $TB_PORT_ABLATION を公開していません（compose の設定を変えた後に down していない）。処理は動くが TensorBoard はホストから見えない。中の処理が終わってから bash old/start_ablation.sh down → 起動し直してください"

@@ -130,6 +130,9 @@ MACHINE = {
     # アブレーション用（ablation/<名前>/、start_ablation.sh。2026-10-27）。Stage 1 は使わない（宣言だけ）
     "ablation_checkpoints_dir": Key(str, None,      "アブレーションの run の保存先ルート（ablation/<名前>/util/run_paths.py）。Stage 1 は使わない"),
     "ablation_tb_port":    Key(int, None,                "アブレーションの TensorBoard のポート（compose が 3 本とも公開するので start.sh も読む）。Stage 1 は使わない"),
+    # 起動 sh（docker/extra_mounts.sh）だけが読む。runs/・outputs/ をリポジトリの外に置くマシン（PC5）用。none = 追加マウントなし（2026-11-12）
+    "host_runs_root":      Key(str, None,                "runs/ のホスト側の置き場（none = リポジトリの中）。起動 sh が /workspace/runs にマウントする。旧 Stage 1 は使わない"),
+    "host_outputs_root":   Key(str, None,                "outputs/ のホスト側の置き場（none = リポジトリの中）。起動 sh が /workspace/outputs にマウントする。旧 Stage 1 は使わない"),
 }
 
 # ---------------------------------------------------------------------------
