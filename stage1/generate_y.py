@@ -180,7 +180,8 @@ def main():
     manifest = {"name": name, "created": datetime.datetime.now(JST).isoformat(timespec="seconds"), "git_commit": git_commit(), "method": "type Y (eraser A + redraw by E)",
                 "a_run": g["generate.run"] if g["redraw.use_eraser"] else None, "use_eraser": g["redraw.use_eraser"], "a_weight_dir": str(wdir), "a_step": int(state["step"]), "e_weight_dir": str(e_dir), "e_step": e_step,
                 "input_dir": str(input_dir), "cases": idx.cases, "n_slices": len(tasks), "k": g["generate.k"], "n_images": len(jobs),
-                "format": "1ch uint16 PNG, stored = HU + hu_offset", "brightness_sigma_px_512": shared["brightness.sigma_px_512"],
+                "image_hw": list(src.shape[-2:]), "format": "1ch uint16 PNG, stored = HU + hu_offset", "hu_offset": hu[0], "hu_clip": [hu[1], hu[2]],
+                "brightness_sigma_px_512": shared["brightness.sigma_px_512"],
                 "generate": g, "sec_per_image": (time.time() - t0) / len(jobs)}
     with open(tmp / "manifest.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(manifest, f, allow_unicode=True, sort_keys=False)
