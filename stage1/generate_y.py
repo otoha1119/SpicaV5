@@ -105,8 +105,8 @@ def main():
             raise ConfigError(f"A の重みがありません: {wdir}")
         state = torch.load(wdir / "state.pth", map_location="cpu", weights_only=False)
         yc = validate("y(state)", fill_legacy(dict(state["config"])), Y_TRAIN)
-        if g["redraw.a_sigma_scale"] != 1.0 and yc["eraser.kind"] != "isotropic":
-            raise ConfigError(f"redraw.a_sigma_scale ≠ 1 は eraser.kind: isotropic の run だけ（この run は {yc['eraser.kind']}）")
+        if g["redraw.a_sigma_scale"] != 1.0 and yc["eraser.kind"] not in ("isotropic", "global"):
+            raise ConfigError(f"redraw.a_sigma_scale ≠ 1 は eraser.kind: isotropic | global の run だけ（この run は {yc['eraser.kind']}）")
         e_run, e_tag = (g["generate.e_run"], g["generate.e_tag"]) if g["generate.e_run"] else (yc["init.e_run"], yc["init.e_tag"])
         e_dir = ckpt_dir(Path(machine["painter_checkpoints_dir"]) / e_run, e_tag)
         if not (e_dir / "ema.pth").is_file():

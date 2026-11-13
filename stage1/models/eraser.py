@@ -122,8 +122,35 @@ class SteeredEraser(IsoEraser):
         return torch.softmax(-0.5 * (du2 / (su * su) + dv2 / (sv * sv)), dim=1)
 
 
+class GlobalEraser(nn.Module):
+    """画像全体で 1 つの広さ σ の向きのないぼかし（2026-11-13、EXP-20261113-01 の検証）。学習する数は θ の 1 個だけ: σ = r · sigmoid(θ)。
+    重みの式は IsoEraser と同じ（w(q) ∝ exp(−|q − p|² / (2σ²))、近傍 (2r+1)² で正規化）で、σ がどの画素でも同じ。入力の絵は見ない（CNN は無い。width・depth は使わない）。
+    根拠: IsoEraser の学習後の σ(p) は縁 約 1.7 px・平ら 約 1.9 px とほぼ一様で、場所ごとに σ を選ぶ理由が弱い（EXP-20261112-01 の分析）。
+    初期値は θ = −center_bias（IsoEraser の初期値と同じ σ ≈ r · sigmoid(−center_bias)）。"""
+
+    def __init__(self, radius, width, depth, center_bias):
+        super().__init__()
+        self.radius = int(radius)
+        k = 2 * self.radius + 1
+        self.k2 = k * k
+        self.theta = nn.Parameter(torch.tensor(-float(center_bias)))
+        r = self.radius
+        yy, xx = torch.meshgrid(torch.arange(-r, r + 1.0), torch.arange(-r, r + 1.0), indexing="ij")
+        self.register_buffer("d2", (yy ** 2 + xx ** 2).reshape(1, -1, 1, 1), persistent=False)
+
+    def sigma_px(self, x):
+        """(B, 1, H, W)。どの画素も同じ値（ログと作成時の a_sigma_scale が IsoEraser と同じ形で働くように、絵の形に広げて返す）。"""
+        return (self.radius * torch.sigmoid(self.theta)).expand(x.shape[0], 1, x.shape[2], x.shape[3])
+
+    def weights(self, x):
+        s = self.sigma_px(x).clamp_min(1e-3)
+        return torch.softmax(-self.d2 / (2.0 * s * s), dim=1)
+
+    forward = Eraser.forward
+
+
 def build_eraser(cfg):
-    cls = {"free": Eraser, "isotropic": IsoEraser, "steered": SteeredEraser}[cfg["eraser.kind"]]
+    cls = {"free": Eraser, "isotropic": IsoEraser, "steered": SteeredEraser, "global": GlobalEraser}[cfg["eraser.kind"]]
     return cls(cfg["eraser.radius"], cfg["eraser.width"], cfg["eraser.depth"], cfg["eraser.center_bias"])
 
 

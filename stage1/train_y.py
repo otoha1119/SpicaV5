@@ -73,7 +73,7 @@ def check_values(c, shared, machine, e_train):
     for k in ("optim.batch_size", "optim.f_steps", "optim.max_steps", "data.patches_per_slice", "eraser.radius", "eraser.width", "eraser.depth",
               "log.print_steps", "log.preview_steps", "log.save_latest_steps", "log.save_weights_steps", "log.preview_steps_redraw"):
         if c[k] < 1: P.append(f"{k} ≥ 1")
-    if c["eraser.kind"] not in ("free", "isotropic", "steered"): P.append("eraser.kind は free | isotropic | steered")
+    if c["eraser.kind"] not in ("free", "isotropic", "steered", "global"): P.append("eraser.kind は free | isotropic | steered | global")
     if c["optim.compile_after_steps"] < 0: P.append("optim.compile_after_steps ≥ 0")
     if c["optim.precision"] not in PRECISIONS: P.append(f"optim.precision は {PRECISIONS}")
     if c["optim.compile_mode"] not in COMPILE_MODES: P.append(f"optim.compile_mode は {COMPILE_MODES}")
