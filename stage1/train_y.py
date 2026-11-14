@@ -10,7 +10,10 @@
   1. PCD のパッチ → m = A(x)。手がかり c = Gaussian(m, dmd.cue_blur_px)（明るさの配置をそろえて比べるため。勾配は流さない）
   2. σ ~ loguniform[sigma_lo, sigma_hi]、y = m + σε。e = E(y)、f = F(y)（勾配なし）
   3. A の更新: g = (f − e) / mean|m − e|（サンプルごと）、損失 = ½ Σ (m − sg(m − g))² / B（DMD。∂損失/∂m = g、つまり m を e − f の向きに動かす）
-  4. F の更新（optim.f_steps 回）: m（勾配なし）に σ' のノイズを足し、EDM の損失（F の側で重み 1）
+  4. F の更新（optim.f_steps 回。A の更新 1 回 = 1 step で、step の数え方は f_steps に依らない）: m（勾配なし）に σ' のノイズを足し、EDM の損失（F の側で重み 1）。
+     1 回目は 1〜3 と同じパッチの m。2 回目以降は**毎回新しいパッチ**を読み、更新後の A（勾配なし）で m を作り直す（DMD2 の公式 main/edm/train_edm.py の
+     dfake_gen_update_ratio と同じ流儀: 生成側を更新しない周も、新しい生成物で fake score を学ぶ）。f_steps = 1 は 2026-11-15 より前と同じ計算・同じ乱数の列。
+     f_steps 倍のパッチを読み、F の forward・backward が f_steps 回になるので、1 step の時間は F の分だけ増える（diag/sec_per_step）
   PCD と画素を比べる損失・判別器は無い。E と F は勾配を止めた答えだけを使う。
 精度: A・損失・ぼかし・EDM の前処理は FP32。E・F の U-Net 本体だけ bf16（optim.precision）。F の学習の本体だけ torch.compile（optim.compile）。
 出力: <painter_checkpoints_dir>/<run>/（launch.yaml、loss_log.txt、tb/、latest/ と weights/step_N/ に A.pth・F.pth・state.pth、output_images/step_N/*.png（16bit）、preview/zoom/step_N.png）
@@ -139,7 +142,27 @@ class Trainer:
         d = self.device
         return torch.full((b,), self.c["dmd.cue_blur_px"], device=d), torch.zeros(b, device=d), torch.ones(b, device=d, dtype=torch.bool)
 
-    def train_step(self, batch):
+    def _f_update(self, md, cue, blur, noise0, has):
+        """F の更新 1 回: md（A の出力、勾配なし）に見比べと同じ範囲の σ のノイズを足し、EDM の損失（F の側で重み 1）。戻り値 (loss, grad_norm)。"""
+        b = md.shape[0]
+        s2 = self._sigma(b)
+        x = md + s2.view(-1, 1, 1, 1) * torch.randn_like(md)
+        c_skip, c_out, _ = precond(s2, self.sd)
+        tgt = (md - c_skip * x) / c_out
+        _, fo = denoise(self.F, x, s2, cue, blur, noise0, has, self.sd, body=self.f_body, bf16=self.bf16, channels_last=self.cl, clone=self.compiled)
+        loss_f = ((fo - tgt) ** 2).mean()
+        if not torch.isfinite(loss_f):
+            raise FloatingPointError(f"F の損失が有限でない（step {self.step + 1}）")
+        self.opt_f.zero_grad(set_to_none=True)
+        loss_f.backward()
+        grad_f = float(torch.nn.utils.clip_grad_norm_(self.F.parameters(), self.c["optim.grad_clip"]))
+        if not math.isfinite(grad_f):
+            raise FloatingPointError(f"F の勾配が有限でない（step {self.step + 1}）")
+        self.opt_f.step()
+        return loss_f.item(), grad_f
+
+    def train_step(self, batch, next_batch=None):
+        """1 step = A の更新 1 回 + F の更新 optim.f_steps 回。next_batch() は新しいパッチの batch を返す関数（f_steps > 1 のとき、F の 2 回目以降が呼ぶ）。"""
         c, d, M = self.c, self.device, self.c["data.margin"]
         big = batch.to(d, non_blocking=True).float()
         b = big.shape[0]
@@ -164,23 +187,15 @@ class Trainer:
         if not math.isfinite(grad_a):
             raise FloatingPointError(f"A の勾配が有限でない（step {self.step + 1}）")
         self.opt_a.step()
-        loss_f_sum, grad_f = 0.0, 0.0
-        for _ in range(c["optim.f_steps"]):
-            s2 = self._sigma(b)
-            x = md + s2.view(-1, 1, 1, 1) * torch.randn_like(md)
-            c_skip, c_out, _ = precond(s2, self.sd)
-            tgt = (md - c_skip * x) / c_out
-            _, fo = denoise(self.F, x, s2, cue, blur, noise0, has, self.sd, body=self.f_body, bf16=self.bf16, channels_last=self.cl, clone=self.compiled)
-            loss_f = ((fo - tgt) ** 2).mean()
-            if not torch.isfinite(loss_f):
-                raise FloatingPointError(f"F の損失が有限でない（step {self.step + 1}）")
-            self.opt_f.zero_grad(set_to_none=True)
-            loss_f.backward()
-            grad_f = float(torch.nn.utils.clip_grad_norm_(self.F.parameters(), c["optim.grad_clip"]))
-            if not math.isfinite(grad_f):
-                raise FloatingPointError(f"F の勾配が有限でない（step {self.step + 1}）")
-            self.opt_f.step()
-            loss_f_sum += loss_f.item()
+        loss_f_sum, grad_f = self._f_update(md, cue, blur, noise0, has)   # 1 回目: A の更新に使ったのと同じパッチ（f_steps = 1 はここまで。前と同じ計算）
+        for _ in range(c["optim.f_steps"] - 1):   # 2 回目以降: 毎回新しいパッチ。更新後の A（勾配なし）で m を作り直す（DMD2 の dfake_gen_update_ratio の流儀）
+            with torch.no_grad():
+                big2 = next_batch().to(d, non_blocking=True).float()
+                m2_big = self.A(big2)
+                md2 = center_crop(m2_big, M)
+                cue2 = center_crop(gaussian_blur(m2_big, c["dmd.cue_blur_px"]), M)
+            lf, grad_f = self._f_update(md2, cue2, *self._cond(big2.shape[0]))
+            loss_f_sum += lf
         self.step += 1
         with torch.no_grad():
             w = self.win
@@ -356,7 +371,8 @@ def main():
     say(f"[train_y] run {run_dir.name}: E {e_dir}（step {tr.e_step}）、A {n_a / 1e3:.1f}k params（近傍 {2 * c['eraser.radius'] + 1}²）、"
         f"F {sum(p.numel() for p in tr.F.parameters()) / 1e6:.1f}M、train {len(split['train'])} 症例、val {split['val']}、batch {c['optim.batch_size']}、"
         f"見比べ σ {c['dmd.sigma_lo_hu']:g}〜{c['dmd.sigma_hi_hu']:g} HU、手がかり {c['dmd.cue_blur_px']:g} px（E の学習のくじ: {tr.e_cfg['train']['cue.blur_sampling']}、"
-        f"{tr.e_cfg['train']['cue.blur_min_px']:g}〜{tr.e_cfg['train']['cue.blur_max_px']:g} px）、bf16 {tr.bf16}、compile {tr.compile_enabled}、start step {tr.step}")
+        f"{tr.e_cfg['train']['cue.blur_min_px']:g}〜{tr.e_cfg['train']['cue.blur_max_px']:g} px）、"
+        f"F の更新 {c['optim.f_steps']} 回 / step、bf16 {tr.bf16}、compile {tr.compile_enabled}、start step {tr.step}")
     ds_cfg = {"data.patch_size": c["data.patch_size"], "data.margin": c["data.margin"], "data.patches_per_slice": c["data.patches_per_slice"], "optim.seed": c["optim.seed"]}
     loader = torch.utils.data.DataLoader(EidPatchStream(split["train_slices"], ds_cfg, tr.hu, start_step=tr.step), batch_size=c["optim.batch_size"],
                                          num_workers=machine["num_threads"], pin_memory=device.type == "cuda", drop_last=True, worker_init_fn=worker_init)
@@ -390,10 +406,14 @@ def main():
                 reason = f"signal {term['sig']}"; break
             raise
         try:
-            tr.train_step(batch)
+            tr.train_step(batch, next_batch=lambda: next(it))
         except FloatingPointError as e:
             say(f"[train_y] 異常終了: {e}。保存しない")
             sys.exit(3)
+        except RuntimeError:   # F の 2 回目以降のパッチを読む途中で worker が殺されたとき（SIGTERM など）。この step は数えずに保存して止まる
+            if term["sig"] is not None:
+                reason = f"signal {term['sig']}"; break
+            raise
         tr.elapsed = el0 + time.time() - t0
         step = tr.step
         if step % c["log.print_steps"] == 0 or local in (1, 2, 5, 10):

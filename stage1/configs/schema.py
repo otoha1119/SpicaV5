@@ -208,7 +208,7 @@ Y_TRAIN = {
     "optim.beta2":         Key(float, "--beta2",          "AdamW β2"),
     "optim.batch_size":    Key(int,   "--batch_size",     "batch（PCD のパッチ数）"),
     "optim.grad_clip":     Key(float, "--grad_clip",      "勾配ノルムのクリップ（A・F それぞれ）"),
-    "optim.f_steps":       Key(int,   "--f_steps",        "A を 1 回更新するあいだに F を何回更新するか（DMD は 1、DMD2 は 5）"),
+    "optim.f_steps":       Key(int,   "--f_steps",        "A を 1 回更新する（= 1 step）あいだに F を何回更新するか（1 以上。DMD は 1 + 回帰の損失、DMD2 は回帰なしで 5）。2 回目以降は毎回新しいパッチを読み、更新後の A で m を作り直す（2026-11-15 から。それより前は同じパッチでノイズだけ変えていたが、2 以上で回した run は無い）"),
     "optim.precision":     Key(str,   "--precision",      "E・F の U-Net 本体の精度 fp32 | bf16（A・損失・ぼかしは常に FP32）"),
     "optim.compile":       Key(bool,  "--compile",        "F の学習の U-Net 本体を torch.compile（E の推論は compile しない）"),
     "optim.compile_mode":  Key(str,   "--compile_mode",   "max-autotune | reduce-overhead | default"),

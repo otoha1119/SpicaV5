@@ -13,7 +13,7 @@ optim:
   beta2: 0.99
   batch_size: 8
   grad_clip: 1.0
-  f_steps: 1
+  f_steps: 1               # A の更新 1 回（= 1 step）あたりの F の更新回数。1 = 今までと同じ（EXP-20261115-02 の事前登録どおり）。DMD2 は回帰の損失なしで 5（--f_steps 5。2 回目以降は新しいパッチ）。(d) 比較は未実施
   precision: bf16
   compile: true
   compile_mode: max-autotune

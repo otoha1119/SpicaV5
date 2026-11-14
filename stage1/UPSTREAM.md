@@ -92,8 +92,28 @@
 
 ## 7. 型 Y（消し手 A + DMD 型の見比べ。2026-11-11、`models/eraser.py`・`train_y.py`・`generate_y.py`）
 
-- A の損失は DMD（Yin et al., "One-step Diffusion with Distribution Matching Distillation", CVPR 2024）の分布合わせの勾配: 生成物 x にノイズ σ をかぶせた y について、∇_x KL ≈ (D_fake(y) − D_real(y))（x̂0 の差。σ² の係数は正規化で消える）。正規化はサンプルごとに mean|x − D_real(y)| で割る（論文の式 (8) の重み）。実装は ½‖x − sg(x − g)‖² の形で、∂/∂x = g。**公式実装との照合はしていない**（論文の式を EDM の x̂0 の形で書き直したもの）
+- A の損失は DMD（Yin et al., "One-step Diffusion with Distribution Matching Distillation", CVPR 2024）の分布合わせの勾配: 生成物 x にノイズ σ をかぶせた y について、∇_x KL ≈ (D_fake(y) − D_real(y))（x̂0 の差。σ² の係数は正規化で消える）。正規化はサンプルごとに mean|x − D_real(y)| で割る（論文の式 (8) の重み）。実装は ½‖x − sg(x − g)‖² の形。**2026-11-15 に論文の Algorithm 2 と DMD2 の公式コード（github.com/tianweiy/DMD2 `main/edm/edm_guidance.py`）と照合した: 分子・分母・平均の軸・符号は一致**。違う点は下の表
 - 生成器の入力をノイズでなく元の領域の画像にする unpaired 変換は RDMD（Rakitin et al., arXiv:2406.14762, 2024）。RDMD は入力と出力の対応を transport cost の罰で保つが、ここでは罰を置かず A の作り（重みつき平均だけ）で代える
 - 画素ごとに重みを予測して平均する作りは KPN（Mildenhall et al., "Burst Denoising with Kernel Prediction Networks", CVPR 2018）
 - 決めたこと: 見比べの σ を [`dmd.sigma_lo_hu`, `dmd.sigma_hi_hu`] HU に限る（最初は [20, 2000]、EXP-20261115-02 から [400, 2000]。PCD のノイズの細かい違いを F・E が直接見比べない）。E・F の両方に、A の出力を `dmd.cue_blur_px`（最初は 8 px、EXP-20261115-02 から 10 px = E の学習の上端）でぼかした絵を手がかりとして渡す。F は E の EMA から始める。Adam の β = (0, 0.99) はこちらで置いた値（**DMD / DMD2 の公式は (0.9, 0.999)**: DMD 付録 B.1〜B.3 "beta parameters to (0.9, 0.999)"、DMD2 `main/edm/train_edm.py` `betas=(0.9, 0.999)`。同じ値の先例は Diff-Instruct の Table 7。比較は未実施。2026-11-15 照合。前の記述「DMD の実装に合わせた」は誤り）
 - 描き直しは SDEdit（Meng et al., ICLR 2022）と同じ: 強さ s のノイズを足して s から描く
+
+### 7.1 DMD / DMD2 との差分（2026-11-15 照合。値は変えていない）
+
+照合の元: DMD（Yin et al., CVPR 2024, arXiv:2311.18828、Algorithm 1・2、付録 B）、DMD2（Yin et al., NeurIPS 2024, arXiv:2405.14867、§4.2、付録 C・F）、DMD2 の公式コード（`main/edm/train_edm.py`、`main/edm/edm_guidance.py`、`experiments/imagenet/*.sh`）。原文の引用と行番号は `docs/surveys/_raw_20261115_cue/E_dmd_check.md`（ローカルだけ）。
+
+| 点 | DMD | DMD2 | こちら（`train_y.py`、`configs/y.yaml`） |
+|---|---|---|---|
+| 更新の比（F : 生成側） | 1 : 1。回帰の損失あり | 回帰なしで 5 : 1（ImageNet・SDXL）、10 : 1（SD v1.5）。"two time-scale update rule"。F の各回は新しい生成物で行う（`dfake_gen_update_ratio`） | `optim.f_steps`（yaml は 1）: 1。**回帰の損失なし・F 1 回は、DMD2 が "significant training instability" と書いた条件にあたる**。`--f_steps 5` で DMD2 と同じ比。2 回目以降は毎回新しいパッチを読み、更新後の A（勾配なし）で m を作り直す（DMD2 と同じ流儀）。step は A の更新回数で数える |
+| 学習率（生成側 / F） | 同じ（5e-5、2e-6、1e-5） | 同じ（2e-6 / 2e-6 など） | `lr_a` 3e-3（global。isotropic は 1e-4）/ `lr_f` 5e-5。F のほうが小さい（DMD2 は同じ、RDMD は F が 6 倍以上で、向きが逆）。A は学習する数が θ 1 個（global）なので、生成側の U-Net と同じ物差しでは比べられない |
+| Adam の β | (0.9, 0.999) | (0.9, 0.999) | (0, 0.99)。こちらで置いた値。同じ値の先例は Diff-Instruct（Table 7）。比較は未実施 |
+| weight decay / warmup | 0.01 / 500 step | 0.01 / 500 step | 0 / なし |
+| 見比べの σ の範囲 | 番号 0.02T〜0.98T の一様 | 同じ（EDM 版は Karras ρ = 7 の 1,000 個の並びで σ 0.0032〜72） | [`dmd.sigma_lo_hu`, `dmd.sigma_hi_hu`] を対数一様（x の単位で 0.4〜2.0。最初は 0.02〜2.0）。DMD2 のくじのうちこの範囲に入るのは約 16 %。下端を 0.02T より大きく上げた比較は、開いた範囲では見つからなかった |
+| F の学習の σ の範囲 | 全範囲 | 全範囲 | 見比べと同じ範囲（同じキー。F は見比べの範囲でしか呼ばれない） |
+| 損失の縮尺 | `mse_loss(reduction="mean")`: ∂/∂x = g ÷ (B·C·H·W) | 同じ | 画素の和 ÷ B: ∂/∂m = g ÷ B（パッチ 256・1ch で 65,536 倍大きい）。Adam では学習率に効かないが、クリップの効き方が変わる |
+| 勾配クリップ（L2 ノルム） | 10 | 10 | `optim.grad_clip` 1.0（A・F それぞれ）。縮尺が大きい側で上限が小さいので、A の勾配はクリップに当たりやすい（`diag/grad_norm_a` で見る） |
+| batch | 336〜392 | 280（ImageNet）、128（SDXL） | 8（パッチ 256） |
+| F の初期化・条件 | real のコピーから。real / fake に同じ条件 | 同じ | 同じ（E の EMA から。E・F に同じ手がかり） |
+
+- `f_steps` を増やすと 1 step の時間が増える（F の forward・backward が f_steps 回、読むパッチが f_steps 倍。`diag/sec_per_step`）。`loss/f_denoise` は 1 step の中の f_steps 回の平均、`diag/grad_norm_f` は最後の回
+- DMD2 が挙げた見張り方（"the stability of general image statistics, such as pixel brightness"）にあたるこちらの量は `diag/a_sigma_px_mean`・`diag/a_center_weight`・`diag/gap_f_minus_e_hu` の周期的な揺れ
