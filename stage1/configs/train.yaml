@@ -42,7 +42,8 @@ init:                      # 型 X: PCD の描き手は実 EID の描き手の�
 
 cue:                       # 手がかり = Gaussian ぼかし(元の絵, σ_b) + σ_c × 白色ノイズ。サンプルごとに独立にくじ（設計書 E-2）
   drop_prob: 0.10          # 手がかりを隠す
-  blur_zero_prob: 0.15     # σ_b = 0
+  blur_sampling: loguniform   # σ_b の引き方: loguniform（[min, max] を対数一様）| uniform（線形の一様。min = 0 を許す）。再開で変えられない
+  blur_zero_prob: 0.15     # σ_b = 0 を別枠で出す確率
   blur_min_px: 0.5         # 残りは [0.5, 8] 画素を対数一様
   blur_max_px: 8.0
   noise_zero_prob: 0.15    # σ_c = 0

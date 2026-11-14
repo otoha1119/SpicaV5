@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from configs.schema import fill_legacy_train
 from diffusion.cue import CUE_KINDS, center_crop, cue_kind, draw_cue_params, gaussian_blur
 from diffusion.edm import N_BINS, draw_sigma, precond, sigma_bin
 from models.unet import build_net
@@ -286,10 +287,12 @@ class Painter:
 
 
 def load_ema(weight_dir, device):
-    """描画用: 重みディレクトリの state.pth の実効設定でネットを組み、ema.pth を読む。戻り値 (net, config, step)。"""
+    """描画用: 重みディレクトリの state.pth の実効設定でネットを組み、ema.pth を読む。戻り値 (net, config, step)。
+    足す前のキーが無い重み（cue.blur_sampling 無し = 2026-11-15 より前、loguniform で学習）は fill_legacy_train がその形を入れて表示する。"""
     weight_dir = Path(weight_dir)
     state = torch.load(weight_dir / "state.pth", map_location="cpu", weights_only=True)
     cfg = state["config"]
+    fill_legacy_train(cfg["train"], str(weight_dir))
     net = build_net(cfg["model"], cfg["train"]).to(device)
     net.load_state_dict(torch.load(weight_dir / "ema.pth", map_location=device, weights_only=True))
     if cfg["train"]["optim.channels_last"]:

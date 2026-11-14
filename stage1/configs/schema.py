@@ -58,9 +58,10 @@ TRAIN = {
     "init.tag":            Key(str,   "--init_tag",        "init.run の重みの tag: latest | best | step 番号"),
     # cue（設計書 E-2）
     "cue.drop_prob":       Key(float, "--cue_drop_prob",   "手がかりを隠す確率（0.10）"),
-    "cue.blur_zero_prob":  Key(float, "--blur_zero_prob",  "σ_b = 0（ぼかさない）の確率（0.15）"),
-    "cue.blur_min_px":     Key(float, "--blur_min_px",     "σ_b の下端（0 でないとき。0.5 画素）。[min, max] を対数一様"),
-    "cue.blur_max_px":     Key(float, "--blur_max_px",     "σ_b の上端（8 画素）。埋め込みの正規化にも使うので再開で変えられない"),
+    "cue.blur_sampling":   Key(str,   "--blur_sampling",   "σ_b（0 の別枠でないとき）の引き方: loguniform（[min, max] を対数一様。設計書 E-2。2026-11-15 より前はこの形だけ）| uniform（[min, max] を線形の一様。min = 0 を許す。EXP-20261115-02）。再開で変えられない"),
+    "cue.blur_zero_prob":  Key(float, "--blur_zero_prob",  "σ_b = 0（ぼかさない）を別枠で出す確率（0 で別枠なし）"),
+    "cue.blur_min_px":     Key(float, "--blur_min_px",     "σ_b の下端（別枠の 0 でないとき。画素）。loguniform は正、uniform は 0 以上"),
+    "cue.blur_max_px":     Key(float, "--blur_max_px",     "σ_b の上端（画素）。埋め込みの正規化（σ_b ÷ blur_max_px、線形）にも使うので再開で変えられない"),
     "cue.noise_zero_prob": Key(float, "--noise_zero_prob", "σ_c = 0（ノイズ無し）の確率（0.15）"),
     "cue.noise_min_hu":    Key(float, "--noise_min_hu",    "σ_c の下端（0 でないとき。5 HU）"),
     "cue.noise_max_hu":    Key(float, "--noise_max_hu",    "σ_c の上端（400 HU）"),
@@ -270,11 +271,29 @@ COMPILE_MODES = ("max-autotune", "reduce-overhead", "default")
 GPU_GENS = (0, 30, 40, 50)
 FOLDS = ("haar1",)
 SIGMA_SAMPLINGS = ("loguniform", "lognormal")
+BLUR_SAMPLINGS = ("loguniform", "uniform")
 UNLISTED = ("train", "error")
 DOMAINS = ("eid", "pcd")
-# 再開で変えられない train のキー（重みの意味が変わる）。MODEL は全部変えられない
-FROZEN_ON_RESUME = ("data.hu_offset", "data.hu_min", "data.hu_max", "data.hu_scale", "cue.blur_max_px",
+# 再開で変えられない train のキー（重みの意味が変わる。くじの形は、学習の途中で変えると 1 つの重みに 2 つの分布が混ざる）。MODEL は全部変えられない
+FROZEN_ON_RESUME = ("data.hu_offset", "data.hu_min", "data.hu_max", "data.hu_scale", "cue.blur_max_px", "cue.blur_sampling",
                     "diffusion.sigma_min", "diffusion.sigma_max", "diffusion.sigma_data", "diffusion.sigma_sampling")
+
+# schema にキーを足す前に保存された重み（state.pth の実効設定にそのキーが無い）の読み方。**既定値ではない**: そのキーが無かった時期の実装が
+# 実際にしていた計算を書いたもの（models/eraser.py の fill_legacy = eraser.kind 無しを free として読む、と同じ流儀）。新しく作る設定には使わない
+# （yaml・launch.yaml にキーが無ければ今までどおりエラー）。
+LEGACY_TRAIN = {
+    "cue.blur_sampling": ("loguniform", "2026-11-15 より前の実装。σ_b のくじは対数一様だけだった"),
+}
+
+
+def fill_legacy_train(train, where):
+    """重みの実効設定（state.pth の config["train"]）に、足す前のキーが無ければ「その重みが実際に学習された形」を入れて表示する。その場で書き換えて返す。
+    E の重みを読む所（再開、init.run、描画・A の学習・作成の load_ema）は必ずここを通す。"""
+    for key, (value, why) in LEGACY_TRAIN.items():
+        if key not in train:
+            train[key] = value
+            print(f"[schema] {where}: 重みの設定に {key} が無い（{why}）→ {value} で学習された重みとして読む", flush=True)
+    return train
 
 
 # ---------------------------------------------------------------------------
@@ -511,7 +530,11 @@ def check_train_values(train, model, shared, machine):
     if not (t["init.tag"] in ("latest", "best") or t["init.tag"].isdigit()): P.append("init.tag は latest | best | step 番号")
     for k in ("cue.drop_prob", "cue.blur_zero_prob", "cue.noise_zero_prob"):
         if not (0.0 <= t[k] <= 1.0): P.append(f"{k} は [0, 1]")
-    if not (0 < t["cue.blur_min_px"] <= t["cue.blur_max_px"]): P.append("0 < cue.blur_min_px ≤ cue.blur_max_px")
+    if t["cue.blur_sampling"] not in BLUR_SAMPLINGS: P.append(f"cue.blur_sampling は {BLUR_SAMPLINGS}")
+    if t["cue.blur_max_px"] <= 0: P.append("cue.blur_max_px は正")
+    if t["cue.blur_sampling"] == "uniform":
+        if not (0 <= t["cue.blur_min_px"] <= t["cue.blur_max_px"]): P.append("0 ≤ cue.blur_min_px ≤ cue.blur_max_px（uniform）")
+    elif not (0 < t["cue.blur_min_px"] <= t["cue.blur_max_px"]): P.append("0 < cue.blur_min_px ≤ cue.blur_max_px（loguniform は下端 0 を引けない。0 から引くなら cue.blur_sampling: uniform）")
     if not (0 < t["cue.noise_min_hu"] <= t["cue.noise_max_hu"]): P.append("0 < cue.noise_min_hu ≤ cue.noise_max_hu")
     if not (0 < t["diffusion.sigma_min"] < t["diffusion.sigma_max"]): P.append("0 < diffusion.sigma_min < sigma_max")
     if t["diffusion.sigma_data"] <= 0: P.append("diffusion.sigma_data は正")

@@ -34,7 +34,8 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs.schema import COMPILE_MODES, MACHINE, PRECISIONS, SHARED, Y_TRAIN, ConfigError, _check_machine, _raise, apply_overrides, validate, validate_shared  # noqa: E402
+from configs.schema import (COMPILE_MODES, MACHINE, PRECISIONS, SHARED, Y_TRAIN, ConfigError, _check_machine, _raise, apply_overrides, fill_legacy_train,  # noqa: E402
+                            validate, validate_shared)
 from data.ct_io import hu_tuple, write_png, x_to_stored  # noqa: E402
 from data.eid_dataset import EidPatchStream, load_full_x, resolve_split, worker_init  # noqa: E402
 from diffusion.anchor import anchor, wide_mean  # noqa: E402
@@ -311,7 +312,7 @@ def main():
             run_dir = Path(machine["painter_checkpoints_dir"]) / run_name(now)  # 有無の検査は値の検査の後
             launch_name, state = LAUNCH_FILE, None
         e_dir = e_dir_of(c, machine)
-        e_train = torch.load(e_dir / "state.pth", map_location="cpu", weights_only=True)["config"]["train"]
+        e_train = fill_legacy_train(torch.load(e_dir / "state.pth", map_location="cpu", weights_only=True)["config"]["train"], f"E {e_dir}")
         check_values(c, shared, machine, e_train)
         if not a.resume and run_dir.exists():
             raise ConfigError(f"run フォルダが既にあります: {run_dir}（同じ分の再起動。1 分待つ）")
@@ -354,7 +355,8 @@ def main():
     n_a = sum(p.numel() for p in tr.A.parameters())
     say(f"[train_y] run {run_dir.name}: E {e_dir}（step {tr.e_step}）、A {n_a / 1e3:.1f}k params（近傍 {2 * c['eraser.radius'] + 1}²）、"
         f"F {sum(p.numel() for p in tr.F.parameters()) / 1e6:.1f}M、train {len(split['train'])} 症例、val {split['val']}、batch {c['optim.batch_size']}、"
-        f"見比べ σ {c['dmd.sigma_lo_hu']:g}〜{c['dmd.sigma_hi_hu']:g} HU、bf16 {tr.bf16}、compile {tr.compile_enabled}、start step {tr.step}")
+        f"見比べ σ {c['dmd.sigma_lo_hu']:g}〜{c['dmd.sigma_hi_hu']:g} HU、手がかり {c['dmd.cue_blur_px']:g} px（E の学習のくじ: {tr.e_cfg['train']['cue.blur_sampling']}、"
+        f"{tr.e_cfg['train']['cue.blur_min_px']:g}〜{tr.e_cfg['train']['cue.blur_max_px']:g} px）、bf16 {tr.bf16}、compile {tr.compile_enabled}、start step {tr.step}")
     ds_cfg = {"data.patch_size": c["data.patch_size"], "data.margin": c["data.margin"], "data.patches_per_slice": c["data.patches_per_slice"], "optim.seed": c["optim.seed"]}
     loader = torch.utils.data.DataLoader(EidPatchStream(split["train_slices"], ds_cfg, tr.hu, start_step=tr.step), batch_size=c["optim.batch_size"],
                                          num_workers=machine["num_threads"], pin_memory=device.type == "cuda", drop_last=True, worker_init_fn=worker_init)

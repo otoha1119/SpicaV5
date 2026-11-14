@@ -4,7 +4,9 @@
 
   ぼかし: 半径 ceil(3σ) で打ち切って正規化した 1 次元の核を、横 → 縦に掛ける（分離型）。端は reflect。σ = 0 は何もしない（核が中央 1 点）。
           サンプルごとに違う σ を、サンプルごとの核 + グループ畳み込みで 1 回で掛ける。FFT は使わない。FP32・compile の外。
-  くじ : 設計書 E-2。サンプルごとに独立。手がかりを隠す drop_prob、σ_b は blur_zero_prob で 0・残りは [min, max] 画素を対数一様、σ_c も同じ形（HU）。
+  くじ : 設計書 E-2。サンプルごとに独立。手がかりを隠す drop_prob、σ_b は blur_zero_prob で 0・残りは [min, max] 画素を cue.blur_sampling の形で引く
+          （loguniform = 対数一様、設計書どおり | uniform = 線形の一様。下端 0 を許す。EXP-20261115-02）。σ_c は blur_zero_prob と同じ形の別枠 + 対数一様（HU）。
+          乱数を引く回数と順番はくじの形に依らない（has → σ_b の 0 の別枠 → σ_b → σ_c の 0 の別枠 → σ_c。同じ seed なら loguniform は 2026-11-15 より前と同じ列）。
 """
 
 import math
@@ -51,12 +53,20 @@ def _loguniform(u, lo, hi):
     return torch.exp(math.log(lo) + u * (math.log(hi) - math.log(lo)))
 
 
+def _uniform(u, lo, hi):
+    return lo + u * (hi - lo)
+
+
+BLUR_DRAWS = {"loguniform": _loguniform, "uniform": _uniform}  # cue.blur_sampling。値の検査は configs/schema.py（BLUR_SAMPLINGS）
+
+
 def draw_cue_params(n, train, device, generator=None):
-    """学習時のくじ。戻り値: blur_px (n,)、noise_x (n,)（σ_c を x の単位で）、has (n,) bool。手がかり無しの行は σ_b = σ_c = 0。"""
+    """学習時のくじ。戻り値: blur_px (n,)、noise_x (n,)（σ_c を x の単位で）、has (n,) bool。手がかり無しの行は σ_b = σ_c = 0。
+    σ_b の形は cue.blur_sampling（loguniform | uniform）。どちらも乱数は同じ回数・同じ順番で引く。"""
     has = _rand(n, device, generator) >= train["cue.drop_prob"]
     zero = torch.zeros(n, device=device)
-    blur = torch.where(_rand(n, device, generator) < train["cue.blur_zero_prob"], zero,
-                       _loguniform(_rand(n, device, generator), train["cue.blur_min_px"], train["cue.blur_max_px"]))
+    blur_zero = _rand(n, device, generator) < train["cue.blur_zero_prob"]
+    blur = torch.where(blur_zero, zero, BLUR_DRAWS[train["cue.blur_sampling"]](_rand(n, device, generator), train["cue.blur_min_px"], train["cue.blur_max_px"]))
     noise_hu = torch.where(_rand(n, device, generator) < train["cue.noise_zero_prob"], zero,
                            _loguniform(_rand(n, device, generator), train["cue.noise_min_hu"], train["cue.noise_max_hu"]))
     return torch.where(has, blur, zero), torch.where(has, noise_hu / train["data.hu_scale"], zero), has
@@ -72,6 +82,7 @@ def center_crop(x, margin):
 
 
 CUE_KINDS = ("none", "clean", "blur_only", "noise_only", "both")  # loss_cue/* の区分。clean = 手がかりあり・σ_b = σ_c = 0（元の絵そのまま）
+# cue.blur_sampling: uniform で blur_zero_prob = 0 のときは σ_b = 0 がほぼ出ないので、clean・noise_only は数が 0 になり scalar に出ない（数が 0 の区分は出さない作り）
 
 
 def cue_kind(blur_px, noise_x, has):

@@ -9,7 +9,8 @@
 
 再開:  python run_train.py ... --resume <run> [--resume_tag latest|best|<step>] -- [--max_steps 300000]
   基準は**選んだ重みの state.pth に入っている実効設定**（train / model / shared）。今回の --flag だけが上に乗る。machine（データと run の置き場）は今の machines.yaml。
-  ネットワーク（model.*）と FROZEN_ON_RESUME のキー（HU の変換、σ の範囲、σ_data、cue.blur_max_px）は変えられない。設定は launch_resume_<日時秒>.yaml に残す。
+  ネットワーク（model.*）と FROZEN_ON_RESUME のキー（HU の変換、σ の範囲、σ_data、cue.blur_max_px、cue.blur_sampling）は変えられない。設定は launch_resume_<日時秒>.yaml に残す。
+  cue.blur_sampling が無い重み（2026-11-15 より前の run）は loguniform で学習されたものとして読む（configs/schema.py の fill_legacy_train。今の yaml の値は使わない）。
 """
 
 import argparse
@@ -23,7 +24,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from configs.schema import (FROZEN_ON_RESUME, MACHINE, MODEL, SHARED, TRAIN, ConfigError, apply_overrides, check_train_values,  # noqa: E402
-                            validate, validate_shared)
+                            fill_legacy_train, validate, validate_shared)
 from data.eid_dataset import resolve_split  # noqa: E402
 from util.run_paths import CKPT_KINDS, JST, LAUNCH_FILE, ckpt_dir, run_name, saved_tags  # noqa: E402
 
@@ -123,6 +124,7 @@ def check_init(train, model, machine):
     if missing:
         raise ConfigError(f"init.run の重みが揃っていません: {wdir} に {missing} が無い")
     saved = torch.load(wdir / "state.pth", map_location="cpu", weights_only=True)["config"]
+    fill_legacy_train(saved["train"], f"init.run {train['init.run']}")
     diff = [k for k in FROZEN_ON_RESUME if saved["train"][k] != train[k]] + [f"model.{k}" for k in model if saved["model"][k] != model[k]]
     if diff:
         raise ConfigError(f"init.run の重みと今回の設定で、重みの意味を決める値が違います: {diff}")
@@ -172,6 +174,8 @@ def prepare_resume(a, train_yaml, model_yaml, shared_yaml, machine, overrides, n
     out = {}
     for sec, cur, schema in (("train", train_yaml, TRAIN), ("model", model_yaml, MODEL), ("shared", shared_yaml, SHARED)):
         sv = dict(saved[sec])
+        if sec == "train":   # 下の「今の yaml の値を使う」より先に: 重みの意味を決めるキーは、その重みが実際に学習された形で読む
+            fill_legacy_train(sv, f"resume {a.resume}")
         new = [k for k in schema if k not in sv]
         if new:
             print(f"[run_train] 注意: 重みの {sec} に無いキー（run を作った後に足された）は今の yaml の値を使う: " + ", ".join(f"{k}={cur[k]!r}" for k in new))

@@ -46,13 +46,14 @@ bash start.sh PC1 tb | build | shell | down
 
 | ファイル | 中身 |
 |---|---|
-| `configs/train.yaml` | `optim.*`（lr、batch、EMA、bf16、compile、上限 step / 時間）、`data.*`（パッチ、HU の変換、分割）、`cue.*`（手がかりのくじの幅）、`diffusion.*`（EDM の σ）、`sample.*`（途中経過の描画）、`log.*`（間隔、途中経過のスライス = コンテナ内の絶対パス） |
+| `configs/train.yaml` | `optim.*`（lr、batch、EMA、bf16、compile、上限 step / 時間）、`data.*`（パッチ、HU の変換、分割）、`cue.*`（手がかりのくじの幅と形。`cue.blur_sampling: loguniform | uniform` = σ_b の引き方。uniform は下端 0 を許す）、`diffusion.*`（EDM の σ）、`sample.*`（途中経過の描画）、`log.*`（間隔、途中経過のスライス = コンテナ内の絶対パス） |
 | `configs/model.yaml` | U-Net（幅 96 / 192 / 288 / 384、ResBlock、埋め込み、Haar 1 段）。再開で変えられない |
 | `configs/generate.yaml` | 疑似 EID の作成: `generate.*`（run、重み、入力、症例、K、seed、間引き）、`cue.*`（σ_b、σ_c）、`sample.*` |
 | `../configs/shared.yaml` | 両 Stage 共有: `brightness.sigma_px_512`（明るさを平均する広さ σ_a）。上書き `--brightness_sigma_px_512` |
 | `../configs/machines.yaml` | `eid_dir`、`pcd_dir`、`painter_checkpoints_dir`（= `/workspace/runs/stage1`）、`pseudo_eid_dir`、`num_threads`、`tb_port` |
 
-再開の基準は、選んだ重みの `state.pth` の中の実効設定（`--flag` だけが上に乗る）。
+再開の基準は、選んだ重みの `state.pth` の中の実効設定（`--flag` だけが上に乗る）。ネットワーク（`model.*`）と、HU の変換・σ の範囲・`cue.blur_max_px`・`cue.blur_sampling`・`diffusion.sigma_sampling` は再開で変えられない。
+`cue.blur_sampling` を足す前（2026-11-15 より前）の重みは、実効設定にこのキーが無い。その重みは loguniform で学習されたものとして読む（再開・`init.run`・描画・型 Y の A の学習と作成。読んだときに 1 行表示する。`configs/schema.py` の `fill_legacy_train`。既定値ではなく、当時の実装の形を書いたもの）。
 
 ## 出力
 
@@ -76,7 +77,7 @@ runs/stage1/<run>/
 - 止まり方: 上限（`optim.max_steps` / `optim.max_hours`）で latest を保存して終了コード 0。SIGTERM は latest を保存して 143。NaN / Inf は保存せず 3
 - 最初: scalar は 1, 2, 4, …, 64 step 目と以後 100 step ごと。21 step 目に `torch.compile` が始まる（数分。ログに 1 行出る）。200 step 目に val・パネル・latest の保存を 1 回通す。以後 val とパネルは 2,000 step ごと
 - scalar（TensorBoard / 監視ツール）:
-  - `loss/train`、`loss_bin/0〜5`（σ の帯: 境 2 / 6 / 20 / 60 / 200 / 2,000 / 40,000 HU）、`loss_cue/none・clean・blur_only・noise_only・both`
+  - `loss/train`、`loss_bin/0〜5`（σ の帯: 境 2 / 6 / 20 / 60 / 200 / 2,000 / 40,000 HU）、`loss_cue/none・clean・blur_only・noise_only・both`（数が 0 の区分は出ない。`cue.blur_sampling: uniform` で `blur_zero_prob: 0` のときは σ_b = 0 がほぼ出ないので clean・noise_only は出ない）
   - `val/loss`、`val/loss_bin/0〜5`（val の固定パッチ 96 個、EMA、FP32）、`diag/bf16_val_ratio/bin0〜5`（同じ入力の bf16 ÷ FP32。bin0 が 1.2 を超えるなら `--fp32_top_level true`）
   - `diag/sec_per_step`、`diag/imgs_per_sec`、`diag/data_time_frac`、`diag/lr`、`diag/grad_norm`、`diag/hours`
   - `diag/check_redraw_wide_mean_diff_hu`・`_fine_sd_ratio`・`_fine_corr_src`（実 EID の描き直し）、`diag/check_pseudo_wide_mean_diff_hu`・`_fine_corr_pcd`・`_fine_sd_ratio_vs_eid`（PCD からの疑似 EID）。度合いごとは末尾に `/b2_c0` など。確認用で合格線は無い
