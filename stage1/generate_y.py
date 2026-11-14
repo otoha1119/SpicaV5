@@ -1,9 +1,10 @@
 """stage1/generate_y.py — 型 Y の疑似 EID の作成（ホストからは bash start.sh PC1 ygen --run <型 Y の run> [--flag value]）。
 
-  python stage1/generate_y.py --machine PC1 --config stage1/configs/y_generate.yaml --shared configs/shared.yaml --machines configs/machines.yaml -- --run <run> --s_hu 100
+  python stage1/generate_y.py --machine PC1 --config stage1/configs/y_generate.yaml --shared configs/shared.yaml --machines configs/machines.yaml -- --run <run> [--e_run <E の run>]
 
-手順: PCD → 消し手 A → m。redraw.s_hu > 0 なら m に強さ s のノイズを足し、実 EID の描き手 E（run の init.e_run）で s から 0 まで描き直す
-（Euler ancestral η = 1、毎段に新しい乱数。手がかり = Gaussian(m, cue_blur_px)、redraw.anchor なら毎段に明るさの錨）。s = 0 は A の出力をそのまま書く。
+手順: PCD → 消し手 A → m。m に強さ s のノイズを足し、実 EID の描き手 E（generate.e_run。空なら run の init.e_run）で s から 0 まで描き直す。s は redraw.s_list_hu の並び
+（往復ごと。yaml は 400 → 100 → 50 HU）。並びが空なら redraw.s_hu を redraw.cycles 回
+（Euler ancestral η = 1、毎段に新しい乱数。手がかり = Gaussian(m, cue_blur_px)、redraw.anchor なら毎段に明るさの錨）。並びが空で s_hu = 0 のときは A の出力をそのまま書く。
 出力: <pseudo_eid_dir>/Y_<run>-<step>_s<s>_b<cue>[_anc][_<suffix>]/k00…/<症例>/<スライス>.png と manifest.yaml（既にある組には書かない）。
 乱数は画像ごと（util/seeds.py、'<seed>/<症例>/<スライス名>/<k>'）。
 """

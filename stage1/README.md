@@ -24,8 +24,8 @@ bash start.sh PC1 tb | build | shell | down
 型 X（上）は PCD のノイズの粒の位置が疑似 EID に残った（EXP-20261111-02）。型 Y は鋭さとノイズを別の手段で消す。
 
 - 消し手 A（`models/eraser.py`）: 画素ごとに近傍の重み（足して 1）を出して平均するだけの小さな CNN。明るさを変えられず、新しい極値を作れず、鋭くできない
-- 学習（`train_y.py`、設定 `configs/y.yaml`）: `bash start.sh PC1 y`（再開 `bash start.sh PC1 y resume <run>`）。A の出力に強めのノイズをかぶせ、実 EID の描き手 E（固定）と、A の出力を追う F（E から始めて学習）の答えの差で A を動かす（DMD 型）。PCD との画素の一致・判別器は無い
-- 作成（`generate_y.py`、設定 `configs/y_generate.yaml`）: `bash start.sh PC1 ygen --run <run> --s_hu 100`。PCD → A → 強さ s のノイズを足して E で描き直す（毎段に新しい乱数）。`--s_hu 0` で A の出力そのもの
+- 学習（`train_y.py`、設定 `configs/y.yaml`）: `bash start.sh PC1 y --e_run <E の run>`（再開 `bash start.sh PC1 y resume <run>`）。A の出力に強めのノイズをかぶせ、実 EID の描き手 E（固定）と、A の出力を追う F（E から始めて学習）の答えの差で A を動かす（DMD 型）。PCD との画素の一致・判別器は無い
+- 作成（`generate_y.py`、設定 `configs/y_generate.yaml`）: `bash start.sh PC1 ygen --run <run> [--e_run <E の run>]`。PCD → A → 強さ s のノイズを足して E で描き直す（毎段に新しい乱数）。yaml の値は 400 → 100 → 50 HU・各 40 段・手がかり 10 px（`redraw.s_list_hu` / `steps_list`）。1 往復だけにするなら並びを空にして渡す: `--s_list_hu "" --steps_list "" --s_hu 100 --steps 20`（並びが空でないと `--s_hu` は使われない）。A の出力そのものは `--s_list_hu "" --steps_list "" --s_hu 0`
 - 出力: run は `<painter_checkpoints_dir>/<run>/`（`latest/` と `weights/step_N/` に `A.pth`・`F.pth`・`state.pth`、途中経過の 16bit は `output_images/step_N/`）
 
 ## 型 X: PCD の描き手を足して、同じノイズでつなぐ（2026-11-11、ブランチ 029。試行中）

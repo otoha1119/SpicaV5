@@ -23,8 +23,8 @@
 #   bash start.sh PC1 generate --run 2026_1112_0030 --tag latest --blur_px 2 --noise_hu 50 --k 2
 #   bash start.sh PC1 --domain pcd --init_run 2026_1111_0517 --max_steps 4000   # 型 X: PCD の描き手（実 EID の描き手の重みから PCD512 で学ぶ）
 #   bash start.sh PC1 bridge --enc_run <PCD の描き手> --dec_run <実 EID の描き手>  # 型 X: PCD → ノイズ → 疑似 EID
-#   bash start.sh PC1 y [--max_steps 6000]                # 型 Y: 消し手 A を学ぶ（stage1/configs/y.yaml）。再開は bash start.sh PC1 y resume <run>
-#   bash start.sh PC1 ygen --run <型 Y の run> --s_hu 100 # 型 Y: PCD → A → E で描き直し → 疑似 EID
+#   bash start.sh PC1 y --e_run <E の run> [--max_steps 6000]  # 型 Y: 消し手 A を学ぶ（stage1/configs/y.yaml）。再開は bash start.sh PC1 y resume <run>
+#   bash start.sh PC1 ygen --run <型 Y の run>            # 型 Y: PCD → A → E で描き直し（y_generate.yaml: 400 → 100 → 50 HU・各 40 段）→ 疑似 EID。1 往復だけは --s_list_hu "" --steps_list "" --s_hu 100
 #   bash start.sh PC1 best 2026_1112_0030 150000        # weights/step_0150000/ を best/ に写す
 #   bash start.sh PC1 tb                                # 全 run を並べた TensorBoard
 #   bash start.sh PC1 build | shell | down

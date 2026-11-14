@@ -69,7 +69,7 @@
 | compile の始め方 | `optim.compile_after_steps`（20）: 最初の 20 step は compile せず、21 step 目から。`optim.compile_mode` で mode を選べる | 最初の scalar をすぐ出す。max-autotune が PC で落ちたら yaml / flag だけで下げられる |
 | 最初の確認 | `log.preview_first_step`（200）: 起動して 200 step 目に val・パネル・latest の保存を 1 回通す。scalar は 1, 2, 4, …, 64 step 目にも出す | 配線の失敗を 15 分待たずに見つける |
 | bf16 の確認 | val のたびに同じ入力を bf16 でも通し、帯ごとの比を `diag/bf16_val_ratio/bin*` に出す | 設計書 C-4 の「必ず見ること」を自動にした |
-| 時間の上限 | `optim.max_hours` は再開をまたいだ累計（`state.pth` の `elapsed_sec`） | 「36 時間」を使い切ったら止まる |
+| 時間の上限 | `optim.max_hours` は再開をまたいだ累計（`state.pth` の `elapsed_sec`） | 上限の時間（設計書は 36 時間。今の yaml は 16）を使い切ったら止まる |
 | 再開時の machine | データと run の置き場は今の `machines.yaml`（学習の設定ではなく「今どこにあるか」） | 旧コードの 2026-11-11 の扱いに合わせた |
 | SIGTERM | いまの step を終えて latest を保存、終了コード 143。DataLoader の worker は SIGTERM を無視し、main が保存後に片付ける | 監視ツールは train.py の全プロセスに SIGTERM を送る |
 | NaN | 損失・勾配・val が有限でなければ、重みを更新・保存せず終了コード 3。有限でない scalar は書かない | 監視の条件 |
@@ -95,5 +95,5 @@
 - A の損失は DMD（Yin et al., "One-step Diffusion with Distribution Matching Distillation", CVPR 2024）の分布合わせの勾配: 生成物 x にノイズ σ をかぶせた y について、∇_x KL ≈ (D_fake(y) − D_real(y))（x̂0 の差。σ² の係数は正規化で消える）。正規化はサンプルごとに mean|x − D_real(y)| で割る（論文の式 (8) の重み）。実装は ½‖x − sg(x − g)‖² の形で、∂/∂x = g。**公式実装との照合はしていない**（論文の式を EDM の x̂0 の形で書き直したもの）
 - 生成器の入力をノイズでなく元の領域の画像にする unpaired 変換は RDMD（Rakitin et al., arXiv:2406.14762, 2024）。RDMD は入力と出力の対応を transport cost の罰で保つが、ここでは罰を置かず A の作り（重みつき平均だけ）で代える
 - 画素ごとに重みを予測して平均する作りは KPN（Mildenhall et al., "Burst Denoising with Kernel Prediction Networks", CVPR 2018）
-- 決めたこと: 見比べの σ を [20, 2000] HU に限る（PCD のノイズの細かい違いを F・E が直接見比べない）。E・F の両方に、A の出力を 8 px でぼかした絵を手がかりとして渡す。F は E の EMA から始める。Adam の β1 = 0（DMD の実装に合わせた。**論文の付録との照合はしていない**）
+- 決めたこと: 見比べの σ を [`dmd.sigma_lo_hu`, `dmd.sigma_hi_hu`] HU に限る（最初は [20, 2000]、EXP-20261115-02 から [400, 2000]。PCD のノイズの細かい違いを F・E が直接見比べない）。E・F の両方に、A の出力を `dmd.cue_blur_px`（最初は 8 px、EXP-20261115-02 から 10 px = E の学習の上端）でぼかした絵を手がかりとして渡す。F は E の EMA から始める。Adam の β = (0, 0.99) はこちらで置いた値（**DMD / DMD2 の公式は (0.9, 0.999)**: DMD 付録 B.1〜B.3 "beta parameters to (0.9, 0.999)"、DMD2 `main/edm/train_edm.py` `betas=(0.9, 0.999)`。同じ値の先例は Diff-Instruct の Table 7。比較は未実施。2026-11-15 照合。前の記述「DMD の実装に合わせた」は誤り）
 - 描き直しは SDEdit（Meng et al., ICLR 2022）と同じ: 強さ s のノイズを足して s から描く

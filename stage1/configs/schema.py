@@ -22,12 +22,12 @@ ilist = type("ilist", (), {})  # int のリストを表す型の印
 # ---------------------------------------------------------------------------
 TRAIN = {
     # optim（設計書 G-1）
-    "optim.lr":                  Key(float, "--lr",                  "AdamW の学習率。2e-4。発散したら 1e-4"),
+    "optim.lr":                  Key(float, "--lr",                  "AdamW の学習率（batch 32 で 2e-4、batch 128 で 4e-4 = × √4）。発散したら下げる"),
     "optim.beta1":               Key(float, "--beta1",               "AdamW β1（0.9）"),
     "optim.beta2":               Key(float, "--beta2",               "AdamW β2（0.999）"),
     "optim.weight_decay":        Key(float, "--weight_decay",        "AdamW の weight decay（0）"),
     "optim.warmup_steps":        Key(int,   "--warmup_steps",        "学習率を 0 から直線で上げる step 数（2,000）。その後は一定。0 で無し"),
-    "optim.batch_size":          Key(int,   "--batch_size",          "batch（パッチ数）。32"),
+    "optim.batch_size":          Key(int,   "--batch_size",          "batch（パッチ数）"),
     "optim.grad_clip":           Key(float, "--grad_clip",           "勾配ノルムのクリップ（1.0）"),
     "optim.ema_decay":           Key(float, "--ema_decay",           "EMA の減衰の上限（0.9999）。序盤は min(ema_decay, (1 + n) / (10 + n))。描画・val は常に EMA"),
     "optim.precision":           Key(str,   "--precision",           "学習の U-Net 本体の演算精度 fp32 | bf16（CUDA の autocast）。入口（Haar・stem）・出口（head・逆 Haar・x̂0 の合成）・損失・埋め込みは常に FP32（設計書 C-4）"),
@@ -37,8 +37,8 @@ TRAIN = {
     "optim.max_gpu_mem_fraction": Key(float, "--max_gpu_mem_fraction", "PyTorch が使ってよい専用 GPU メモリの割合の上限（0〜1）。超えたら共有メモリにあふれず OOM で止まる（Windows はあふれると極端に遅くなる。PC3 で 2026-11-12 に確認）"),
     "optim.channels_last":       Key(bool,  "--channels_last",       "U-Net を channels_last にする"),
     "optim.fp32_top_level":      Key(bool,  "--fp32_top_level",      "true で最上段（幅 base_ch の段）の ResBlock を FP32 で計算する（bf16 で弱い σ の帯の val が悪いとき。設計書 C-4）"),
-    "optim.max_steps":           Key(int,   "--max_steps",           "学習の上限 step（250,000）。max_hours と早いほうで止まり latest を保存して正常終了する"),
-    "optim.max_hours":           Key(float, "--max_hours",           "学習の上限時間（36。再開をまたいだ累計）"),
+    "optim.max_steps":           Key(int,   "--max_steps",           "学習の上限 step。max_hours と早いほうで止まり latest を保存して正常終了する"),
+    "optim.max_hours":           Key(float, "--max_hours",           "学習の上限時間（再開をまたいだ累計）"),
     "optim.seed":                Key(int,   "--seed",                "python / numpy / torch の乱数 seed"),
     # data（設計書 B）
     "data.patch_size":        Key(int,   "--patch_size",        "学習パッチの一辺（画素）。256。16 の倍数（Haar 1 段 + stride 2 が 3 回）"),
@@ -88,8 +88,8 @@ TRAIN = {
     "log.val_seed":            Key(int,   "--val_seed",            "val の固定パッチと乱数の seed"),
     "log.preview_steps":       Key(int,   "--preview_steps",       "途中経過のパネル（描き直し・疑似 EID・手がかり無し）と diag/check_* の間隔（step）。2,000"),
     "log.preview_first_step":  Key(int,   "--preview_first_step",  "この起動の最初にこの step 数で 1 回だけ val・パネル・latest の保存を通す（配線の確認。0 で無し）"),
-    "log.save_latest_steps":   Key(int,   "--save_latest_steps",   "latest/ の保存間隔（step）。5,000"),
-    "log.save_weights_steps":  Key(int,   "--save_weights_steps",  "weights/step_NNNNNNN/ の保存間隔（step）。25,000"),
+    "log.save_latest_steps":   Key(int,   "--save_latest_steps",   "latest/ の保存間隔（step）"),
+    "log.save_weights_steps":  Key(int,   "--save_weights_steps",  "weights/step_NNNNNNN/ の保存間隔（step）"),
     "log.eid_slices":          Key(list,  "--eid_slices",          "途中経過（描き直し）に使う実 EID のスライス。**コンテナ内の絶対パス**の一覧（病院 EID は eid_dir の外にあるため）。1 つ目が基準（diag/check_redraw_*、疑似 EID の横に並べる参照、拡大）。学習に使う症例（train 側）は置けない。無いファイルは起動前にエラー"),
     "log.pcd_slices":          Key(list,  "--pcd_slices",          "途中経過（疑似 EID）に使う PCD512 のスライス。コンテナ内の絶対パスの一覧。1 つ目が基準（diag/check_pseudo_*、拡大）。学習には使わない"),
     "log.preview_cues":        Key(list,  "--preview_cues",        "途中経過の度合い。'σ_b（画素）:σ_c（HU）' のリスト"),
