@@ -1,6 +1,6 @@
 """stage2/models/lock.py — 明るさの固定（設計書 D、RECONCILE #1・#2）。学習パラメータなし。
 
-  G∗x            = 「広い平均」。Gaussian（σ = configs/shared.yaml の brightness.sigma_px_512 × 補間の倍率 = 1024 で 32 画素）。
+  G∗x            = 「広い平均」。Gaussian（σ = configs/shared.yaml の brightness.sigma_px_512 × 補間の倍率。20 なら 1024 で 40 画素）。
                    半径 ceil(3σ) で打ち切って合計 1 に正規化した 1 次元の核を、横 → 縦に掛ける（分離型）。端は reflect。FP32。
   lock(out, ref) = out + G∗(ref − out)      … out の広い平均を捨てて、ref（= 入力 x↑）の広い平均に置き換える
 

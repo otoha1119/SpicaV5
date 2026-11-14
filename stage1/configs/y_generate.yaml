@@ -1,6 +1,7 @@
 # stage1/configs/y_generate.yaml — 型 Y の疑似 EID の作成（bash start.sh PC1 ygen --run <型 Y の run> [--flag value]）。唯一の正は schema の Y_GENERATE。
 # 手順: PCD → 消し手 A → m。m に強さ s のノイズを足し、実 EID の描き手 E で s から 0 まで描き直す（Euler ancestral、毎段に新しい乱数）。
-# 出力: <pseudo_eid_dir>/<組>/k00…/<症例>/<スライス>.png と manifest.yaml。組の名前 = Y_<run>-<step>_s<s>_b<cue>[_anc][_<suffix>]
+# 出力: <pseudo_eid_dir>/<組>/k00…/<症例>/<スライス>.png と manifest.yaml。組の名前 = Y_<run>-<step>[_ax<倍率>][_E<e_run>-<step>]_sl<s の並び>_st<段の並び>_b<cue>[_anc][_<suffix>]（s_list_hu が空なら _s<s>）
+# 2026-11-15: EXP-20261115-02 の値（手がかり 10 px、描き直し 400 → 100 → 50 HU・各 40 段、A の広さの倍率 1）。
 generate:
   run: ""
   tag: latest
@@ -17,13 +18,13 @@ generate:
 
 redraw:
   use_eraser: true         # false = A を通さない（PCD に直接ノイズ s を足して描き直す。比較用）
-  a_sigma_scale: 1.0       # A のぼかしの広さを推論時に何倍にするか（向きのないぼかしだけ。例 0.5 = ImageCAS 並みの鋭さ、0.35 = 病院 EID 並み、EXP-20261112-01）
-  s_hu: 100.0
-  s_list_hu: []            # 往復ごとに s を変える並び（例 --s_list_hu 300,100,50,30）。空なら s_hu を cycles 回
-  steps_list: []           # 往復ごとの段数（例 --steps_list 20,10,5,3,1,1）。空なら steps
-  cycles: 1                # 描き直しの往復の回数（くり返すほど PCD の粒が入れ替わる見込み。比較用）
-  steps: 20
-  cue_blur_px: 8.0
+  a_sigma_scale: 1.0       # A のぼかしの広さを推論時に何倍にするか（向きのないぼかしだけ）。1 = 学習のまま（EXP-20261115-02: 手で合わせない）。前の作り方は --a_sigma_scale 0.5（EXP-20261112-01）
+  s_hu: 400.0              # s_list_hu が空のときだけ使う（s_hu を cycles 回）。描き直しの始めと同じ値にしてある
+  s_list_hu: ["400", "100", "50"]   # 往復ごとの s（HU）。400 → 100 → 50（EXP-20261112-01 から変えない）。空なら s_hu を cycles 回
+  steps_list: ["40", "40", "40"]    # 往復ごとの段数（各 40 段）。空なら steps
+  cycles: 1                # s_list_hu を使うときは 1
+  steps: 40                # steps_list が空のときだけ使う
+  cue_blur_px: 10.0        # A の学習（dmd.cue_blur_px）と同じ = E の学習の上端。(b) 弱 EXP-20261115-02 #2
   anchor: true
   batch: 4
   precision: bf16

@@ -136,7 +136,7 @@ V = {
 # （疑似 EID と違う広さで回すときは data.allow_brightness_mismatch を明示する）
 # ---------------------------------------------------------------------------
 SHARED = {
-    "brightness.sigma_px_512": Key(float, None, "明るさを平均する広さ（Gaussian の σ、512 の画素。16）。Stage 2 は upsample_scale 倍（1024 で 32）して使う"),
+    "brightness.sigma_px_512": Key(float, None, "明るさを平均する広さ（Gaussian の σ、512 の画素）。Stage 2 は upsample_scale 倍して使う（20 なら 1024 で 40）"),
 }
 
 # ---------------------------------------------------------------------------
@@ -388,7 +388,7 @@ def _raise(where, problems):
 
 
 def sigma_px_1024(data, shared):
-    """明るさを平均する広さ（出力の画素 = 1024 での σ）。configs/shared.yaml の値（512 基準）× 補間の倍率（RECONCILE #1: 16 × 2 = 32）。"""
+    """明るさを平均する広さ（出力の画素 = 1024 での σ）。configs/shared.yaml の値（512 基準）× 補間の倍率（RECONCILE #1。20 × 2 = 40）。"""
     return float(shared["brightness.sigma_px_512"]) * data["data.upsample_scale"]
 
 

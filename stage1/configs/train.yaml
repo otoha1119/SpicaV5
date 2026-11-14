@@ -1,14 +1,15 @@
 # stage1/configs/train.yaml — 新 Stage 1（描き手 P）の学習パラメータ。唯一の正は configs/schema.py の TRAIN（キーの欠落・未知・型違いはエラー）。既定値は無い。
 # 設計: docs/plans/20261111_detail_design/stage1_painter_spec.md。値は「練習する幅の端」「初期値」で、実測値に合わせた的ではない。
 # 書き方: 小数は必ず点を付ける。真偽値は true / false。run 名はここに書かない（起動時刻 yyyy_mmdd_HHMM）。
+# 2026-11-15: EXP-20261115-02 の値（docs/experiments/EXP-20261115-02.md。根拠の種類 (a)〜(d) は docs/reference/value_ledger.md）。cue.* 以外は、今の E（run 2026_1112_0221、PC3）の実効値にそろえた。
 
 optim:
-  lr: 0.0002               # AdamW。発散したら 0.0001（設計書 G-1）
+  lr: 0.0004               # AdamW。今の E（2026_1112_0221）と同じ = 2e-4 × √(128 ÷ 32)。(d)
   beta1: 0.9
   beta2: 0.999
   weight_decay: 0.0
   warmup_steps: 2000       # 0 から直線で上げ、その後は一定
-  batch_size: 32           # パッチ 256 × 32（1 スライスから 4 個 → 8 スライス）
+  batch_size: 128          # パッチ 256 × 128（1 スライスから 4 個 → 32 スライス）。今の E と同じ（PC3: compile ありで約 31 GiB、約 200 枚/秒。256 は OOM）
   grad_clip: 1.0
   ema_decay: 0.9999        # 序盤は min(0.9999, (1 + n) / (10 + n))。描画・val は常に EMA
   precision: bf16          # 学習の U-Net 本体だけ CUDA autocast。入口・出口・損失・埋め込みは FP32（設計書 C-4）。fp32 で切れる
@@ -18,8 +19,8 @@ optim:
   max_gpu_mem_fraction: 0.85   # 専用 GPU メモリの 85 % を上限に（超えたら OOM。共有メモリにあふれさせない）
   channels_last: true
   fp32_top_level: false    # diag/bf16_val_ratio/bin0 が 1.2 を超えるなら true（最上段を FP32）
-  max_steps: 250000        # 36 時間と早いほうで止まり、latest を保存して正常終了
-  max_hours: 36.0          # 再開をまたいだ累計
+  max_steps: 78125         # 1,000 万枚 = 128 × 78,125（今の E と同じ。PC3 で 14.2 時間）。max_hours と早いほうで止まり、latest を保存して正常終了
+  max_hours: 16.0          # 再開をまたいだ累計（今の E と同じ）
   seed: 1234
 
 data:
@@ -42,10 +43,10 @@ init:                      # 型 X: PCD の描き手は実 EID の描き手の�
 
 cue:                       # 手がかり = Gaussian ぼかし(元の絵, σ_b) + σ_c × 白色ノイズ。サンプルごとに独立にくじ（設計書 E-2）
   drop_prob: 0.10          # 手がかりを隠す
-  blur_sampling: loguniform   # σ_b の引き方: loguniform（[min, max] を対数一様）| uniform（線形の一様。min = 0 を許す）。再開で変えられない
-  blur_zero_prob: 0.15     # σ_b = 0 を別枠で出す確率
-  blur_min_px: 0.5         # 残りは [0.5, 8] 画素を対数一様
-  blur_max_px: 8.0
+  blur_sampling: uniform   # σ_b の引き方: uniform（[min, max] を線形の一様）| loguniform（対数一様。前の E）。再開で変えられない。(a△) EXP-20261115-02 #1
+  blur_zero_prob: 0.0      # σ_b = 0 の別枠は置かない（型 Y は 0 px を使わない）。(c) EXP-20261115-02 #1
+  blur_min_px: 0.0         # [0, 10] 画素を均等
+  blur_max_px: 10.0        # 型 Y が使う幅（y.yaml の dmd.cue_blur_px、y_generate.yaml の redraw.cue_blur_px）= 上端。(b) 弱 EXP-20261115-02 #1・#2。data.margin 32 ≥ 3 × 10
   noise_zero_prob: 0.15    # σ_c = 0
   noise_min_hu: 5.0        # 残りは [5, 400] HU を対数一様
   noise_max_hu: 400.0
@@ -54,7 +55,7 @@ diffusion:                 # EDM 型（Karras et al. 2022）。式の出典は s
   sigma_min: 0.002         # 2 HU 相当
   sigma_max: 40.0          # 40,000 HU 相当
   sigma_data: 0.5
-  sigma_sampling: loguniform   # loguniform | lognormal（EDM の標準。--sigma_sampling lognormal）
+  sigma_sampling: lognormal    # lognormal（EDM の標準）| loguniform。今の E と同じ
   p_mean: -1.2             # lognormal のときの ln σ の平均（EDM の標準。x = HU/1000 で中心 約 300 HU）
   p_std: 1.2               # 同 標準偏差
 
@@ -75,8 +76,8 @@ log:
   val_seed: 0
   preview_steps: 2000
   preview_first_step: 200  # 起動して 200 step 目に 1 回、val・パネル・latest の保存を通す（配線の確認）
-  save_latest_steps: 5000
-  save_weights_steps: 25000
+  save_latest_steps: 1000  # 今の E と同じ
+  save_weights_steps: 10000
   # 途中経過のパネルに使うスライス。コンテナ内の絶対パスの一覧。無いファイルがあれば起動前にエラー（--eid_slices a,b で差し替え）。
   # 実 EID の 1 つ目が基準（diag/check_redraw_*、参照列、拡大）。学習に使う症例（分割の train 側）は置けない
   eid_slices:
@@ -84,7 +85,7 @@ log:
     - /workspace/DataSet/DataSet_new/EID/EID-1021/EID-1021-038.png      # 病院 EID（評価専用。並べて見るだけ）
   pcd_slices:
     - /workspace/DataSet/PCD512_v2/PCD-002/PCD-002-236.png
-  preview_cues: ["2:0", "0:150", "2:50"]                        # σ_b（画素）:σ_c（HU）
+  preview_cues: ["10:0"]   # σ_b（画素）:σ_c（HU）。型 Y が使う点（10 px、ノイズ無し）。手がかり「無し」は下の nocue_n。EXP-20261115-02 手順 1。σ_a（shared）≥ 2 × σ_b を起動時に検査
   preview_seed: 0
   nocue_n: 4
   zoom_size: 72

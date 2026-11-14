@@ -4,7 +4,7 @@
 
 - **U**（形を決める回帰）: 旧 Stage 2 の U-Net そのまま。`μ = f + G∗(x↑ − f)`（`f = U(x↑)`、G = 明るさを平均する Gaussian）。損失は `MSE(μ, X′)`、`X′ = X + G∗(x↑ − X)`
 - **V**（鋭さとノイズの粒を作るフロー）: PMRF 型の rectified flow。出発点 `Z0 = μ + σs·ε`、到達点 `X′`。V に渡すのは `Zt`・時刻 `t`・乱数の強さ `σs` の 3 つだけ（EID も μ も別には渡さない）。判別器なし
-- **明るさの固定**: 広い平均（`configs/shared.yaml` の `brightness.sigma_px_512` = 16 → 1024 で σ 32 画素）は入力のものをそのまま使う。U の出力・学習の正解・最終出力の 3 か所に同じ計算を入れる
+- **明るさの固定**: 広い平均（`configs/shared.yaml` の `brightness.sigma_px_512` = 20 → 1024 で σ 40 画素。2026-11-15 EXP-20261115-02。前は 16 → 32）は入力のものをそのまま使う。U の出力・学習の正解・最終出力の 3 か所に同じ計算を入れる
 - 設計: `docs/plans/20261111_detail_design/stage2_u_flow_spec.md`、裁定 `RECONCILE.md`（`docs/` はローカルだけ）。式の出典・設計書からの差分: `UPSTREAM.md`
 
 ## 起動（ホストのシェルで、リポジトリ直下から）
@@ -35,7 +35,7 @@ bash start2.sh PC1 tb | build | shell | down
 |---|---|
 | `configs/data.yaml` | U・V 共通: 疑似 EID の組（`--pseudo_eid_set`）、HU の物差し、補間（bicubic ×2）、`patches_per_slice`、症例分割、表示の範囲 |
 | `configs/u.yaml` | U: `net.*`（旧 U-Net）、`optim.*`（Adam 3e-4、batch 8、4,000 step × 10 epoch、EMA 0.999、bf16、compile）、`patch.size` 256、`log.*`、`mag.*` |
-| `configs/v.yaml` | V: `u.run` / `u.tag`、`net.*`（Haar + ResBlock U-Net 64 / 128 / 256 / 256）、`flow.*`（σs 25〜400 HU、表示は 100 HU・Euler 25 回）、`optim.*`（Adam 1e-4、warmup 1,000、clip 1.0、batch 16、15 万 step / 16 時間、EMA 0.9999）、`patch.size` 256 + `patch.margin` 96、`log.*`、`mag.*` |
+| `configs/v.yaml` | V: `u.run` / `u.tag`、`net.*`（Haar + ResBlock U-Net 64 / 128 / 256 / 256）、`flow.*`（σs 25〜400 HU、表示は 100 HU・Euler 25 回）、`optim.*`（Adam 1e-4、warmup 1,000、clip 1.0、batch 16、15 万 step / 16 時間、EMA 0.9999）、`patch.size` 256 + `patch.margin` 120（明るさの広さ σ 40 の 3 倍。σ 32 のときは 96）、`log.*`、`mag.*` |
 | `configs/infer.yaml` | 推論: 重み、入力フォルダ、σs、Euler の回数、seed、保存するもの |
 | `configs/check.yaml` | 確認の道具: やること、σs の一覧、seed の数、切り抜き、連続スライスの系列 |
 | `../configs/shared.yaml` | 両 Stage 共有: `brightness.sigma_px_512`（Stage 2 からは上書きできない） |

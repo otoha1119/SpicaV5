@@ -3,11 +3,11 @@
 # 2 つの答えの差（DMD 型、判別器なし）で A を動かす。F は A の出力を追う普通の拡散の学習。PCD との画素の一致は使わない。
 # 設計の出典: docs/plans/20261111_detail_design/stage1_redesign_ideas/persona_skeptic.md 案 1。式の出典は stage1/UPSTREAM.md の 7。
 init:
-  e_run: "2026_1111_0517"  # 実 EID の描き手（53,498 step で停止したもの）
+  e_run: "2026_1111_0517"  # 実 EID の描き手（53,498 step で停止した最初の E。くじの上端 8 px）。EXP-20261115-02 は --e_run <学習し直した E> で渡す（この値のままだと dmd.cue_blur_px 10 > 8 で起動前に止まる）
   e_tag: latest
 
 optim:
-  lr_a: 0.0001
+  lr_a: 0.003              # global（θ 1 個）が動き切るための値。isotropic は 1e-4 だった。(b) EXP-20261113-01、EXP-20261115-02 #4
   lr_f: 0.00005            # F は E から始めて追うだけ（E の学習の lr 2e-4 より小さく）
   beta1: 0.0               # DMD の実装と同じく β1 = 0（2 つの部品が互いを追うので慣性を持たせない）
   beta2: 0.99
@@ -29,16 +29,16 @@ data:
   pcd_val_cases: [PCD-002]
 
 eraser:
-  kind: isotropic          # 1 回目（free）は明るい側を広げ細い骨を消した（EXP-20261111-03）。向きのないぼかしに縛る
+  kind: global             # 画像全体で 1 つの広さの向きのないぼかし（学習する数は θ 1 個。width・depth は使わない）。(b) EXP-20261113-01、EXP-20261115-02 #4。前は isotropic（画素ごと。free は明るい側を広げ細い骨を消した、EXP-20261111-03）
   radius: 4                # 9×9 の近傍まで平均できる（上限）
   width: 32
   depth: 6
-  center_bias: 2.2         # 最初はほぼ恒等。isotropic: σ = 4 × sigmoid(−2.2) ≈ 0.4 px（中央の重み ≈ 0.9。σ が小さすぎると softmax が飽和して勾配が 0 になる）。free（1 回目）は 6.0 で中央の重み ≈ 0.83
+  center_bias: 2.2         # 最初はほぼ恒等。isotropic・global: σ = 4 × sigmoid(−2.2) ≈ 0.4 px（中央の重み ≈ 0.9。σ が小さすぎると softmax が飽和して勾配が 0 になる）。free（1 回目）は 6.0 で中央の重み ≈ 0.83
 
 dmd:
-  sigma_lo_hu: 20.0        # 見比べは 20〜2,000 HU のノイズをかぶせた上だけ（研究者の手が残る点。設計書の「出発点 s」と同じ扱い）
-  sigma_hi_hu: 2000.0
-  cue_blur_px: 8.0         # E の学習の上端（cue.blur_max_px）
+  sigma_lo_hu: 400.0       # 見比べは 400〜2,000 HU のノイズをかぶせた上だけ。下端 = 描き直しの始め 400 HU（それより弱いものは E が描き直す）。(c) EXP-20261115-02 #3。前は 20。F の学習のノイズも同じ範囲から引く
+  sigma_hi_hu: 2000.0      # (d) のまま
+  cue_blur_px: 10.0        # E の学習の上端（cue.blur_max_px）。(b) 弱 EXP-20261115-02 #2。data.margin 32 ≥ 3 × 10
 
 log:
   print_steps: 50

@@ -1,5 +1,5 @@
 # stage2/configs/u.yaml — U（形を決める回帰。設計書 B）の構成と学習。唯一の正は configs/schema.py の U。既定値は無い。
-# μ = f + G∗(x↑ − f)（f = net(x↑)。明るさの固定つき）。損失 = MSE(μ, X′)、X′ = X + G∗(x↑ − X)。G の広さは configs/shared.yaml（512 で σ 16 → 1024 で 32）。
+# μ = f + G∗(x↑ − f)（f = net(x↑)。明るさの固定つき）。損失 = MSE(μ, X′)、X′ = X + G∗(x↑ − X)。G の広さは configs/shared.yaml（512 で σ 20 → 1024 で 40。EXP-20261115-02。前は 16 → 32）。
 net:
   arch: unet_ilumenate     # 旧 Stage 2 の U-Net をそのまま（128 / 256 / 512、pool 2、BN なし、最終 Conv3×3 → 1ch 線形、約 9.8M）
   base_ch: 128
@@ -25,7 +25,7 @@ optim:
   seed: 0
 
 patch:
-  size: 256                # RECONCILE #11（明るさの核 193 画素がパッチに収まること）
+  size: 256                # RECONCILE #11（明るさの核がパッチに収まること）。σ 40（1024）の核は 241 画素で、256 にぎりぎり収まる（検査は size > 240。σ 32 のときは 193 画素）
 
 log:
   print_steps: 100

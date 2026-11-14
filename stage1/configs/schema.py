@@ -127,7 +127,7 @@ MODEL = {
 # configs/shared.yaml — 両 Stage で共有する値（RECONCILE #1）。Stage 1 が使うキーだけ検査する
 # ---------------------------------------------------------------------------
 SHARED = {
-    "brightness.sigma_px_512": Key(float, "--brightness_sigma_px_512", "明るさを平均する広さ σ_a（Gaussian の σ、512 の画素。16）。錨に使う。1024 では 2 倍"),
+    "brightness.sigma_px_512": Key(float, "--brightness_sigma_px_512", "明るさを平均する広さ σ_a（Gaussian の σ、512 の画素）。錨に使う。1024 では 2 倍。使う手がかりの粗さ σ_b の 2 倍以上（check_anchor）"),
 }
 
 # ---------------------------------------------------------------------------
