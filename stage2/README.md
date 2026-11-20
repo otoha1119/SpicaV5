@@ -35,7 +35,7 @@ bash start2.sh PC1 tb | build | shell | down
 |---|---|
 | `configs/data.yaml` | U・V 共通: 疑似 EID の組（`--pseudo_eid_set`）、HU の物差し、補間（bicubic ×2）、`patches_per_slice`、症例分割、表示の範囲 |
 | `configs/u.yaml` | U: `net.*`（旧 U-Net）、`optim.*`（Adam 3e-4、batch 8、4,000 step × 10 epoch、EMA 0.999、bf16、compile）、`patch.size` 256、`log.*`、`mag.*` |
-| `configs/v.yaml` | V: `u.run` / `u.tag`、`net.*`（Haar + ResBlock U-Net 64 / 128 / 256 / 256）、`flow.*`（σs 25〜400 HU、表示は 100 HU・Euler 25 回）、`optim.*`（Adam 1e-4、warmup 1,000、clip 1.0、batch 16、15 万 step / 16 時間、EMA 0.9999）、`patch.size` 256 + `patch.margin` 120（明るさの広さ σ 40 の 3 倍。σ 32 のときは 96）、`log.*`、`mag.*` |
+| `configs/v.yaml` | V: `u.run` / `u.tag`、`net.*`（Haar + ResBlock U-Net 64 / 128 / 256 / 256）、`flow.*`（出発点 `flow.start` = mu〔μ + σs·ε〕/ input〔x↑ + σs·ε、U を通さない。U の run は読むが使わない〕、σs 25〜400 HU、表示は 100 HU・Euler 25 回）、`optim.*`（Adam 1e-4、warmup 1,000、clip 1.0、batch 16、15 万 step / 16 時間、EMA 0.9999）、`patch.size` 256 + `patch.margin` 120（明るさの広さ σ 40 の 3 倍。σ 32 のときは 96）、`log.*`、`mag.*` |
 | `configs/infer.yaml` | 推論: 重み、入力フォルダ、σs、Euler の回数、seed、保存するもの |
 | `configs/check.yaml` | 確認の道具: やること、σs の一覧、seed の数、切り抜き、連続スライスの系列 |
 | `../configs/shared.yaml` | 両 Stage 共有: `brightness.sigma_px_512`（Stage 2 からは上書きできない） |

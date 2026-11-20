@@ -7,6 +7,7 @@
   V に渡すもの: Zt・t・σs の 3 つだけ（models/flow_net.py の forward の引数）。x↑ は固定した U と明るさの固定（G）にだけ入る。
   精度: 固定した U の順伝播は optim.u_precision（bf16）+ optim.u_compile、勾配なし。V は本体だけ bf16 autocast + torch.compile、入口・出口・埋め込み・損失・明るさは FP32。
   U: 起動時に U の run の重み（net_U_ema.pth）を読んで固定する（eval・勾配なし・学習しない）。V の重みディレクトリに写し（net_U.pth）と U の実効設定を同梱する。
+  flow.start = input（EXP-20261120-01）: 出発点を Z0 = x↑ + σs·ε にする（μ の代わりに x↑ = lock(x↑, x↑)）。U は読み込むが通さない（compile もしない）。ほかは同じ。
 """
 
 import math
@@ -46,12 +47,13 @@ class VModel(Trainer):
         self.data, self.sigma_px = data, float(shared["brightness.sigma_px_512"]) * data["data.upsample_scale"]
         self.units = Units(hu_tuple(data), v["flow.unit_hu"])
         self.margin = v["patch.margin"]
+        self.start = v["flow.start"]
         self.u_residual = bool(u_config["u"]["net.residual"])
         self.u_net = build_net(u_config["u"]).to(device)
         self.u_net.load_state_dict(u_weights)
         self.u_net.eval().requires_grad_(False)
         self.u_bf16 = want_bf16(v["optim.u_precision"], device)
-        self.u_compile_enabled = bool(v["optim.u_compile"]) and device.type == "cuda"
+        self.u_compile_enabled = bool(v["optim.u_compile"]) and device.type == "cuda" and self.start == "mu"
         if self.u_compile_enabled:
             check_compiler("--u_compile")
         self.u_fn = self.u_net
@@ -75,7 +77,11 @@ class VModel(Trainer):
 
     @torch.no_grad()
     def endpoints(self, x, t_img, compiled):
-        """x↑・X（余白つき、n）→ 中央の (μ, X′)（V の中の値）。固定した U と明るさの固定はここだけ。"""
+        """x↑・X（余白つき、n）→ 中央の (μ, X′)（V の中の値）。固定した U と明るさの固定はここだけ。
+        flow.start = input なら μ の代わりに x↑ そのもの（lock(x↑, x↑) = x↑。U は通さない）。"""
+        target = center_crop(lock(t_img, x, self.sigma_px), self.margin)
+        if self.start == "input":
+            return self.units.z(center_crop(x, self.margin)), self.units.z(target)
         with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=self.u_bf16):
             f = (self.u_fn if compiled else self.u_net)(x)
         f = f.float()
@@ -84,7 +90,6 @@ class VModel(Trainer):
         if self.u_residual:
             f = x + f
         mu = center_crop(lock(f, x, self.sigma_px), self.margin)
-        target = center_crop(lock(t_img, x, self.sigma_px), self.margin)
         return self.units.z(mu), self.units.z(target)
 
     def flow_loss(self, net, mu, target, t, sigma_s, eps, body=None, bf16=False, clone=False):
@@ -154,4 +159,4 @@ class VModel(Trainer):
 
     def pipeline(self):
         """画像・確認用: U と V の EMA、FP32、compile なし。"""
-        return Pipeline(self.data, self.sigma_px, self.u_net, self.u_residual, self.device, self.ema, self.cfg["flow.unit_hu"], False, self.channels_last)
+        return Pipeline(self.data, self.sigma_px, self.u_net, self.u_residual, self.device, self.ema, self.cfg["flow.unit_hu"], False, self.channels_last, start=self.start)

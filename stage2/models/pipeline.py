@@ -1,6 +1,6 @@
 """stage2/models/pipeline.py — 入力 x↑ から出力までの決まった手順（設計書 C-1・D-1・E-3）。学習中の表示・確認・推論がすべてこれを通る（同じ関数 = 同じ計算）。
 
-  μ  = lock(f, x↑)、f = U(x↑)                              … U の出力（形の絵。明るさの固定つき）
+  μ  = lock(f, x↑)、f = U(x↑)                              … U の出力（形の絵。明るさの固定つき）。V の flow.start = input なら μ = x↑（U を通さない）
   Z0 = μ + σs·ε                                             … 出発点（ε は画素ごとに独立な正規乱数。V の中の値 = HU ÷ flow.unit_hu）
   Z  ← Z + (1/K)·V(Z, k/K, σs)、k = 0 … K−1                 … Euler（PMRF Algorithm 1。stage2/UPSTREAM.md）
   y  = lock(Z1, x↑)                                         … 最後に明るさを戻す
@@ -45,16 +45,20 @@ class Units:
 
 
 class Pipeline:
-    def __init__(self, data, sigma_px, u_net, u_residual, device, v_net=None, unit_hu=None, v_bf16=False, v_channels_last=False):
-        self.device, self.sigma_px = device, float(sigma_px)
+    def __init__(self, data, sigma_px, u_net, u_residual, device, v_net=None, unit_hu=None, v_bf16=False, v_channels_last=False, *, start):
+        if start not in ("mu", "input"):
+            raise ValueError(start)
+        self.device, self.sigma_px, self.start = device, float(sigma_px), start
         self.units = Units(hu_tuple(data), unit_hu)
         self.u_net, self.u_residual = u_net, bool(u_residual)
         self.v_net, self.v_bf16, self.v_channels_last = v_net, bool(v_bf16), bool(v_channels_last)
 
     @torch.no_grad()
     def mu(self, x):
-        """x (B, 1, H, W) n → (μ, f)。FP32。"""
+        """x (B, 1, H, W) n → (μ, f)。FP32。start = input なら (x↑, x↑)（U を通さない）。"""
         x = x.to(self.device).float()
+        if self.start == "input":
+            return x, x
         f = self.u_net(x).float()
         if self.u_residual:
             f = x + f
@@ -91,6 +95,7 @@ def load_pipeline(weight_dir, kind, device, v_bf16=False):
         u_net.load_state_dict(_load(weight_dir / "net_U_ema.pth", device))
         v_net = unit = None
         cl = False
+        start = "mu"
     else:
         u_cfg, data, shared = cfg["u_config"]["u"], cfg["data"], cfg["shared"]
         u_net = build_net(u_cfg).to(device)
@@ -102,6 +107,8 @@ def load_pipeline(weight_dir, kind, device, v_bf16=False):
             v_net = v_net.to(memory_format=torch.channels_last)
         v_net.eval().requires_grad_(False)
         unit = cfg["v"]["flow.unit_hu"]
+        # flow.start は 2026-11-20 に足したキー。それより前の V の run は全部 μ から出発している（ほかの出発点が無かった）ので mu と読む
+        start = cfg["v"]["flow.start"] if "flow.start" in cfg["v"] else "mu"
     u_net.eval().requires_grad_(False)
     sigma = float(shared["brightness.sigma_px_512"]) * data["data.upsample_scale"]
-    return Pipeline(data, sigma, u_net, u_cfg["net.residual"], device, v_net, unit, v_bf16 and device.type == "cuda", cl), cfg, int(state["step"])
+    return Pipeline(data, sigma, u_net, u_cfg["net.residual"], device, v_net, unit, v_bf16 and device.type == "cuda", cl, start=start), cfg, int(state["step"])

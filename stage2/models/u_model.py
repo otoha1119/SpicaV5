@@ -61,4 +61,4 @@ class UModel(Trainer):
 
     def pipeline(self):
         """val・画像用: EMA、FP32、compile なし。"""
-        return Pipeline(self.data, self.sigma_px, self.ema, self.residual, self.device)
+        return Pipeline(self.data, self.sigma_px, self.ema, self.residual, self.device, start="mu")

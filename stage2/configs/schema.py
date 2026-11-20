@@ -112,6 +112,7 @@ V = {
     "net.mid_blocks":        Key(int,   "--mid_blocks",       "中央の ResBlock 数（2）"),
     "net.emb_dim":           Key(int,   "--emb_dim",          "時刻・強さの埋め込みの次元（256）"),
     "net.emb_freq_dim":      Key(int,   "--emb_freq_dim",     "t と σs をそれぞれ正弦波にする次元（64）"),
+    "flow.start":            Key(str,   "--flow_start",       "出発点: mu（Z0 = μ + σs·ε。PMRF。設計書 C-1）| input（Z0 = x↑ + σs·ε。U を通さない。lock(x↑, x↑) = x↑ なので明るさの固定はそのまま）。input でも U の run は読み込む（重みの置き方を変えないため）が、学習・表示・推論で U は通さない。再開で変えられない"),
     "flow.unit_hu":          Key(float, None,                 "V の中の値の単位（HU ÷ 100。設計書 E-1）。再開で変えられない"),
     "flow.sigma_s_min_hu":   Key(float, "--sigma_s_min_hu",   "学習でくじ引きする乱数の強さ σs の下端（25 HU）。[min, max] を対数一様。min = max なら PMRF 論文どおりの定数"),
     "flow.sigma_s_max_hu":   Key(float, "--sigma_s_max_hu",   "同上端（400 HU）"),
@@ -213,6 +214,7 @@ INIT_TYPES = ("xavier_uniform", "torch")
 FINAL_ACTS = ("linear", "tanh")
 SOLVERS = ("euler",)
 T_SAMPLINGS = ("uniform", "stratified_uniform")
+FLOW_STARTS = ("mu", "input")
 KINDS = ("u", "v")
 INFER_MODES = ("u", "uv")
 CHECKS = ("magnifier", "seeds", "flicker")
@@ -220,7 +222,7 @@ INTERPS = ("nearest", "bilinear", "bicubic", "area", "lanczos")
 # 再開で変えられないキー（重みの意味が変わる）。net.* は全部変えられない
 FROZEN_DATA = ("data.hu_offset", "data.hu_min", "data.hu_max", "data.upsample_scale", "data.upsample_interp")
 FROZEN_U = ()
-FROZEN_V = ("flow.unit_hu", "flow.solver", "u.run", "u.tag")
+FROZEN_V = ("flow.start", "flow.unit_hu", "flow.solver", "u.run", "u.tag")
 # V を学習するとき、U の実効設定と一致していなければならない data のキー（U と V で絵の物差し・補間・分割が違うと μ の意味が変わる）
 MUST_MATCH_U = FROZEN_DATA + ("data.train_cases", "data.val_cases", "data.test_cases")
 
@@ -501,6 +503,7 @@ def check_v_values(data, v, shared, machine):
     if not (v["flow.sigma_s_min_hu"] <= v["flow.sigma_s_hu"] <= v["flow.sigma_s_max_hu"]): P.append("flow.sigma_s_hu は学習する幅 [sigma_s_min_hu, sigma_s_max_hu] の中")
     if v["flow.steps"] < 1: P.append("flow.steps ≥ 1")
     if v["flow.solver"] not in SOLVERS: P.append(f"flow.solver は {SOLVERS}")
+    if v["flow.start"] not in FLOW_STARTS: P.append(f"flow.start は {FLOW_STARTS}")
     if v["flow.t_sampling"] not in T_SAMPLINGS: P.append(f"flow.t_sampling は {T_SAMPLINGS}")
     if v["optim.weight_decay"] < 0 or v["optim.warmup_steps"] < 0: P.append("optim.weight_decay / warmup_steps ≥ 0")
     if v["optim.grad_clip"] <= 0: P.append("optim.grad_clip は正")

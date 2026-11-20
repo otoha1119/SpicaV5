@@ -13,6 +13,7 @@ net:                       # Haar 1 段で 1024・1ch ↔ 512・4ch → ResBlock
   emb_freq_dim: 64
 
 flow:
+  start: mu                # 出発点: mu = Z0 = μ + σs·ε（PMRF。U の出力から）| input = Z0 = x↑ + σs·ε（U を通さない）。再開で変えられない。根拠: value_ledger S2-V-20
   unit_hu: 100.0           # V の中の値 = HU ÷ 100
   sigma_s_min_hu: 25.0     # 学習は [25, 400] HU を対数一様にくじ引きして V に教える（PMRF から変えた点。min = max で論文どおりの定数）
   sigma_s_max_hu: 400.0
