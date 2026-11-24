@@ -2,7 +2,7 @@
 
   python stage1/generate_y.py --machine PC1 --config stage1/configs/y_generate.yaml --shared configs/shared.yaml --machines configs/machines.yaml -- --run <run> [--e_run <E の run>]
 
-手順: PCD → 消し手 A → m。m に強さ s のノイズを足し、実 EID の描き手 E（generate.e_run。空なら run の init.e_run）で s から 0 まで描き直す。s は redraw.s_list_hu の並び
+手順: PCD → 消し手 A（または redraw.fixed_sigma_px > 0 なら固定の幅の Gaussian。A の run は要らない。2026-11-25〜の今の作り方）→ m。m に強さ s のノイズを足し、実 EID の描き手 E（generate.e_run。空なら run の init.e_run）で s から 0 まで描き直す。s は redraw.s_list_hu の並び
 （往復ごと。yaml は 400 → 100 → 50 HU）。並びが空なら redraw.s_hu を redraw.cycles 回
 （Euler ancestral η = 1、毎段に新しい乱数。手がかり = Gaussian(m, cue_blur_px)、redraw.anchor なら毎段に明るさの錨）。並びが空で s_hu = 0 のときは A の出力をそのまま書く。
 出力: <pseudo_eid_dir>/Y_<run>-<step>_s<s>_b<cue>[_anc][_<suffix>]/k00…/<症例>/<スライス>.png と manifest.yaml（既にある組には書かない）。
@@ -81,7 +81,11 @@ def main():
         machine = validate_shared(f"machines.{a.machine}", machines[a.machine], MACHINE)
         apply_overrides(overrides, {"y_generate": (g, Y_GENERATE), "shared": (shared, SHARED), "machine": (machine, MACHINE)})
         P = []
-        if not g["generate.run"]: P.append("generate.run を --run で指定")
+        fixed = float(g["redraw.fixed_sigma_px"])   # > 0 = 消し手 A を学習せず、固定の幅の Gaussian でぼかす（A の run は読まない）
+        if fixed < 0: P.append("redraw.fixed_sigma_px ≥ 0（0 = A の run を使う）")
+        if fixed > 0 and not g["generate.e_run"]: P.append("redraw.fixed_sigma_px > 0 のときは generate.e_run（--e_run）を指定（A の run から E を引けない）")
+        if fixed > 0 and (g["redraw.a_sigma_scale"] != 1.0 or not g["redraw.use_eraser"]): P.append("redraw.fixed_sigma_px > 0 のときは a_sigma_scale = 1、use_eraser = true のまま（どちらも A の run 用）")
+        if fixed == 0 and not g["generate.run"]: P.append("generate.run を --run で指定（または redraw.fixed_sigma_px > 0）")
         if g["redraw.cycles"] < 1: P.append("redraw.cycles ≥ 1")
         try:
             s_list = [float(v) for v in g["redraw.s_list_hu"]]
@@ -100,14 +104,16 @@ def main():
         if g["generate.max_slices"] < 0 or g["redraw.s_hu"] < 0 or g["redraw.cue_blur_px"] <= 0: P.append("max_slices ≥ 0、s_hu ≥ 0、cue_blur_px は正")
         if g["redraw.precision"] not in PRECISIONS: P.append(f"redraw.precision は {PRECISIONS}")
         _raise("y_generate values", P)
-        run_dir = Path(machine["painter_checkpoints_dir"]) / g["generate.run"]
-        wdir = ckpt_dir(run_dir, g["generate.tag"])
-        if not (wdir / "A.pth").is_file():
-            raise ConfigError(f"A の重みがありません: {wdir}")
-        state = torch.load(wdir / "state.pth", map_location="cpu", weights_only=False)
-        yc = validate("y(state)", fill_legacy(dict(state["config"])), Y_TRAIN)
-        if g["redraw.a_sigma_scale"] != 1.0 and yc["eraser.kind"] not in ("isotropic", "global"):
-            raise ConfigError(f"redraw.a_sigma_scale ≠ 1 は eraser.kind: isotropic | global の run だけ（この run は {yc['eraser.kind']}）")
+        wdir, state, yc = None, None, None
+        if fixed == 0:
+            run_dir = Path(machine["painter_checkpoints_dir"]) / g["generate.run"]
+            wdir = ckpt_dir(run_dir, g["generate.tag"])
+            if not (wdir / "A.pth").is_file():
+                raise ConfigError(f"A の重みがありません: {wdir}")
+            state = torch.load(wdir / "state.pth", map_location="cpu", weights_only=False)
+            yc = validate("y(state)", fill_legacy(dict(state["config"])), Y_TRAIN)
+            if g["redraw.a_sigma_scale"] != 1.0 and yc["eraser.kind"] not in ("isotropic", "global"):
+                raise ConfigError(f"redraw.a_sigma_scale ≠ 1 は eraser.kind: isotropic | global の run だけ（この run は {yc['eraser.kind']}）")
         e_run, e_tag = (g["generate.e_run"], g["generate.e_tag"]) if g["generate.e_run"] else (yc["init.e_run"], yc["init.e_tag"])
         e_dir = ckpt_dir(Path(machine["painter_checkpoints_dir"]) / e_run, e_tag)
         if not (e_dir / "ema.pth").is_file():
@@ -116,11 +122,14 @@ def main():
         print(f"[generate_y] 設定エラー: {e}", file=sys.stderr)
         sys.exit(2)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    A = build_eraser(yc).to(device)
-    A.load_state_dict(torch.load(wdir / "A.pth", map_location=device, weights_only=True))
-    A.eval()
     k_sig = float(g["redraw.a_sigma_scale"])
-    if k_sig != 1.0:   # A のぼかしの広さを推論時に k 倍（向きのないぼかしだけ）。描き直しを強く始めると粒の入れ替えは描き直しが担い、A は鋭さだけを決める（EXP-20261112-01）
+    if fixed > 0:   # 固定の幅の Gaussian（どの画素も同じ幅。学習する部品なし。ぼかしは手がかりと同じ関数 = 半径 ceil(3σ)、端は reflect）
+        A = lambda x, _s=fixed: gaussian_blur(x, _s)
+    else:
+        A = build_eraser(yc).to(device)
+        A.load_state_dict(torch.load(wdir / "A.pth", map_location=device, weights_only=True))
+        A.eval()
+    if fixed == 0 and k_sig != 1.0:   # A のぼかしの広さを推論時に k 倍（向きのないぼかしだけ）。描き直しを強く始めると粒の入れ替えは描き直しが担い、A は鋭さだけを決める（EXP-20261112-01）
         _sig = A.sigma_px
         A.sigma_px = lambda x, _o=_sig, _k=k_sig: _o(x) * _k
     E, e_cfg, e_step = load_ema(e_dir, device)
@@ -130,9 +139,13 @@ def main():
     s_seq = [v / scale for v in s_list] if s_list else [g["redraw.s_hu"] / scale] * g["redraw.cycles"]
     s = s_seq[0]
     st_seq = st_list if st_list else [g["redraw.steps"]] * len(s_seq)
-    head = f"Y_{g['generate.run']}-{int(state['step']):07d}" if g["redraw.use_eraser"] else f"Ynoeraser_E{e_step:07d}"
+    if fixed > 0:
+        head = f"Yfix_g{fixed:g}"
+    else:
+        head = f"Y_{g['generate.run']}-{int(state['step']):07d}" if g["redraw.use_eraser"] else f"Ynoeraser_E{e_step:07d}"
     s_tag = ("sl" + "-".join(f"{v:g}" for v in s_list)) if s_list else f"s{g['redraw.s_hu']:g}"
     s_tag += ("_st" + "-".join(str(v) for v in st_list)) if st_list else ""
+    s_tag += f"_n{g['redraw.steps']}" if (fixed > 0 and not st_list) else ""   # 固定のぼかしの組は、1 回の描き直しの段数も名前に入れる
     a_tag = ("" if k_sig == 1.0 else f"_ax{k_sig:g}") + (f"_E{g['generate.e_run']}-{e_step:07d}" if g["generate.e_run"] else "")
     name = f"{head}{a_tag}_{s_tag}_b{g['redraw.cue_blur_px']:g}{'_anc' if g['redraw.anchor'] else ''}"
     name += f"_cyc{g['redraw.cycles']}" if g["redraw.cycles"] > 1 else ""
@@ -156,7 +169,9 @@ def main():
     if not jobs:
         print(f"[generate_y] エラー: 作る対象がありません: {input_dir}", file=sys.stderr)
         sys.exit(1)
-    print(f"[generate_y] {name}: A {wdir}（step {state['step']}）、E {e_dir}（step {e_step}）、{len(tasks)} 枚 × K {g['generate.k']}、描き直し {s_tag}（HU・段）、A の σ × {k_sig:g}", flush=True)
+    a_desc = f"固定のぼかし {fixed:g} px" if fixed > 0 else f"A {wdir}（step {state['step']}）、A の σ × {k_sig:g}"
+    st_desc = "-".join(str(v) for v in st_seq)
+    print(f"[generate_y] {name}: {a_desc}、E {e_dir}（step {e_step}）、{len(tasks)} 枚 × K {g['generate.k']}、描き直し {s_tag}（HU）・{st_desc} 段、終点 {et['diffusion.sigma_min'] * scale:g} HU", flush=True)
     tmp.mkdir(parents=True)
     t0, bs = time.time(), g["redraw.batch"]
     for i in range(0, len(jobs), bs):
@@ -178,8 +193,10 @@ def main():
             write_png(tmp / f"k{k:02d}" / case / q.name, x_to_stored(o, hu))
         done = i + len(chunk)
         print(f"[generate_y] {done}/{len(jobs)} 枚、{(time.time() - t0) / done:.2f} s/枚", flush=True)
-    manifest = {"name": name, "created": datetime.datetime.now(JST).isoformat(timespec="seconds"), "git_commit": git_commit(), "method": "type Y (eraser A + redraw by E)",
-                "a_run": g["generate.run"] if g["redraw.use_eraser"] else None, "use_eraser": g["redraw.use_eraser"], "a_weight_dir": str(wdir), "a_step": int(state["step"]), "e_weight_dir": str(e_dir), "e_step": e_step,
+    manifest = {"name": name, "created": datetime.datetime.now(JST).isoformat(timespec="seconds"), "git_commit": git_commit(),
+                "method": "type Y (fixed Gaussian blur + redraw by E)" if fixed > 0 else "type Y (eraser A + redraw by E)", "fixed_sigma_px": fixed,
+                "a_run": g["generate.run"] if (fixed == 0 and g["redraw.use_eraser"]) else None, "use_eraser": g["redraw.use_eraser"] if fixed == 0 else False,
+                "a_weight_dir": str(wdir) if fixed == 0 else None, "a_step": int(state["step"]) if fixed == 0 else None, "e_weight_dir": str(e_dir), "e_step": e_step,
                 "input_dir": str(input_dir), "cases": idx.cases, "n_slices": len(tasks), "k": g["generate.k"], "n_images": len(jobs),
                 "image_hw": list(src.shape[-2:]), "format": "1ch uint16 PNG, stored = HU + hu_offset", "hu_offset": hu[0], "hu_clip": [hu[1], hu[2]],
                 "brightness_sigma_px_512": shared["brightness.sigma_px_512"],

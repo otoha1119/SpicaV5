@@ -5,6 +5,20 @@
 - 設計: `docs/plans/20261111_detail_design/stage1_painter_spec.md`、裁定 `RECONCILE.md`（`docs/` はローカルだけ）
 - 式の出典・設計書からの差分: `UPSTREAM.md`
 
+## 今の手法（2026-11-25、ブランチ 036）: 固定のぼかし + E で 1 回描き直す
+
+Stage 1 で学習するのは **E（実 EID の描き手）だけ**。消し手 A は学習しない（PCD を固定の幅の Gaussian でぼかす）。仕様は `docs/plans/20261111_detail_design/spec_typeY_stage1_stage2_fixedA_draft.html`。
+
+```
+bash start.sh PC3                                # 1. E の学習（設定 configs/train.yaml。手がかり 0〜10 px 均等・ノイズなし、拡散のノイズ 1〜40,000 HU）
+bash start.sh PC3 ygen --e_run <E の run>        # 2. 疑似 EID の作成（設定 configs/y_generate.yaml。固定のぼかし 1.45 px → 400 HU から 120 段で 1 回描き直す、手がかり 10 px、錨 20 px）
+```
+
+- 組の名前: `Yfix_g<幅>_E<E の run>-<step>_s<s>_n<段>_b<手がかり>_anc`。Stage 2 にはこの名前を `--pseudo_eid_set` で渡す
+- 固定のぼかしの幅・描き直しの強さと段数は、**まだ選ぶ指標が決まっていない仮の値**（根拠は `configs/y_generate.yaml` の各行と `docs/reference/value_ledger.md`）
+- 手がかりのノイズ σ_c は使わない（`cue.noise_zero_prob: 1.0`）。埋め込みの枝はコードに残っている（入力はいつも同じ値）
+- 下の「型 Y」の A の学習（`y`）、3 往復の描き直し（`--s_list_hu`）、型 X（`bridge`）、案 E（`generate`）は、**今の手法では使わない。アブレーション用に残してある**
+
 ## 起動（ホストのシェルで、リポジトリ直下から）
 
 ```

@@ -1,7 +1,7 @@
 # stage2/configs/v.yaml — V（質感を作るフロー。設計書 C）の構成と学習。唯一の正は configs/schema.py の V。既定値は無い。
 # PMRF（Ohayon et al., ICLR 2025）: Z0 = μ + σs·ε、Zt = (1 − t)·Z0 + t·X′、V(Zt, t, σs) が X′ − Z0 を当てる。式の出典は stage2/UPSTREAM.md。
 u:
-  run: ""                  # 固定して使う U の run 名。--u_run で渡す
+  run: ""                  # 固定して使う U の run 名。--u_run で渡す。flow.start: input でも要る（重みの置き方を変えていないため、読み込むだけで通さない。U を読まない形への作り直しは未着手）
   tag: best                # best = U の最終 epoch の EMA
 
 net:                       # Haar 1 段で 1024・1ch ↔ 512・4ch → ResBlock U-Net。注意機構なし、画素ごとの LayerNorm。再開で変えられない
@@ -13,7 +13,7 @@ net:                       # Haar 1 段で 1024・1ch ↔ 512・4ch → ResBlock
   emb_freq_dim: 64
 
 flow:
-  start: mu                # 出発点: mu = Z0 = μ + σs·ε（PMRF。U の出力から）| input = Z0 = x↑ + σs·ε（U を通さない）。再開で変えられない。根拠: value_ledger S2-V-20
+  start: input             # 出発点: input = Z0 = x↑ + σs·ε（U を通さない。今の手法。研究者の決定 2026-11-24、EXP-20261120-01）| mu = Z0 = μ + σs·ε（PMRF。U の出力から。前の手法 = アブレーション）。再開で変えられない。根拠: value_ledger S2-V-20
   unit_hu: 100.0           # V の中の値 = HU ÷ 100
   sigma_s_min_hu: 25.0     # 学習は [25, 400] HU を対数一様にくじ引きして V に教える（PMRF から変えた点。min = max で論文どおりの定数）
   sigma_s_max_hu: 400.0

@@ -253,6 +253,7 @@ Y_GENERATE = {
     "generate.k":          Key(int,   "--k",              "1 枚につき何通り（描き直しの乱数を変える）"),
     "generate.seed":       Key(int,   "--gen_seed",       "画像ごとの種の base"),
     "generate.name_suffix": Key(str,  "--name_suffix",    "組の名前の末尾"),
+    "redraw.fixed_sigma_px": Key(float, "--fixed_sigma_px", "> 0 = 消し手 A を学習せず、PCD 全体をこの幅（512 の画素）の Gaussian でぼかして m にする（A の run は読まない。--e_run が要る）。0 = A の run（--run）を使う。今の作り方は > 0（仕様書 fixedA、2026-11-24）"),
     "redraw.use_eraser":   Key(bool,  "--use_eraser",     "false = 消し手 A を通さず、PCD そのものにノイズ s を足して E で描き直す（A が要るかの比較。素の SDEdit）"),
     "redraw.a_sigma_scale": Key(float, "--a_sigma_scale", "消し手 A のぼかしの広さ σ(p) を推論時に何倍にするか（1 = 学習のまま。向きのないぼかし isotropic | global の run だけ）。描き直しを 400 HU から始めると粒の入れ替えは描き直しが担い、A は鋭さだけを決める（EXP-20261112-01）"),
     "redraw.s_hu":         Key(float, "--s_hu",           "描き直しの出発点 s（HU）。0 = 描き直さず A の出力をそのまま書く"),

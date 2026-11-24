@@ -2,6 +2,7 @@
 # 設計: docs/plans/20261111_detail_design/stage1_painter_spec.md。値は「練習する幅の端」「初期値」で、実測値に合わせた的ではない。
 # 書き方: 小数は必ず点を付ける。真偽値は true / false。run 名はここに書かない（起動時刻 yyyy_mmdd_HHMM）。
 # 2026-11-15: EXP-20261115-02 の値（docs/experiments/EXP-20261115-02.md。根拠の種類 (a)〜(d) は docs/reference/value_ledger.md）。cue.* 以外は、今の E（run 2026_1112_0221、PC3）の実効値にそろえた。
+# 2026-11-25: EXP-20261125-04（固定のぼかし + U なしの V を PC3 で通しで学習し直す）の値。2026-11-17 に決めた 2 点を入れた: 手がかりのノイズを足さない（cue.noise_zero_prob 1.0）、拡散のノイズの下限 1 HU（diffusion.sigma_min 0.001）。ほかは EXP-20261115-02 のまま。
 
 optim:
   lr: 0.0004               # AdamW。今の E（2026_1112_0221）と同じ = 2e-4 × √(128 ÷ 32)。(d)
@@ -47,12 +48,12 @@ cue:                       # 手がかり = Gaussian ぼかし(元の絵, σ_b) 
   blur_zero_prob: 0.0      # σ_b = 0 の別枠は置かない（型 Y は 0 px を使わない）。(c) EXP-20261115-02 #1
   blur_min_px: 0.0         # [0, 10] 画素を均等
   blur_max_px: 10.0        # 型 Y が使う幅（y.yaml の dmd.cue_blur_px、y_generate.yaml の redraw.cue_blur_px）= 上端。(b) 弱 EXP-20261115-02 #1・#2。data.margin 32 ≥ 3 × 10
-  noise_zero_prob: 0.15    # σ_c = 0
-  noise_min_hu: 5.0        # 残りは [5, 400] HU を対数一様
+  noise_zero_prob: 1.0     # σ_c は常に 0 = 手がかりにノイズを足さない（研究者の決定 2026-11-17。型 Y は 0 でしか使わない。value_ledger S1-E-33）。σ_c の埋め込みの枝はコードに残るが、入力はいつも同じ値になる
+  noise_min_hu: 5.0        # noise_zero_prob = 1 なので使われない（キーは schema が必須にしている）
   noise_max_hu: 400.0
 
 diffusion:                 # EDM 型（Karras et al. 2022）。式の出典は stage1/UPSTREAM.md
-  sigma_min: 0.002         # 2 HU 相当
+  sigma_min: 0.001         # 1 HU 相当（研究者の決定 2026-11-17。前は 0.002 = 2 HU。描き直しの終点もこの値になる。value_ledger S1-E-22・S1-G-05）
   sigma_max: 40.0          # 40,000 HU 相当
   sigma_data: 0.5
   sigma_sampling: lognormal    # lognormal（EDM の標準）| loguniform。今の E と同じ

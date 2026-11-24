@@ -7,6 +7,18 @@
 - **明るさの固定**: 広い平均（`configs/shared.yaml` の `brightness.sigma_px_512` = 20 → 1024 で σ 40 画素。2026-11-15 EXP-20261115-02。前は 16 → 32）は入力のものをそのまま使う。U の出力・学習の正解・最終出力の 3 か所に同じ計算を入れる
 - 設計: `docs/plans/20261111_detail_design/stage2_u_flow_spec.md`、裁定 `RECONCILE.md`（`docs/` はローカルだけ）。式の出典・設計書からの差分: `UPSTREAM.md`
 
+## 今の手法（2026-11-25、ブランチ 036）: U なしの V
+
+**U は使わない**（研究者の決定 2026-11-24、EXP-20261120-01）。V の出発点は `Z0 = x↑ + σs·ε`（`configs/v.yaml` の `flow.start: input`）。学習するのは V だけ。
+
+```
+bash start2.sh PC3 v --pseudo_eid_set <Stage 1 で作った組> --u_run <既にある U の run>   # V の学習
+bash start2.sh PC3 infer --run <V の run> --input_dir /workspace/DataSet/EID_v5 --cases EID-049   # 本番（σs 100 HU・25 回）
+```
+
+- `--u_run` はまだ必須（V の重みの置き方に U が同梱される作りのまま。読み込むだけで、学習・表示・推論では通さない）。U を読まない形への作り直しは未着手
+- 下の U の学習（`u`）と `flow.start: mu`（U の出力から出発）は、**今の手法では使わない。アブレーション用に残してある**
+
 ## 起動（ホストのシェルで、リポジトリ直下から）
 
 前提: Stage 1 の `bash start.sh PC1 generate …` で疑似 EID の「組」（`<pseudo_eid_dir>/<組>/k00, k01, …` と `manifest.yaml`）ができていること。組には train・val の 16 症例の全スライスと、表示用の PCD-002 が要る。
