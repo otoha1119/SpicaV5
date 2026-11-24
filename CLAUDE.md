@@ -23,6 +23,15 @@
 - 要件の正本: `docs/reference/requirements_v3_manual.md`
 - `docs/` は git 管理外（ローカルだけ）。研究内容はネットに公開しない
 
+## 今の手法（2026-11-25、ブランチ `036-f_035-fixedblur_v_only`）
+
+上の「現在の研究方針」から次の 3 点が変わっている。仕様は `docs/plans/20261111_detail_design/spec_typeY_stage1_stage2_fixedA_draft.html`、通しの学習の記録は `docs/experiments/EXP-20261125-04.md`。
+
+- **Stage 1**: 学習するのは E（実 EID の描き手）だけ。消し手 A は学習しない（PCD を固定の幅の Gaussian でぼかす）。疑似 EID は「ぼかす → ノイズを足す → E で 1 回描き直す」で作る。起動 `bash start.sh PC3` → `bash start.sh PC3 ygen --e_run <E の run>`
+- **Stage 2**: U は使わない。V の出発点は入力 + ノイズ（`flow.start: input`）。起動 `bash start2.sh PC3 v --pseudo_eid_set <組> --u_run <既にある U の run>`（`--u_run` は読み込むだけ）
+- 固定のぼかしの幅・描き直しの強さと段数は、選ぶ指標が決まっていない仮の値（`docs/reference/value_ledger.md` の S1-G-15〜17）
+- A の学習（`y`）・U（`u`）・3 往復の描き直し・型 X（`bridge`）のコードは、アブレーション用に残してある（今の手法では使わない）
+
 ## リポジトリの構成（2026-11-11 整理）
 
 - `stage1/`（直下）: **新しい Stage 1（描き手 P）の実装**（ブランチ `028-f_main-redraw_create`）。起動は `bash start.sh [マシン名] [build|shell|down|tb|generate] [resume <run> [tag]] [best <run> <tag>] [--flag value]`、設定は `stage1/configs/{train,model,generate}.yaml` + `configs/shared.yaml`（正は `stage1/configs/schema.py`）、説明 `stage1/README.md`、式の出典と設計書からの差分 `stage1/UPSTREAM.md`。学習結果は `runs/stage1/<run>/`（`machines.yaml` の `painter_checkpoints_dir`）、疑似 EID は `pseudo_eid_dir`
